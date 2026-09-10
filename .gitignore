@@ -1,0 +1,25 @@
+node_modules/
+uploads/
+dist/
+.env
+*.log
+playwright-report/
+test-results/
+screenshots/
+*.tsbuildinfo
+.firefly-run/
+.compiler-work/
+.edge-check/
+.edge-cdp*/
+
+Firefly-master/
+# Reference project (used for design comparison)
+mini_blog（用于后台管理系统设计时候的参考）
+
+# Platform metadata and editor swap files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/

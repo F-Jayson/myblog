@@ -1,0 +1,2 @@
+Firefly-master这个文件夹中的项目是一个独立的项目。当前这个项目的前台页面仿照的就是这个项目的页面，你在执行任务的时候可以拿这个Firefly-master项目作为参考。
+最终实现的效果应该像这个网站页面一样 https://firefly.cuteleaf.cn/

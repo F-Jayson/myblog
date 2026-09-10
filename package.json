@@ -1,0 +1,13 @@
+{
+  "name": "firefly-rebuild",
+  "private": true,
+  "version": "1.0.0",
+  "packageManager": "pnpm@11.22.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @firefly-rebuild/web --filter @firefly-rebuild/api dev",
+    "build": "pnpm --parallel --filter @firefly-rebuild/web --filter @firefly-rebuild/api build",
+    "type-check": "pnpm --parallel --filter @firefly-rebuild/web --filter @firefly-rebuild/api type-check",
+    "db:migrate": "pnpm --filter @firefly-rebuild/api db:migrate",
+    "db:seed": "pnpm --filter @firefly-rebuild/api db:seed"
+  }
+}
