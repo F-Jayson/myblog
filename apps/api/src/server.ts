@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import cors from "cors";
@@ -167,7 +169,7 @@ app.use(express.json({ limit: "12mb" }));
 app.use("/api/uploads/user-space", (_req, res) => { res.status(404).end(); });
 app.use("/api/uploads", express.static(uploadsDirectory, { fallthrough: true, index: false, maxAge: "1d" }));
 function auditExcludedRequest(method: string, path: string) {
-	if (path === "/api/health" || path.startsWith("/api/uploads/")) return true;
+	if (path === "/api/health" || path === "/api/wallpaper" || path.startsWith("/api/uploads/")) return true;
 	// Compiler source and stdin are user code; never persist them in the audit
 	// payload, while the request metrics middleware still records duration/status.
 	if (path.startsWith("/api/compiler/") || path.startsWith("/api/user/compiler/")) return true;
@@ -883,6 +885,111 @@ async function respondAuthorProfile(_req: Request, res: Response, next: NextFunc
 
 app.get("/api/author-profile", respondAuthorProfile);
 app.get("/api/site/author-profile", respondAuthorProfile);
+
+const WALLPAPER_FETCH_TIMEOUT_MS = 12_000;
+const WALLPAPER_MAX_BYTES = 12 * 1024 * 1024;
+const WALLPAPER_MAX_REDIRECTS = 5;
+
+function isPrivateIpAddress(address: string) {
+	const ip = address.toLowerCase();
+	if (ip === "::1" || ip === "::" || ip === "0.0.0.0") return true;
+	if (ip.startsWith("::ffff:")) return isPrivateIpAddress(ip.slice(7));
+	if (ip.startsWith("127.") || ip.startsWith("10.") || ip.startsWith("192.168.") || ip.startsWith("169.254.")) return true;
+	if (/^172\.(1[6-9]|2\d|3[0-1])\./u.test(ip)) return true;
+	if (ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe80:")) return true;
+	return false;
+}
+
+async function assertPublicHttpUrl(value: string) {
+	let parsed: URL;
+	try { parsed = new URL(value); } catch { throw new Error("壁纸地址无效"); }
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("壁纸地址无效");
+	if (parsed.username || parsed.password) throw new Error("壁纸地址无效");
+	const hostname = parsed.hostname.toLowerCase();
+	if (!hostname || hostname === "localhost" || hostname.endsWith(".local") || hostname.endsWith(".internal") || hostname.endsWith(".localhost")) {
+		throw new Error("壁纸地址不可用");
+	}
+	const addresses = isIP(hostname) ? [hostname] : (await lookup(hostname, { all: true })).map((item) => item.address);
+	if (!addresses.length || addresses.some(isPrivateIpAddress)) throw new Error("壁纸地址不可用");
+	return parsed;
+}
+
+function sniffImageType(buffer: Buffer) {
+	if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+	if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return "image/png";
+	if (buffer.length >= 6 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) return "image/gif";
+	if (buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+	if (buffer.length >= 12 && buffer.toString("ascii", 4, 8) === "ftyp") return "image/avif";
+	return "";
+}
+
+function wallpaperFilename(url: URL, contentType: string) {
+	const raw = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() || "");
+	if (/\.(?:jpe?g|png|gif|webp|avif|bmp)$/iu.test(raw)) return raw.slice(-120);
+	if (contentType.includes("png")) return "wallpaper.png";
+	if (contentType.includes("webp")) return "wallpaper.webp";
+	if (contentType.includes("avif")) return "wallpaper.avif";
+	if (contentType.includes("gif")) return "wallpaper.gif";
+	return "wallpaper.jpg";
+}
+
+async function fetchRemoteWallpaper(initialUrl: string) {
+	let current = initialUrl;
+	for (let hop = 0; hop <= WALLPAPER_MAX_REDIRECTS; hop++) {
+		const url = await assertPublicHttpUrl(current);
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), WALLPAPER_FETCH_TIMEOUT_MS);
+		try {
+			const response = await fetch(url, {
+				method: "GET",
+				redirect: "manual",
+				signal: controller.signal,
+				headers: { accept: "image/avif,image/webp,image/*,*/*;q=0.8", "user-agent": "FireflyBlogWallpaper/1.0" },
+			});
+			if (response.status >= 300 && response.status < 400) {
+				const location = response.headers.get("location");
+				if (!location) throw new Error("壁纸跳转失败");
+				current = new URL(location, url).href;
+				continue;
+			}
+			if (!response.ok) throw new Error("壁纸获取失败");
+			const declaredLength = Number(response.headers.get("content-length") || 0);
+			if (declaredLength > WALLPAPER_MAX_BYTES) throw new Error("壁纸文件过大");
+			const buffer = Buffer.from(await response.arrayBuffer());
+			if (buffer.length > WALLPAPER_MAX_BYTES) throw new Error("壁纸文件过大");
+			const sniffed = sniffImageType(buffer);
+			const reported = (response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+			const contentType = sniffed || (reported.startsWith("image/") ? reported : "");
+			if (!contentType) throw new Error("壁纸不是图片");
+			return { buffer, contentType, filename: wallpaperFilename(url, contentType) };
+		} finally {
+			clearTimeout(timeout);
+		}
+	}
+	throw new Error("壁纸跳转次数过多");
+}
+
+app.get("/api/wallpaper", async (_req, res, next) => {
+	try {
+		const summary = await siteSummary();
+		const cover = summary.site.cover && typeof summary.site.cover === "object" && !Array.isArray(summary.site.cover)
+			? summary.site.cover as Record<string, unknown>
+			: {};
+		const mode = cover.mode === "api" || cover.mode === "url" || cover.mode === "upload" ? cover.mode : "";
+		const source = String(mode === "api" ? (cover.apiUrl || cover.value || "") : (cover.value || "")).trim();
+		if (!source || source.startsWith("/")) {
+			res.status(404).json({ error: "当前未使用在线壁纸接口" });
+			return;
+		}
+		const wallpaper = await fetchRemoteWallpaper(source);
+		res.setHeader("content-type", wallpaper.contentType);
+		res.setHeader("cache-control", "no-store");
+		res.setHeader("content-disposition", `inline; filename="${wallpaper.filename.replace(/["\\\r\n]/gu, "")}"`);
+		res.send(wallpaper.buffer);
+	} catch (error) {
+		next(error);
+	}
+});
 
 const managedPageKeyInput = z.enum(["about", "transfer", "issues"]);
 const friendLinkUrlInput = z.string().trim().min(1).max(2000).refine((value) => {

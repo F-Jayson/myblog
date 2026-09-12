@@ -410,6 +410,30 @@ export const api = {
 				category: post.category?.name ?? null,
 			})));
 	},
+	async fetchWallpaper(): Promise<{ blob: Blob; filename: string }> {
+		const controller = new AbortController();
+		const timeout = window.setTimeout(() => controller.abort(), 15_000);
+		try {
+			const response = await fetch(`${API_ORIGIN}/api/wallpaper?t=${Date.now()}`, { cache: "no-store", signal: controller.signal });
+			if (!response.ok) throw new Error("壁纸加载失败");
+			const blob = await response.blob();
+			if (blob.size < 32) throw new Error("壁纸内容无效");
+			const disposition = response.headers.get("content-disposition") || "";
+			const utfName = /filename\*=UTF-8''([^;]+)/iu.exec(disposition);
+			const plainName = /filename="?([^";]+)"?/iu.exec(disposition);
+			const encoded = (utfName?.[1] || plainName?.[1] || "").trim();
+			let filename = "wallpaper.jpg";
+			if (encoded) {
+				try { filename = decodeURIComponent(encoded.replace(/["']/gu, "")); } catch { filename = encoded.replace(/["']/gu, ""); }
+			} else if (blob.type.includes("png")) filename = "wallpaper.png";
+			else if (blob.type.includes("webp")) filename = "wallpaper.webp";
+			else if (blob.type.includes("avif")) filename = "wallpaper.avif";
+			else if (blob.type.includes("gif")) filename = "wallpaper.gif";
+			return { blob, filename };
+		} finally {
+			window.clearTimeout(timeout);
+		}
+	},
 };
 
 async function uploadFile(path: string, file: File): Promise<string> {

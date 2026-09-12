@@ -10,6 +10,7 @@ import {
 	Cloud,
 	Copy,
 	Clock3,
+	Download,
 	Code2,
 	ExternalLink,
 	Folder,
@@ -44,7 +45,7 @@ import {
 	Wrench,
 	X,
 } from "lucide-react";
-import { createContext, lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import {
 	Link,
 	NavLink,
@@ -74,6 +75,70 @@ const fallbackHeroSources = Array.from({ length: 6 }, (_, index) => ({
 	desktop: "/images/DesktopWallpaper/d" + (index + 1) + ".avif",
 	mobile: "/images/MobileWallpaper/m" + (index + 1) + ".avif",
 }));
+const WALLPAPER_CROSSFADE_MS = 1100;
+const MIN_CAROUSEL_INTERVAL_SEC = 15;
+const MAX_CAROUSEL_INTERVAL_SEC = 120;
+const DEFAULT_CAROUSEL_INTERVAL_SEC = 15;
+
+function clampCarouselInterval(value: number) {
+	if (!Number.isFinite(value)) return DEFAULT_CAROUSEL_INTERVAL_SEC;
+	return Math.min(MAX_CAROUSEL_INTERVAL_SEC, Math.max(MIN_CAROUSEL_INTERVAL_SEC, Math.round(value)));
+}
+
+type WallpaperFrame = {
+	desktop: string;
+	mobile: string;
+	blob?: Blob;
+	filename: string;
+	objectUrl?: string;
+};
+
+function wallpaperFilenameFromUrl(url: string) {
+	try {
+		const path = new URL(url, window.location.origin).pathname;
+		const name = decodeURIComponent(path.split("/").filter(Boolean).pop() || "");
+		if (/\.[a-z0-9]{2,5}$/iu.test(name)) return name.slice(-120);
+		return name ? `${name.slice(-80)}.jpg` : "wallpaper.jpg";
+	} catch {
+		return "wallpaper.jpg";
+	}
+}
+
+function frameFromSource(source: { desktop: string; mobile: string }): WallpaperFrame {
+	return {
+		desktop: source.desktop,
+		mobile: source.mobile,
+		filename: wallpaperFilenameFromUrl(source.desktop),
+	};
+}
+
+function triggerBlobDownload(blob: Blob, filename: string) {
+	const href = URL.createObjectURL(blob);
+	const link = document.createElement("a");
+	link.href = href;
+	link.download = filename || "wallpaper.jpg";
+	link.rel = "noopener";
+	document.body.appendChild(link);
+	link.click();
+	link.remove();
+	window.setTimeout(() => URL.revokeObjectURL(href), 1500);
+}
+
+async function downloadWallpaperFrame(frame: WallpaperFrame | null) {
+	if (!frame) return;
+	if (frame.blob) {
+		triggerBlobDownload(frame.blob, frame.filename);
+		return;
+	}
+	const source = window.matchMedia("(max-width: 767px)").matches ? frame.mobile : frame.desktop;
+	try {
+		const response = await fetch(source);
+		if (!response.ok) throw new Error("download failed");
+		triggerBlobDownload(await response.blob(), frame.filename || wallpaperFilenameFromUrl(source));
+	} catch {
+		window.open(source, "_blank", "noopener,noreferrer");
+	}
+}
 
 const configuredFontDefinitions = [
 	{ key: "titleFontUrl", family: "FireflySiteTitle", variable: "--site-title-font" },
@@ -245,6 +310,10 @@ type DisplaySettingsProps = {
 	setBannerTitle: (value: boolean) => void;
 	carousel: boolean;
 	setCarousel: (value: boolean) => void;
+	carouselInterval: number;
+	setCarouselInterval: (value: number) => void;
+	onDownloadWallpaper: () => void;
+	wallpaperDownloadAvailable: boolean;
 	wavesEnabled: boolean;
 	setWavesEnabled: (value: boolean) => void;
 	gradientEnabled: boolean;
@@ -281,7 +350,7 @@ function DisplaySettingsPanel(props: DisplaySettingsProps) {
 		{tab === "wallpaper" ? <>
 			<SettingsSection title="壁纸模式" onReset={() => props.setWallpaper("banner")}><div className="settings-choice-grid wallpaper-choice-grid"><button type="button" className={props.wallpaper === "banner" ? "selected" : ""} onClick={() => props.setWallpaper("banner")}><Image size={19} />横幅壁纸</button><button type="button" className={props.wallpaper === "full" ? "selected" : ""} onClick={() => props.setWallpaper("full")}><Image size={19} />全屏壁纸</button><button type="button" className={props.wallpaper === "overlay" ? "selected" : ""} onClick={() => props.setWallpaper("overlay")}><Image size={19} />全屏透明</button><button type="button" className={props.wallpaper === "none" ? "selected" : ""} onClick={() => props.setWallpaper("none")}><Image size={19} />纯色背景</button></div></SettingsSection>
 			{props.wallpaper === "overlay" ? <SettingsSection title="透明模式设置" onReset={() => { props.setOverlayOpacity(80); props.setOverlayBlur(10); props.setOverlayCardOpacity(50); }}><div className="settings-range"><label>背景透明度 <output>{props.overlayOpacity}%</output></label><input type="range" min="20" max="100" value={props.overlayOpacity} onChange={(event) => props.setOverlayOpacity(Number(event.target.value))} /></div><div className="settings-range"><label>背景模糊 <output>{props.overlayBlur}px</output></label><input type="range" min="0" max="20" step="0.5" value={props.overlayBlur} onChange={(event) => props.setOverlayBlur(Number(event.target.value))} /></div><div className="settings-range"><label>卡片透明度 <output>{props.overlayCardOpacity}%</output></label><input type="range" min="20" max="100" value={props.overlayCardOpacity} onChange={(event) => props.setOverlayCardOpacity(Number(event.target.value))} /></div></SettingsSection> : null}
-			<SettingsSection title="壁纸设置" onReset={() => { props.setBannerTitle(true); props.setCarousel(false); props.setWavesEnabled(true); props.setGradientEnabled(true); }}><SettingToggle icon={Palette} label="首页壁纸标题" checked={props.bannerTitle} onChange={props.setBannerTitle} /><SettingToggle icon={Library} label="壁纸轮播" checked={props.carousel} onChange={props.setCarousel} /><SettingToggle icon={Quote} label="水波纹动画" checked={props.wavesEnabled} onChange={props.setWavesEnabled} /><SettingToggle icon={Image} label="渐变过渡" checked={props.gradientEnabled} onChange={props.setGradientEnabled} /></SettingsSection>
+			<SettingsSection title="壁纸设置" onReset={() => { props.setBannerTitle(true); props.setCarousel(false); props.setCarouselInterval(DEFAULT_CAROUSEL_INTERVAL_SEC); props.setWavesEnabled(true); props.setGradientEnabled(true); }}><SettingToggle icon={Palette} label="首页壁纸标题" checked={props.bannerTitle} onChange={props.setBannerTitle} /><SettingToggle icon={Library} label="壁纸轮播" checked={props.carousel} onChange={props.setCarousel} />{props.carousel ? <div className="settings-range"><label>切换间隔 <output>{props.carouselInterval}s</output></label><input type="range" min={MIN_CAROUSEL_INTERVAL_SEC} max={MAX_CAROUSEL_INTERVAL_SEC} step="5" value={props.carouselInterval} onChange={(event) => props.setCarouselInterval(Number(event.target.value))} /></div> : null}<SettingToggle icon={Quote} label="水波纹动画" checked={props.wavesEnabled} onChange={props.setWavesEnabled} /><SettingToggle icon={Image} label="渐变过渡" checked={props.gradientEnabled} onChange={props.setGradientEnabled} />{props.wallpaper !== "none" ? <button type="button" className="settings-toggle" disabled={!props.wallpaperDownloadAvailable} onClick={props.onDownloadWallpaper}><Download size={19} /><span>下载当前壁纸</span></button> : null}</SettingsSection>
 		</> : null}
 		{tab === "effects" ? <SettingsSection title="特效设置" onReset={() => props.setSakuraEnabled(false)}><SettingToggle icon={Flower2} label="樱花特效" checked={props.sakuraEnabled} onChange={props.setSakuraEnabled} /></SettingsSection> : null}
 	</div>;
@@ -368,45 +437,134 @@ function Header({ dark, setDark, wallpaper, setWallpaper, settings }: { dark: bo
 	);
 }
 
-function Hero({ wallpaper, showTitle, carousel, wavesEnabled, gradientEnabled }: { wallpaper: string; showTitle: boolean; carousel: boolean; wavesEnabled: boolean; gradientEnabled: boolean }) {
+function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, gradientEnabled, onWallpaperDownloadChange }: { wallpaper: string; showTitle: boolean; carousel: boolean; carouselInterval: number; wavesEnabled: boolean; gradientEnabled: boolean; onWallpaperDownloadChange: (download: (() => void) | null) => void }) {
 	const location = useLocation();
 	const site = useSite();
 	const isHome = location.pathname === "/";
-	const coverSource = resolveMediaUrl(site.cover?.mode === "api" ? (site.cover.apiUrl || site.cover.value) : site.cover?.value);
-	const configuredCover = isSafeResourceUrl(coverSource) ? coverSource : "";
-	const heroSources = configuredCover ? [{ desktop: configuredCover, mobile: configuredCover }] : fallbackHeroSources;
-	const [wallpaperIndex, setWallpaperIndex] = useState(configuredCover ? 0 : 1);
-	const [outgoingWallpaperIndex, setOutgoingWallpaperIndex] = useState<number | null>(null);
-	const wallpaperIndexRef = useRef(wallpaperIndex);
+	const isApiCover = site.cover?.mode === "api";
+	const coverSource = resolveMediaUrl(isApiCover ? (site.cover?.apiUrl || site.cover?.value) : site.cover?.value);
+	const configuredCover = !isApiCover && isSafeResourceUrl(coverSource) ? coverSource : "";
+	const heroSources = useMemo(() => configuredCover ? [{ desktop: configuredCover, mobile: configuredCover }] : fallbackHeroSources, [configuredCover]);
+	const intervalMs = clampCarouselInterval(carouselInterval) * 1000;
+	const initialFrame = frameFromSource(heroSources[configuredCover ? 0 : 1] || fallbackHeroSources[1]);
+	const [currentFrame, setCurrentFrame] = useState<WallpaperFrame>(initialFrame);
+	const [outgoingFrame, setOutgoingFrame] = useState<WallpaperFrame | null>(null);
+	const currentFrameRef = useRef(currentFrame);
+	const outgoingFrameRef = useRef(outgoingFrame);
+	const wallpaperIndexRef = useRef(configuredCover ? 0 : 1);
+	currentFrameRef.current = currentFrame;
+	outgoingFrameRef.current = outgoingFrame;
+
 	useEffect(() => {
+		if (wallpaper === "none") {
+			onWallpaperDownloadChange(null);
+			return undefined;
+		}
+		onWallpaperDownloadChange(() => { void downloadWallpaperFrame(currentFrameRef.current); });
+		return () => onWallpaperDownloadChange(null);
+	}, [onWallpaperDownloadChange, wallpaper]);
+
+	useEffect(() => {
+		if (isApiCover) return;
 		const nextIndex = configuredCover ? 0 : 1;
 		wallpaperIndexRef.current = nextIndex;
-		setWallpaperIndex(nextIndex);
-		setOutgoingWallpaperIndex(null);
-	}, [configuredCover]);
+		setCurrentFrame(frameFromSource(heroSources[nextIndex] || fallbackHeroSources[1]));
+		setOutgoingFrame(null);
+	}, [configuredCover, isApiCover]);
+
 	useEffect(() => {
-		if (!carousel || heroSources.length < 2) return;
-		let transitionTimer: number | undefined;
+		if (!isApiCover || wallpaper === "none") return undefined;
+		let cancelled = false;
+		const apiUrl = site.cover?.apiUrl || site.cover?.value || "";
+		let fadeTimer: number | undefined;
+		api.fetchWallpaper().then((next) => {
+			if (cancelled) return;
+			const objectUrl = URL.createObjectURL(next.blob);
+			const previous = currentFrameRef.current;
+			setOutgoingFrame(previous);
+			setCurrentFrame({ desktop: objectUrl, mobile: objectUrl, blob: next.blob, filename: next.filename, objectUrl });
+			fadeTimer = window.setTimeout(() => {
+				setOutgoingFrame((current) => {
+					if (current?.objectUrl && current.objectUrl !== objectUrl) URL.revokeObjectURL(current.objectUrl);
+					return current === previous ? null : current;
+				});
+			}, WALLPAPER_CROSSFADE_MS);
+		}).catch(() => undefined);
+		return () => { cancelled = true; if (fadeTimer) window.clearTimeout(fadeTimer); };
+	}, [isApiCover, wallpaper, site.cover?.apiUrl, site.cover?.value]);
+
+	useEffect(() => {
+		if (isApiCover || !carousel || heroSources.length < 2 || wallpaper === "none") return undefined;
+		let fadeTimer: number | undefined;
 		const timer = window.setInterval(() => {
 			const previousIndex = wallpaperIndexRef.current;
 			const nextIndex = (previousIndex + 1) % heroSources.length;
+			const previous = currentFrameRef.current;
+			const next = frameFromSource(heroSources[nextIndex] || heroSources[0]);
 			wallpaperIndexRef.current = nextIndex;
-			setOutgoingWallpaperIndex(previousIndex);
-			setWallpaperIndex(nextIndex);
-			transitionTimer = window.setTimeout(() => setOutgoingWallpaperIndex((current) => current === previousIndex ? null : current), 1100);
-		}, 8000);
-		return () => { window.clearInterval(timer); if (transitionTimer) window.clearTimeout(transitionTimer); };
-	}, [carousel, heroSources.length]);
+			setOutgoingFrame(previous);
+			setCurrentFrame(next);
+			fadeTimer = window.setTimeout(() => setOutgoingFrame((current) => current === previous ? null : current), WALLPAPER_CROSSFADE_MS);
+		}, intervalMs);
+		return () => { window.clearInterval(timer); if (fadeTimer) window.clearTimeout(fadeTimer); };
+	}, [carousel, heroSources, intervalMs, isApiCover, wallpaper]);
+
+	useEffect(() => {
+		if (!isApiCover || !carousel || wallpaper === "none") return undefined;
+		let cancelled = false;
+		let waitTimer: number | undefined;
+		let fadeTimer: number | undefined;
+
+		const loadNext = async () => {
+			const next = await api.fetchWallpaper();
+			const objectUrl = URL.createObjectURL(next.blob);
+			return { desktop: objectUrl, mobile: objectUrl, blob: next.blob, filename: next.filename, objectUrl } satisfies WallpaperFrame;
+		};
+
+		const schedule = () => {
+			const pending = loadNext();
+			waitTimer = window.setTimeout(() => {
+				void pending.then((next) => {
+					if (cancelled) {
+						if (next.objectUrl) URL.revokeObjectURL(next.objectUrl);
+						return;
+					}
+					const previous = currentFrameRef.current;
+					setOutgoingFrame(previous);
+					setCurrentFrame(next);
+					fadeTimer = window.setTimeout(() => {
+						setOutgoingFrame((current) => {
+							if (current?.objectUrl && current.objectUrl !== next.objectUrl) URL.revokeObjectURL(current.objectUrl);
+							return current === previous ? null : current;
+						});
+					}, WALLPAPER_CROSSFADE_MS);
+					if (!cancelled) schedule();
+				}).catch(() => { if (!cancelled) schedule(); });
+			}, intervalMs);
+		};
+
+		schedule();
+		return () => {
+			cancelled = true;
+			if (waitTimer) window.clearTimeout(waitTimer);
+			if (fadeTimer) window.clearTimeout(fadeTimer);
+		};
+	}, [carousel, intervalMs, isApiCover, wallpaper]);
+
+	useEffect(() => () => {
+		if (currentFrameRef.current.objectUrl) URL.revokeObjectURL(currentFrameRef.current.objectUrl);
+		if (outgoingFrameRef.current?.objectUrl) URL.revokeObjectURL(outgoingFrameRef.current.objectUrl);
+	}, []);
+
 	if (wallpaper === "none") return <div className="hero-spacer" />;
-	const imageStyle = (index: number) => {
-		const source = heroSources[index] || heroSources[0] || fallbackHeroSources[1];
-		return {
-			"--hero-desktop-image": "url(\"" + source.desktop.replace(/["\\]/gu, "\\$&") + "\")",
-			"--hero-mobile-image": "url(\"" + source.mobile.replace(/["\\]/gu, "\\$&") + "\")",
-			"--hero-position": safeHeroPosition(site.cover?.position),
-		} as CSSProperties;
-	};
-	const crossfadeImages = (className = "") => <>{outgoingWallpaperIndex !== null ? <div className={`hero-image hero-image-outgoing ${className}`} style={imageStyle(outgoingWallpaperIndex)} /> : null}<div className={`hero-image hero-image-current ${outgoingWallpaperIndex !== null ? "is-crossfading" : ""} ${className}`} style={imageStyle(wallpaperIndex)} /></>;
+	const cssUrl = (value: string) => "url(\"" + value.replace(/["\\]/gu, "\\$&") + "\")";
+	const imageStyle = (frame: WallpaperFrame) => ({
+		"--hero-desktop-image": cssUrl(frame.desktop),
+		"--hero-mobile-image": cssUrl(frame.mobile),
+		"--hero-position": safeHeroPosition(site.cover?.position),
+	} as CSSProperties);
+	const downloadButton = <button type="button" className="hero-download" title="下载当前壁纸" aria-label="下载当前壁纸" onClick={() => { void downloadWallpaperFrame(currentFrame); }}><Download size={18} /></button>;
+	const crossfadeImages = (className = "") => <>{outgoingFrame ? <div className={`hero-image hero-image-outgoing ${className}`} style={imageStyle(outgoingFrame)} /> : null}<div className={`hero-image hero-image-current ${outgoingFrame ? "is-crossfading" : ""} ${className}`} style={imageStyle(currentFrame)} /></>;
 	if (wallpaper === "overlay") return <div className={`hero-overlay-layer ${gradientEnabled ? "" : "hero-gradient-off"}`}>{crossfadeImages()}<div className="hero-scrim" /></div>;
 	const title = site.titleConfig?.title?.trim() || site.title || "Firefly";
 	const subtitle = site.titleConfig?.subtitle?.trim() || site.subtitle || "愿每一颗心，都能免于哀伤。";
@@ -417,6 +575,7 @@ function Hero({ wallpaper, showTitle, carousel, wavesEnabled, gradientEnabled }:
 			{showTitle && isHome ? <div className="hero-content">
 				<h1>{title}</h1><TypewriterSubtitle fallbackText={subtitle} mode={site.titleConfig?.subtitleMode || "text"} endpoint={site.titleConfig?.hitokotoApi} />
 			</div> : null}
+			{downloadButton}
 			{wallpaper === "full" && isHome ? <a className="hero-scroll" href="#content" aria-label="向下查看内容"><ChevronDown size={34} strokeWidth={1.8} /></a> : null}
 			{wavesEnabled ? <div className="hero-waves" aria-hidden="true"><svg viewBox="0 24 150 28" preserveAspectRatio="none" shapeRendering="geometricPrecision"><defs><path id="firefly-wave" d="M-160 44c30 0 58-18 88-18s58 18 88 18 58-18 88-18 58 18 88 18v48h-352z" /></defs><g className="wave-parallax"><use className="wave-layer wave-layer-one" href="#firefly-wave" x="48" y="0" /><use className="wave-layer wave-layer-two" href="#firefly-wave" x="48" y="3" /><use className="wave-layer wave-layer-three" href="#firefly-wave" x="48" y="5" /><use className="wave-layer wave-layer-four" href="#firefly-wave" x="48" y="7" /></g></svg></div> : null}
 		</section>
@@ -891,6 +1050,14 @@ function SiteShell() {
 	const [cardFollowTheme, setCardFollowTheme] = useState(() => localStorage.getItem("firefly-card-theme") === "true");
 	const [bannerTitle, setBannerTitle] = useState(() => localStorage.getItem("firefly-banner-title") !== "false");
 	const [carousel, setCarousel] = useState(() => localStorage.getItem("firefly-carousel") === "true");
+	const [carouselInterval, setCarouselIntervalState] = useState(() => clampCarouselInterval(Number(localStorage.getItem("firefly-carousel-interval"))));
+	const [wallpaperDownloadAvailable, setWallpaperDownloadAvailable] = useState(false);
+	const wallpaperDownloadRef = useRef<() => void>(() => undefined);
+	const bindWallpaperDownload = useCallback((download: (() => void) | null) => {
+		wallpaperDownloadRef.current = download ?? (() => undefined);
+		setWallpaperDownloadAvailable(Boolean(download));
+	}, []);
+	const setCarouselInterval = (value: number) => setCarouselIntervalState(clampCarouselInterval(value));
 	const [wavesEnabled, setWavesEnabled] = useState(() => localStorage.getItem("firefly-waves") !== "false");
 	const [gradientEnabled, setGradientEnabled] = useState(() => localStorage.getItem("firefly-gradient") !== "false");
 	const [sakuraEnabled, setSakuraEnabled] = useState(() => localStorage.getItem("firefly-sakura") === "true");
@@ -945,13 +1112,14 @@ function SiteShell() {
 	useEffect(() => { localStorage.setItem("firefly-card-theme", String(cardFollowTheme)); }, [cardFollowTheme]);
 	useEffect(() => { localStorage.setItem("firefly-banner-title", String(bannerTitle)); }, [bannerTitle]);
 	useEffect(() => { localStorage.setItem("firefly-carousel", String(carousel)); }, [carousel]);
+	useEffect(() => { localStorage.setItem("firefly-carousel-interval", String(carouselInterval)); }, [carouselInterval]);
 	useEffect(() => { localStorage.setItem("firefly-waves", String(wavesEnabled)); }, [wavesEnabled]);
 	useEffect(() => { localStorage.setItem("firefly-gradient", String(gradientEnabled)); }, [gradientEnabled]);
 	useEffect(() => { localStorage.setItem("firefly-sakura", String(sakuraEnabled)); }, [sakuraEnabled]);
 	useEffect(() => { localStorage.setItem("firefly-overlay-opacity", String(overlayOpacity)); }, [overlayOpacity]);
 	useEffect(() => { localStorage.setItem("firefly-overlay-blur", String(overlayBlur)); }, [overlayBlur]);
 	useEffect(() => { localStorage.setItem("firefly-overlay-card-opacity", String(overlayCardOpacity)); }, [overlayCardOpacity]);
-	const displaySettings: DisplaySettingsProps = { hue, setHue: setHueState, wallpaper, setWallpaper: setWallpaperState, layout, setLayout, cardBorder, setCardBorder, cardFollowTheme, setCardFollowTheme, bannerTitle, setBannerTitle, carousel, setCarousel, wavesEnabled, setWavesEnabled, gradientEnabled, setGradientEnabled, sakuraEnabled, setSakuraEnabled, overlayOpacity, setOverlayOpacity, overlayBlur, setOverlayBlur, overlayCardOpacity, setOverlayCardOpacity };
+	const displaySettings: DisplaySettingsProps = { hue, setHue: setHueState, wallpaper, setWallpaper: setWallpaperState, layout, setLayout, cardBorder, setCardBorder, cardFollowTheme, setCardFollowTheme, bannerTitle, setBannerTitle, carousel, setCarousel, carouselInterval, setCarouselInterval, onDownloadWallpaper: () => wallpaperDownloadRef.current(), wallpaperDownloadAvailable, wavesEnabled, setWavesEnabled, gradientEnabled, setGradientEnabled, sakuraEnabled, setSakuraEnabled, overlayOpacity, setOverlayOpacity, overlayBlur, setOverlayBlur, overlayCardOpacity, setOverlayCardOpacity };
 	const shellClasses = [`site-shell wallpaper-${wallpaper}`, `post-layout-${layout}`, cardBorder ? "card-enhanced" : "", cardFollowTheme ? "card-follow-theme" : "", gradientEnabled ? "gradient-enabled" : "gradient-disabled"].filter(Boolean).join(" ");
 	const systemFontStack = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 	const fontVars: Record<string, string> = {};
@@ -966,7 +1134,7 @@ function SiteShell() {
 	fontVars["--font-post-content"] = fontVars["--site-post-content-font"];
 	fontVars["--font-tag"] = fontVars["--site-tag-font"];
 	const shellStyle = { "--overlay-opacity": overlayOpacity / 100, "--overlay-blur": `${overlayBlur}px`, "--overlay-card-opacity": overlayCardOpacity / 100, ...fontVars } as CSSProperties;
-	return <SiteContext.Provider value={site}><MusicPlaybackProvider><div className={shellClasses} style={shellStyle}><Header dark={dark} setDark={setDark} wallpaper={wallpaper} setWallpaper={setWallpaperState} settings={displaySettings} /><Hero wallpaper={wallpaper} showTitle={bannerTitle} carousel={carousel} wavesEnabled={wavesEnabled} gradientEnabled={gradientEnabled} />{sakuraEnabled ? <SakuraEffect /> : null}<main id="content" className="site-grid"><LeftSidebar /><div className="main-column"><Outlet context={site} /></div><RightSidebar /></main><footer className="site-footer"><span>界面风格参考 <a href="https://github.com/CuteLeaf/Firefly" target="_blank" rel="noreferrer">Firefly</a>（MIT）</span><a href="/rss.xml">RSS</a><a href="/sitemap.xml">Sitemap</a></footer><ScrollTop /><WallpaperNavigationScroll wallpaper={wallpaper} /></div></MusicPlaybackProvider></SiteContext.Provider>;
+	return <SiteContext.Provider value={site}><MusicPlaybackProvider><div className={shellClasses} style={shellStyle}><Header dark={dark} setDark={setDark} wallpaper={wallpaper} setWallpaper={setWallpaperState} settings={displaySettings} /><Hero wallpaper={wallpaper} showTitle={bannerTitle} carousel={carousel} carouselInterval={carouselInterval} wavesEnabled={wavesEnabled} gradientEnabled={gradientEnabled} onWallpaperDownloadChange={bindWallpaperDownload} />{sakuraEnabled ? <SakuraEffect /> : null}<main id="content" className="site-grid"><LeftSidebar /><div className="main-column"><Outlet context={site} /></div><RightSidebar /></main><footer className="site-footer"><span>界面风格参考 <a href="https://github.com/CuteLeaf/Firefly" target="_blank" rel="noreferrer">Firefly</a>（MIT）</span><a href="/rss.xml">RSS</a><a href="/sitemap.xml">Sitemap</a></footer><ScrollTop /><WallpaperNavigationScroll wallpaper={wallpaper} /></div></MusicPlaybackProvider></SiteContext.Provider>;
 }
 
 export default function App() { return <AuthProvider><Routes><Route path="/admin/*" element={<AdminWorkspace />} /><Route element={<SiteShell />}><Route path="/" element={<HomePage />} /><Route path="/tools/compiler" element={<CompilerPage />} /><Route path="/tools/image-host" element={<ImageHostPage />} /><Route path="/tools/clipboard" element={<ClipboardPage />} /><Route path="/user/center" element={<UserProfilePage />} /><Route path="/user/space" element={<UserSpacePage />} /><Route path="/page/:page" element={<PageNumberPage />} /><Route path="/archive" element={<ArchivePage />} /><Route path="/timeline" element={<ArchiveTimelinePage />} /><Route path="/archive/timeline" element={<ArchiveTimelinePage />} /><Route path="/categories" element={<TaxonomyPage type="categories" />} /><Route path="/tags" element={<TaxonomyPage type="tags" />} /><Route path="/search" element={<SearchPage />} /><Route path="/posts/*" element={<PostPage />} /><Route path="/author" element={<AuthorProfileRoute />} /><Route path="/about" element={<AboutContentPage />} /><Route path="/transfer" element={<TransferPage />} /><Route path="/friends" element={<TransferPage />} /><Route path="/issues" element={<IssuesPage />} /><Route path="/feedback" element={<FeedbackPage />} /><Route path="/changelog" element={<ChangelogPage />} /><Route path="/guestbook" element={<GuestbookPage />} /><Route path="/dynamic" element={<DynamicPage />} /><Route path="/dynamic/comments" element={<DynamicPage />} /><Route path="/gallery" element={<GalleryPage />} /><Route path="/gallery/:album" element={<GalleryPage />} /><Route path="/booknav" element={<BooknavPage />} /><Route path="/sponsor" element={<SponsorPage />} /><Route path="/rss" element={<RssPage />} /><Route path="/rss.xml" element={<RssPage />} /><Route path="/404" element={<EmptyState title="页面不存在" description="这个地址没有对应的页面。" />} /><Route path="*" element={<EmptyState title="页面不存在" description="这个地址没有对应的页面。" />} /></Route></Routes></AuthProvider>; }
