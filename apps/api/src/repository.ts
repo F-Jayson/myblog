@@ -1801,15 +1801,21 @@ export async function getAuthorProfile() {
 	return mapAuthor(row);
 }
 
+function shanghaiDateKey(value = new Date()) {
+	return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(value);
+}
+
 export async function getAuthorProfileActivity(daysInput = 365) {
 	const days = Math.max(28, Math.min(730, Math.trunc(daysInput)));
+	const todayKey = shanghaiDateKey();
+	const [year, month, day] = todayKey.split("-").map(Number);
+	const start = new Date(year, month - 1, day - days + 1);
+	const startKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
 	const [rows] = await pool.query<RowDataPacket[]>(
-		"SELECT DATE_FORMAT(published_at, '%Y-%m-%d') AS date, COUNT(*) AS count FROM posts WHERE status = 'published' AND published_at IS NOT NULL AND published_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY) GROUP BY DATE_FORMAT(published_at, '%Y-%m-%d') ORDER BY date ASC",
-		[days - 1],
+		"SELECT DATE_FORMAT(published_at, '%Y-%m-%d') AS date, COUNT(*) AS count FROM posts WHERE status = 'published' AND published_at IS NOT NULL AND published_at >= ? GROUP BY DATE_FORMAT(published_at, '%Y-%m-%d') ORDER BY date ASC",
+		[`${startKey} 00:00:00`],
 	);
 	const counts = new Map(rows.map((row) => [String(row.date), Number(row.count)]));
-	const today = new Date();
-	const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - days + 1);
 	const activity: AuthorActivityDay[] = [];
 	for (let index = 0; index < days; index += 1) {
 		const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + index);

@@ -563,7 +563,7 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 		"--hero-mobile-image": cssUrl(frame.mobile),
 		"--hero-position": safeHeroPosition(site.cover?.position),
 	} as CSSProperties);
-	const downloadButton = <button type="button" className="hero-download" title="下载当前壁纸" aria-label="下载当前壁纸" onClick={() => { void downloadWallpaperFrame(currentFrame); }}><Download size={18} /></button>;
+	const downloadButton = <button type="button" className="hero-download" title="下载当前壁纸" aria-label="下载当前壁纸" onClick={() => { void downloadWallpaperFrame(currentFrame); }}><Download size={14} /></button>;
 	const crossfadeImages = (className = "") => <>{outgoingFrame ? <div className={`hero-image hero-image-outgoing ${className}`} style={imageStyle(outgoingFrame)} /> : null}<div className={`hero-image hero-image-current ${outgoingFrame ? "is-crossfading" : ""} ${className}`} style={imageStyle(currentFrame)} /></>;
 	if (wallpaper === "overlay") return <div className={`hero-overlay-layer ${gradientEnabled ? "" : "hero-gradient-off"}`}>{crossfadeImages()}<div className="hero-scrim" /></div>;
 	const title = site.titleConfig?.title?.trim() || site.title || "Firefly";
@@ -668,19 +668,50 @@ function SiteInfoWidget() {
 	</section>;
 }
 
+function publishedDateParts(value: string) {
+	const match = /^(\d{4})-(\d{2})-(\d{2})/u.exec(value.trim());
+	if (!match) return null;
+	return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+}
+
 function UpdateFrequency() {
-	const levels = [
-		0, 1, 0, 2, 1, 0, 3, 1, 0, 2, 1, 0,
-		1, 2, 1, 0, 3, 1, 0, 2, 1, 0, 1, 2,
-		0, 1, 3, 2, 1, 0, 2, 1, 0, 1, 2, 0,
-		2, 1, 0, 1, 2, 3, 1, 0, 2, 1, 0, 1,
-	];
+	const [items, setItems] = useState<ArchiveItem[]>([]);
+	useEffect(() => {
+		let active = true;
+		api.archive().then((result) => { if (active) setItems(result); });
+		return () => { active = false; };
+	}, []);
+	const year = new Date().getFullYear();
+	const buckets = Array.from({ length: 48 }, () => 0);
+	for (const item of items) {
+		const parts = publishedDateParts(item.publishedAt);
+		if (!parts || parts.year !== year) continue;
+		const week = Math.min(3, Math.floor((parts.day - 1) / 7));
+		buckets[week * 12 + (parts.month - 1)] += 1;
+	}
+	const maximum = Math.max(1, ...buckets);
+	const levelFor = (count: number) => count <= 0 ? 0 : Math.min(3, Math.max(1, Math.ceil(count / maximum * 3)));
 	return <div className="update-frequency" aria-label="文章更新频率">
-		<div className="update-frequency-heading"><span>更新频率</span><small>文章发布热力图</small></div>
+		<div className="update-frequency-heading"><span>更新频率</span><small>{year} 年文章发布热力图</small></div>
 		<div className="frequency-months" aria-hidden="true">{Array.from({ length: 12 }, (_, index) => <span key={index}>{index + 1}</span>)}</div>
-		<div className="frequency-grid">{levels.map((level, index) => <span key={index} className={`frequency-cell level-${level}`} title={`${index + 1} 个更新单位`} />)}</div>
+		<div className="frequency-grid">{buckets.map((count, index) => {
+			const month = (index % 12) + 1;
+			const week = Math.floor(index / 12) + 1;
+			return <span key={index} className={`frequency-cell level-${levelFor(count)}`} title={`${year} 年 ${month} 月第 ${week} 周：${count} 篇`} />;
+		})}</div>
 		<div className="frequency-legend"><span>少</span><i className="frequency-cell level-0" /><i className="frequency-cell level-1" /><i className="frequency-cell level-2" /><i className="frequency-cell level-3" /><span>多</span></div>
 	</div>;
+}
+
+function CalendarWidget() {
+	const now = new Date();
+	const year = now.getFullYear();
+	const month = now.getMonth();
+	const today = now.getDate();
+	const firstWeekday = new Date(year, month, 1).getDay();
+	const daysInMonth = new Date(year, month + 1, 0).getDate();
+	const cells = Array.from({ length: firstWeekday + daysInMonth }, (_, index) => index < firstWeekday ? null : index - firstWeekday + 1);
+	return <section className="card widget calendar-card"><WidgetTitle icon={CalendarDays}>日历</WidgetTitle><div className="calendar-month"><b>{year} 年 {month + 1} 月</b><div className="calendar-grid">{"日一二三四五六".split("").map((day) => <span key={day}>{day}</span>)}{cells.map((day, index) => day ? <i key={index} className={day === today ? "today" : ""}>{day}</i> : <i key={index} />)}</div></div><UpdateFrequency /></section>;
 }
 
 type TocItem = { id: string; title: string; depth: number };
@@ -713,7 +744,7 @@ function RightSidebar() {
 		<section className="card widget"><WidgetTitle icon={Library}>站点统计</WidgetTitle><div className="site-stats-list"><div><Library size={16} /><span>文章</span><strong>{numberText(site.stats.posts)}</strong></div><div><Folder size={16} /><span>分类</span><strong>{numberText(site.categories.length)}</strong></div><div><Tag size={16} /><span>标签</span><strong>{numberText(site.tags.length)}</strong></div><div><Code2 size={16} /><span>总字数</span><strong>{numberText(site.stats.totalWords)}</strong></div><div><Clock3 size={16} /><span>运行时长</span><strong>{runningDays === null ? (site.stats.posts ? "暂不可用" : "暂无文章") : runningDays > 3650 ? "较早" : `${runningDays} 天`}</strong></div><div><CalendarDays size={16} /><span>最后活动</span><strong>{relativeActivityText(site.stats.lastActivityAt)}</strong></div></div></section>
 		<SiteInfoWidget />
 		<div className="sidebar-sticky-section">
-			{articleSlug ? (toc.length ? <section className="card widget toc-card"><WidgetTitle icon={List}>文章目录</WidgetTitle><nav className="article-toc">{toc.map((item) => <a key={item.id} className={`toc-depth-${item.depth}`} href={`#${item.id}`}>{item.title}</a>)}</nav></section> : null) : <section className="card widget calendar-card"><WidgetTitle icon={CalendarDays}>日历</WidgetTitle><div className="calendar-month"><b>2026 年 8 月</b><div className="calendar-grid">{"日一二三四五六".split("").map((day) => <span key={day}>{day}</span>)}{Array.from({ length: 31 }, (_, index) => <i key={index} className={index === 17 ? "today" : ""}>{index + 1}</i>)}</div></div><UpdateFrequency /></section>}
+			{articleSlug ? (toc.length ? <section className="card widget toc-card"><WidgetTitle icon={List}>文章目录</WidgetTitle><nav className="article-toc">{toc.map((item) => <a key={item.id} className={`toc-depth-${item.depth}`} href={`#${item.id}`}>{item.title}</a>)}</nav></section> : null) : <CalendarWidget />}
 		</div>
 	</aside>;
 }
