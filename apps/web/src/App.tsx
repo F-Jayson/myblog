@@ -397,7 +397,7 @@ function Hero({ wallpaper, showTitle, carousel, wavesEnabled, gradientEnabled }:
 		}, 8000);
 		return () => { window.clearInterval(timer); if (transitionTimer) window.clearTimeout(transitionTimer); };
 	}, [carousel, heroSources.length]);
-	if ((!isHome && wallpaper !== "full" && wallpaper !== "overlay") || wallpaper === "none") return <div className="hero-spacer" />;
+	if (wallpaper === "none") return <div className="hero-spacer" />;
 	const imageStyle = (index: number) => {
 		const source = heroSources[index] || heroSources[0] || fallbackHeroSources[1];
 		return {
@@ -794,6 +794,74 @@ function EmptyState({ title, description }: { title: string; description: string
 
 function ScrollTop() { const [visible, setVisible] = useState(false); useEffect(() => { const listener = () => setVisible(window.scrollY > 400); window.addEventListener("scroll", listener, { passive: true }); return () => window.removeEventListener("scroll", listener); }, []); if (!visible) return null; return <button className="scroll-top" type="button" title="回到顶部" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><ArrowUp size={20} /></button>; }
 
+function prefersReducedMotion() {
+	return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function withInstantScroll(run: () => void) {
+	const html = document.documentElement;
+	const previous = html.style.scrollBehavior;
+	html.style.scrollBehavior = "auto";
+	run();
+	html.style.scrollBehavior = previous;
+}
+
+function scrollToMainContent(smooth: boolean) {
+	const content = document.getElementById("content");
+	if (!content) return;
+	const useSmooth = smooth && !prefersReducedMotion();
+	if (!useSmooth) {
+		withInstantScroll(() => content.scrollIntoView({ behavior: "auto", block: "start" }));
+		return;
+	}
+	content.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function scrollToPageTop(smooth: boolean) {
+	const useSmooth = smooth && !prefersReducedMotion();
+	if (!useSmooth) {
+		withInstantScroll(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }));
+		return;
+	}
+	window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+}
+
+function revealPageForPath(pathname: string, wallpaper: string, smooth: boolean) {
+	const isHome = pathname === "/";
+	if (wallpaper === "full" || wallpaper === "banner") {
+		if (isHome) scrollToPageTop(smooth);
+		else scrollToMainContent(smooth);
+		return;
+	}
+	if (!isHome) scrollToPageTop(smooth);
+}
+
+function WallpaperNavigationScroll({ wallpaper }: { wallpaper: string }) {
+	const location = useLocation();
+	const wallpaperRef = useRef(wallpaper);
+	const previousPathRef = useRef<string | null>(null);
+	wallpaperRef.current = wallpaper;
+
+	useEffect(() => {
+		if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+	}, []);
+
+	useEffect(() => {
+		const path = location.pathname;
+		const previousPath = previousPathRef.current;
+		previousPathRef.current = path;
+		const isFirstLoad = previousPath === null;
+		if (!isFirstLoad && previousPath === path) return;
+
+		const frame = window.requestAnimationFrame(() => {
+			revealPageForPath(path, wallpaperRef.current, !isFirstLoad);
+		});
+		return () => window.cancelAnimationFrame(frame);
+	}, [location.pathname]);
+
+	return null;
+}
+
 function faviconMimeType(source: string): string {
 	const pathname = source.split(/[?#]/u, 1)[0].toLowerCase();
 	if (pathname.endsWith(".ico")) return "image/x-icon";
@@ -898,7 +966,7 @@ function SiteShell() {
 	fontVars["--font-post-content"] = fontVars["--site-post-content-font"];
 	fontVars["--font-tag"] = fontVars["--site-tag-font"];
 	const shellStyle = { "--overlay-opacity": overlayOpacity / 100, "--overlay-blur": `${overlayBlur}px`, "--overlay-card-opacity": overlayCardOpacity / 100, ...fontVars } as CSSProperties;
-	return <SiteContext.Provider value={site}><MusicPlaybackProvider><div className={shellClasses} style={shellStyle}><Header dark={dark} setDark={setDark} wallpaper={wallpaper} setWallpaper={setWallpaperState} settings={displaySettings} /><Hero wallpaper={wallpaper} showTitle={bannerTitle} carousel={carousel} wavesEnabled={wavesEnabled} gradientEnabled={gradientEnabled} />{sakuraEnabled ? <SakuraEffect /> : null}<main id="content" className="site-grid"><LeftSidebar /><div className="main-column"><Outlet context={site} /></div><RightSidebar /></main><footer className="site-footer"><span>© 2026 Firefly. All Rights Reserved.</span><a href="/rss.xml">RSS</a><a href="/sitemap.xml">Sitemap</a><span>Powered by Astro &amp; Firefly</span></footer><ScrollTop /></div></MusicPlaybackProvider></SiteContext.Provider>;
+	return <SiteContext.Provider value={site}><MusicPlaybackProvider><div className={shellClasses} style={shellStyle}><Header dark={dark} setDark={setDark} wallpaper={wallpaper} setWallpaper={setWallpaperState} settings={displaySettings} /><Hero wallpaper={wallpaper} showTitle={bannerTitle} carousel={carousel} wavesEnabled={wavesEnabled} gradientEnabled={gradientEnabled} />{sakuraEnabled ? <SakuraEffect /> : null}<main id="content" className="site-grid"><LeftSidebar /><div className="main-column"><Outlet context={site} /></div><RightSidebar /></main><footer className="site-footer"><span>© 2026 Firefly. All Rights Reserved.</span><a href="/rss.xml">RSS</a><a href="/sitemap.xml">Sitemap</a><span>Powered by Astro &amp; Firefly</span></footer><ScrollTop /><WallpaperNavigationScroll wallpaper={wallpaper} /></div></MusicPlaybackProvider></SiteContext.Provider>;
 }
 
 export default function App() { return <AuthProvider><Routes><Route path="/admin/*" element={<AdminWorkspace />} /><Route element={<SiteShell />}><Route path="/" element={<HomePage />} /><Route path="/tools/compiler" element={<CompilerPage />} /><Route path="/tools/image-host" element={<ImageHostPage />} /><Route path="/tools/clipboard" element={<ClipboardPage />} /><Route path="/user/center" element={<UserProfilePage />} /><Route path="/user/space" element={<UserSpacePage />} /><Route path="/page/:page" element={<PageNumberPage />} /><Route path="/archive" element={<ArchivePage />} /><Route path="/timeline" element={<ArchiveTimelinePage />} /><Route path="/archive/timeline" element={<ArchiveTimelinePage />} /><Route path="/categories" element={<TaxonomyPage type="categories" />} /><Route path="/tags" element={<TaxonomyPage type="tags" />} /><Route path="/search" element={<SearchPage />} /><Route path="/posts/*" element={<PostPage />} /><Route path="/author" element={<AuthorProfileRoute />} /><Route path="/about" element={<AboutContentPage />} /><Route path="/transfer" element={<TransferPage />} /><Route path="/friends" element={<TransferPage />} /><Route path="/issues" element={<IssuesPage />} /><Route path="/feedback" element={<FeedbackPage />} /><Route path="/changelog" element={<ChangelogPage />} /><Route path="/guestbook" element={<GuestbookPage />} /><Route path="/dynamic" element={<DynamicPage />} /><Route path="/dynamic/comments" element={<DynamicPage />} /><Route path="/gallery" element={<GalleryPage />} /><Route path="/gallery/:album" element={<GalleryPage />} /><Route path="/booknav" element={<BooknavPage />} /><Route path="/sponsor" element={<SponsorPage />} /><Route path="/rss" element={<RssPage />} /><Route path="/rss.xml" element={<RssPage />} /><Route path="/404" element={<EmptyState title="页面不存在" description="这个地址没有对应的页面。" />} /><Route path="*" element={<EmptyState title="页面不存在" description="这个地址没有对应的页面。" />} /></Route></Routes></AuthProvider>; }
