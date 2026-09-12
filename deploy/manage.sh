@@ -272,7 +272,7 @@ validate_loaded_config() {
 }
 
 load_existing_password() {
-  [[ -z "${DB_PASSWORD}" ]] || return
+  [[ -z "${DB_PASSWORD}" ]] || return 0
   local encoded="" decoded=""
   encoded="$(read_env_value "${APP_DIR}/.env" MYSQL_PASSWORD_BASE64)"
   if [[ -n "${encoded}" ]]; then
