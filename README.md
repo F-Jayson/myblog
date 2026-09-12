@@ -129,3 +129,14 @@ GET/PUT /api/admin/site
 ## 视觉迁移
 
 新前端沿用原站的 `hue: 165` 薄荷绿主题变量、半透明圆角卡片、顶部壁纸横幅、波浪过渡、桌面三栏/移动端单栏布局、文章封面列表、侧栏小组件、亮暗模式和壁纸设置。原项目的壁纸、Logo、头像和文章封面已复制到 `apps/web/public/images`。
+
+## 致谢与许可
+
+前台界面风格参考 [CuteLeaf/Firefly](https://github.com/CuteLeaf/Firefly)（[MIT License](https://github.com/CuteLeaf/Firefly/blob/main/LICENSE)）。Firefly 基于 [saicaca/fuwari](https://github.com/saicaca/fuwari)。
+
+**版权声明：**
+
+- Copyright (c) 2024 [saicaca](https://github.com/saicaca) — [fuwari](https://github.com/saicaca/fuwari)
+- Copyright (c) 2025 [CuteLeaf](https://github.com/CuteLeaf) — [Firefly](https://github.com/CuteLeaf/Firefly)
+
+本仓库用 React 重写了前台视觉，并未复制 Firefly 的 Astro/Svelte 源码；API、管理后台和编译器等为本项目独立实现。完整 MIT 许可文本见 [`licenses/Firefly-LICENSE.txt`](./licenses/Firefly-LICENSE.txt)，借鉴范围见 [`NOTICE.md`](./NOTICE.md)。

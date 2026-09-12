@@ -1,8 +1,22 @@
 # Open Source Notices
 
-本项目的页面视觉、部分文字结构和静态图片资源参考并复用了工作区内的
-`Firefly-master` 项目。该项目使用 MIT License，版权归 saicaca（2024）和
-CuteLeaf（2025）所有，完整许可文本见 `Firefly-master/LICENSE`。
+## Firefly（MIT）
+
+本项目前台的界面风格、布局结构，以及部分演示用静态资源，借鉴自
+[CuteLeaf/Firefly](https://github.com/CuteLeaf/Firefly)。该项目使用 MIT License，
+并最初 fork 自 [saicaca/fuwari](https://github.com/saicaca/fuwari)。
+
+**版权声明：**
+
+- Copyright (c) 2024 [saicaca](https://github.com/saicaca) — [fuwari](https://github.com/saicaca/fuwari)
+- Copyright (c) 2025 [CuteLeaf](https://github.com/CuteLeaf) — [Firefly](https://github.com/CuteLeaf/Firefly)
+
+完整许可文本见 [`licenses/Firefly-LICENSE.txt`](./licenses/Firefly-LICENSE.txt)。
+根据 MIT 协议，分发本项目时须保留上述版权声明与许可声明。
+
+Firefly 要求：若参考或使用了其组件设计和相关代码，请注明来自 Firefly。
+
+## 其他开源组件
 
 本项目直接使用的主要开源组件如下。各组件的完整许可文本和版权声明以其
 发布包或源代码仓库中的 LICENSE 文件为准。
