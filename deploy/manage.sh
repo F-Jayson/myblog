@@ -391,14 +391,27 @@ install_node_pnpm() {
   fi
   [[ "$(node --version)" == v"${NODE_MAJOR}".* ]] || die "Node.js ${NODE_MAJOR}.x 安装验证失败。"
 
+  export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+  export COREPACK_DEFAULT_TO_LATEST=0
+  export COREPACK_ENABLE_AUTO_PIN=0
   if command -v corepack >/dev/null 2>&1; then
     corepack enable
-    corepack prepare "pnpm@${PNPM_VERSION}" --activate
+    if ! corepack install -g "pnpm@${PNPM_VERSION}" >/dev/null 2>&1; then
+      corepack prepare "pnpm@${PNPM_VERSION}" --activate
+    fi
   else
     npm install --global "pnpm@${PNPM_VERSION}"
   fi
+  hash -r
   command -v pnpm >/dev/null 2>&1 || die "pnpm 安装失败。"
-  [[ "$(pnpm --version)" == "${PNPM_VERSION}" ]] || die "需要 pnpm ${PNPM_VERSION}，当前为 $(pnpm --version)。"
+  local current_pnpm
+  current_pnpm="$(pnpm --version)"
+  if [[ "${current_pnpm}" != "${PNPM_VERSION}" ]]; then
+    npm install --global "pnpm@${PNPM_VERSION}"
+    hash -r
+    current_pnpm="$(pnpm --version)"
+  fi
+  [[ "${current_pnpm}" == "${PNPM_VERSION}" ]] || die "需要 pnpm ${PNPM_VERSION}，当前为 ${current_pnpm}。"
 }
 
 ensure_service_user() {

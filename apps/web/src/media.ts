@@ -1,12 +1,30 @@
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN ?? "").trim().replace(/\/+$/u, "");
 
+function siteOrigin() {
+	if (API_ORIGIN) return API_ORIGIN;
+	if (typeof window !== "undefined" && window.location?.origin) return window.location.origin.replace(/\/+$/u, "");
+	return "";
+}
+
+/** Turn an API-relative path into a pasteable absolute URL. */
+export function absoluteMediaUrl(value: string | null | undefined): string {
+	const source = typeof value === "string" ? value.trim() : "";
+	if (!source) return "";
+	if (/^https?:\/\//iu.test(source)) return source;
+	if (!/^\/(?!\/)/u.test(source)) return "";
+	const origin = siteOrigin();
+	return origin ? `${origin}${source}` : source;
+}
+
 /** Resolve media paths returned by the API when the web app is deployed separately. */
 export function resolveMediaUrl(value: string | null | undefined): string {
 	const source = typeof value === "string" ? value.trim() : "";
 	if (!source) return "";
 	if (/^https?:\/\//iu.test(source)) return source;
 	if (!/^\/(?!\/)/u.test(source)) return "";
-	if (/^\/api\/(?:uploads|public\/resources|user\/storage)(?:\/|$)/u.test(source) || /^\/uploads(?:\/|$)/u.test(source)) return `${API_ORIGIN}${source}`;
+	if (/^\/api\/(?:uploads|public\/resources|user\/storage|admin\/user-space)(?:\/|$)/u.test(source) || /^\/uploads(?:\/|$)/u.test(source)) {
+		return API_ORIGIN ? `${API_ORIGIN}${source}` : source;
+	}
 	return source;
 }
 

@@ -1,4 +1,5 @@
 import { fallbackPosts, fallbackPostsFor, fallbackSite } from "./data";
+import { absoluteMediaUrl } from "./media";
 import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -409,7 +410,7 @@ export const api = {
 	async userProfile(): Promise<PublicUser> { return request<PublicUser>("/api/user/profile"); },
 	async updateUserProfile(input: Record<string, unknown>) { return request<PublicUser>("/api/user/profile", { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
 	async userProfileEmailCode(email: string) { return jsonRequest<{ sent?: boolean; debugCode?: string }>("/api/user/profile/email-code", "POST", { email }); },
-	publicResourceUrl(token: string) { return `${API_ORIGIN}/api/public/resources/${encodeURIComponent(token)}`; },
+	publicResourceUrl(token: string) { return absoluteMediaUrl(`/api/public/resources/${encodeURIComponent(token)}`); },
 	async archive() {
 		return cachedRequest<Array<{ year: number; id: number; slug: string; title: string; publishedAt: string; category: string | null }>>("archive", "/api/archive").catch(() => fallbackPosts.map((post) => ({
 				year: Number((post.publishedAt ?? "2026").slice(0, 4)),

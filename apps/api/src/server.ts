@@ -608,7 +608,9 @@ app.get("/api/user/storage/:id/file", requireFeature("userCenterEnabled", "用�
 		if (!item) { res.status(404).json({ error: "资源不存在" }); return; }
 		const filePath = safeUserStoragePath(item.storageKey ?? "");
 		if (!filePath) { res.status(404).json({ error: "资源文件不存在" }); return; }
-		res.type(item.mimeType);
+		res.type(item.mimeType || "application/octet-stream");
+		res.setHeader("Content-Disposition", "inline");
+		res.setHeader("Cache-Control", "private, max-age=60");
 		res.sendFile(filePath, (error) => { if (error && !res.headersSent) next(error); });
 	} catch (error) { next(error); }
 });
@@ -679,7 +681,8 @@ app.get("/api/public/resources/:token", requireFeature("publicResourcesEnabled",
 		if (result.type === "image") {
 			const filePath = safeUserStoragePath(result.item.storageKey ?? "");
 			if (!filePath) { res.status(404).json({ error: "公开资源文件不存在" }); return; }
-			res.type(result.item.mimeType);
+			res.type(result.item.mimeType || "application/octet-stream");
+			res.setHeader("Content-Disposition", "inline");
 			res.sendFile(filePath, (error) => { if (error && !res.headersSent) next(error); });
 			return;
 		}
@@ -1683,7 +1686,9 @@ app.get("/api/admin/user-space/:userId/items/:itemId/file", requireAdmin, async 
 		if (!item) { res.status(404).json({ error: "资源不存在" }); return; }
 		const filePath = safeUserStoragePath(item.storageKey ?? "");
 		if (!filePath) { res.status(404).json({ error: "资源文件不存在" }); return; }
-		res.type(item.mimeType);
+		res.type(item.mimeType || "application/octet-stream");
+		res.setHeader("Content-Disposition", "inline");
+		res.setHeader("Cache-Control", "private, max-age=60");
 		res.sendFile(filePath, (error) => { if (error && !res.headersSent) next(error); });
 	} catch (error) { next(error); }
 });
