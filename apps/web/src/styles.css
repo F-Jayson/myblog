@@ -702,6 +702,14 @@ img { display: block; max-width: 100%; }
 .wallpaper-full .hero-waves { bottom: 0; }
 .wallpaper-none .hero-spacer { height: 5.5rem; }
 .wallpaper-overlay .card { background: color-mix(in srgb, var(--card-bg) calc(var(--overlay-card-opacity) * 100%), transparent); backdrop-filter: blur(14px); }
+.wallpaper-overlay .site-grid {
+	margin-top: 1rem;
+}
+@media (min-width: 768px) {
+	.wallpaper-overlay .sidebar-sticky-section {
+		top: calc(var(--navbar-height) + 0.6rem);
+	}
+}
 .post-layout-grid .post-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .post-layout-grid .post-list-home .post-card { min-height: 100%; flex-direction: column-reverse; }
 .post-layout-grid .post-list-home .post-copy { width: 100%; flex: 1 1 auto; padding: 1.1rem 1rem 1.15rem; }
