@@ -165,7 +165,7 @@ const userStorageUpload = multer({
 
 app.disable("x-powered-by");
 app.use(cors({ origin: config.clientOrigin.split(","), credentials: false }));
-app.use(express.json({ limit: "12mb" }));
+app.use(express.json({ limit: "32mb" }));
 app.use("/api/uploads/user-space", (_req, res) => { res.status(404).end(); });
 app.use("/api/uploads", express.static(uploadsDirectory, { fallthrough: true, index: false, maxAge: "1d" }));
 function auditExcludedRequest(method: string, path: string) {
@@ -599,7 +599,7 @@ app.get("/api/user/space", requireFeature("userCenterEnabled", "用户中心功�
 app.get("/api/user/storage", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("imageHostingEnabled", "图床功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try { res.json(await listUserStorageItems(req.commentUser!.id)); } catch (error) { next(error); }
 });
-app.post("/api/user/storage", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("imageHostingEnabled", "图床功能当前已关闭"), requireCommentUser, userImageUploadRoute("image_host", false));
+app.post("/api/user/storage", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("imageHostingEnabled", "图床功能当前已关闭"), requireCommentUser, userImageUploadRoute("image_host", true));
 app.get("/api/user/storage/:id/file", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("imageHostingEnabled", "图床功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try {
 		const id = parseCommentUserId(String(req.params.id));
@@ -639,7 +639,7 @@ app.get("/api/user/clipboards", requireFeature("userCenterEnabled", "用户中�
 app.post("/api/user/clipboards", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("clipboardEnabled", "在线剪贴板功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try {
 		const input = z.object({ title: z.string().trim().max(255).optional(), content: z.string().max(USER_SPACE_QUOTA_BYTES).default(""), isPublic: z.boolean().optional() }).parse(req.body);
-		res.status(201).json(await createUserClipboard({ userId: req.commentUser!.id, title: input.title, content: input.content, isPublic: input.isPublic }));
+		res.status(201).json(await createUserClipboard({ userId: req.commentUser!.id, title: input.title, content: input.content, isPublic: input.isPublic ?? true }));
 	} catch (error) { next(error); }
 });
 app.get("/api/user/clipboards/:id", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("clipboardEnabled", "在线剪贴板功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {

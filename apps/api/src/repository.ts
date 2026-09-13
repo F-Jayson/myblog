@@ -867,7 +867,7 @@ export async function createUserClipboard(input: { userId: number; title?: strin
 }
 
 export async function listUserClipboards(userId: number) {
-	const [rows] = await pool.query<RowDataPacket[]>("SELECT id, user_id, title, byte_size, is_public, public_token, view_count, created_at, updated_at FROM user_clipboards WHERE user_id = ? ORDER BY updated_at DESC, id DESC", [userId]);
+	const [rows] = await pool.query<RowDataPacket[]>("SELECT id, user_id, title, content, byte_size, is_public, public_token, view_count, created_at, updated_at FROM user_clipboards WHERE user_id = ? ORDER BY updated_at DESC, id DESC", [userId]);
 	return rows.map(mapUserClipboard);
 }
 

@@ -3431,7 +3431,7 @@ function normalizeAdminSpaceDetail(value: unknown): AdminUserSpaceDetail {
   return { space: normalizeAdminSpace(source.space), items, clipboards, stickers };
 }
 function spaceCategoryLabel(key: string) {
-  return ({ images: "图床与图片", clipboards: "在线剪贴板", stickers: "个人表情", avatars: "头像", commentImages: "评论图片" } as Record<string, string>)[key] ?? key;
+  return ({ images: "全部图片", imageHost: "图床", clipboards: "在线剪贴板", stickers: "表情包", avatars: "头像", commentImages: "评论图片" } as Record<string, string>)[key] ?? key;
 }
 
 function AdminUserSpace() {

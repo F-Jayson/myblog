@@ -156,7 +156,7 @@ img { display: block; max-width: 100%; }
 .user-tool-heading h2 { display:flex; align-items:center; gap:.5rem; margin:.2rem 0; }
 .user-tool-heading p { margin:.3rem 0 0; color:var(--muted-text); font-size:.85rem; }
 .tool-eyebrow { color:var(--primary); font-size:.68rem; font-weight:750; letter-spacing:.12em; }
-.user-tool-link { color:var(--primary); font-size:.8rem; font-weight:700; }
+.user-tool-link { flex:0 0 auto; color:var(--primary); font-size:.8rem; font-weight:700; white-space:nowrap; }
 .user-tool-button { display:inline-flex; align-items:center; justify-content:center; gap:.4rem; padding:.6rem .85rem; border-radius:.55rem; background:var(--btn-bg); color:var(--muted-text); font-size:.8rem; font-weight:700; }
 .user-tool-button.primary { background:var(--primary); color:#fff; }
 .user-tool-button:disabled { opacity:.6; cursor:wait; }

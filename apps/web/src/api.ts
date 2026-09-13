@@ -1,7 +1,8 @@
 import { fallbackPosts, fallbackPostsFor, fallbackSite } from "./data";
 import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
 
-const REQUEST_TIMEOUT_MS = 2_000;
+const REQUEST_TIMEOUT_MS = 15_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
 const REQUEST_RETRY_DELAY_MS = 10_000;
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN ?? "").trim().replace(/\/+$/u, "");
 const requestCache = new Map<string, Promise<unknown>>();
@@ -20,9 +21,15 @@ function authHeaders(headers?: HeadersInit) {
 	return result;
 }
 
+function isAbortError(error: unknown) {
+	return typeof error === "object" && error !== null && "name" in error && (error as { name?: unknown }).name === "AbortError";
+}
+
 async function request<T>(path: string, init: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+	const isUpload = typeof FormData !== "undefined" && init.body instanceof FormData;
+	const waitMs = timeoutMs === REQUEST_TIMEOUT_MS && isUpload ? UPLOAD_TIMEOUT_MS : timeoutMs;
 	const controller = new AbortController();
-	const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+	const timeout = window.setTimeout(() => controller.abort(), waitMs);
 	try {
 		const headers = authHeaders(init.headers);
 		let body = init.body;
@@ -41,6 +48,9 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = REQU
 			throw new Error(message || `${response.status} ${response.statusText}`);
 		}
 		return payload as T;
+	} catch (error) {
+		if (isAbortError(error)) throw new Error(isUpload ? "上传超时，请稍后重试" : "请求超时，请稍后重试");
+		throw error;
 	} finally {
 		window.clearTimeout(timeout);
 	}
@@ -381,7 +391,7 @@ export const api = {
 		const list = Array.isArray(value) ? value : (value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).items) ? (value as Record<string, unknown>).items : []);
 		return (list as Record<string, unknown>[]).map((item) => ({ ...item, storageKey: typeof item.storageKey === "string" ? item.storageKey : undefined, url: String(item.url ?? item.publicUrl ?? "") || null, sizeBytes: Number(item.sizeBytes ?? item.byteSize ?? 0), accessCount: Number(item.accessCount ?? item.viewCount ?? 0) })) as UserStorageItem[];
 	},
-	async uploadUserStorage(file: File, name?: string, isPublic = false): Promise<UserStorageItem> {
+	async uploadUserStorage(file: File, name?: string, isPublic = true): Promise<UserStorageItem> {
 		const form = new FormData(); form.append("file", file); if (name?.trim()) form.append("name", name.trim()); form.append("isPublic", String(isPublic));
 		return request<UserStorageItem>("/api/user/storage", { method: "POST", body: form });
 	},
@@ -391,9 +401,9 @@ export const api = {
 	async userClipboards(): Promise<UserClipboard[]> {
 		const payload = await request<unknown>("/api/user/clipboards"); const value = unwrapPayload(payload);
 		const list = Array.isArray(value) ? value : (value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).items) ? (value as Record<string, unknown>).items : []);
-		return (list as Record<string, unknown>[]).map((item) => ({ ...item, sizeBytes: Number(item.sizeBytes ?? item.byteSize ?? 0), accessCount: Number(item.accessCount ?? item.viewCount ?? 0) })) as UserClipboard[];
+		return (list as Record<string, unknown>[]).map((item) => ({ ...item, content: String(item.content ?? ""), sizeBytes: Number(item.sizeBytes ?? item.byteSize ?? 0), accessCount: Number(item.accessCount ?? item.viewCount ?? 0) })) as UserClipboard[];
 	},
-	async createClipboard(input: { title: string; content: string; isPublic?: boolean }) { return request<UserClipboard>("/api/user/clipboards", { method: "POST", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
+	async createClipboard(input: { title: string; content: string; isPublic?: boolean }) { return request<UserClipboard>("/api/user/clipboards", { method: "POST", body: JSON.stringify({ isPublic: true, ...input }), headers: { "content-type": "application/json" } }); },
 	async updateClipboard(id: number | string, input: Partial<{ title: string; content: string; isPublic: boolean }>) { return request<UserClipboard>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
 	async deleteClipboard(id: number | string) { return request<void>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "DELETE" }); },
 	async userProfile(): Promise<PublicUser> { return request<PublicUser>("/api/user/profile"); },

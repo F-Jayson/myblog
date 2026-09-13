@@ -18,35 +18,140 @@ function RequireLogin({ children, feature, requires, featureLabel = "该功能" 
 const formatBytes = (n = 0) => n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(2)} MB`;
 const publicUrl = (token?: string | null) => token ? api.publicResourceUrl(token) : "";
 const storagePreviewUrl = (item: UserStorageItem) => item.storageKey ? `/api/user/storage/${encodeURIComponent(String(item.id))}/file` : item.url || "";
+const SPACE_CATEGORY_LABELS: Record<string, string> = {
+	images: "全部图片",
+	imageHost: "图床",
+	commentImages: "评论图片",
+	avatars: "头像",
+	clipboards: "在线剪贴板",
+	stickers: "表情包",
+};
+const SPACE_CATEGORY_ORDER = ["images", "imageHost", "commentImages", "avatars", "clipboards", "stickers"];
+function spaceCategoryEntries(categories: Record<string, number> = {}) {
+	const keys = [...SPACE_CATEGORY_ORDER.filter((key) => key in categories), ...Object.keys(categories).filter((key) => !SPACE_CATEGORY_ORDER.includes(key))];
+	return keys.map((key) => [key, Number(categories[key] ?? 0)] as const);
+}
 
 export function ImageHostPage() {
- const { user, loading: authLoading, features } = useAuth();
- const [items, setItems] = useState<UserStorageItem[]>([]); const [space, setSpace] = useState<UserSpaceStats | null>(null); const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const fileRef = useRef<HTMLInputElement>(null); const [isPublic, setIsPublic] = useState(false);
- const allowed = Boolean(user && !authLoading && features.userCenterEnabled && features.imageHostingEnabled);
- const canPublish = features.publicResourcesEnabled;
- const load = useCallback(async () => { try { const [list, stats] = await Promise.all([api.userStorage(), api.userSpace()]); setItems(list); setSpace(stats); } catch (e) { setError(e instanceof Error ? e.message : "加载失败"); } }, []);
- useEffect(() => { if (!allowed) { setItems([]); setSpace(null); if (!authLoading) setError(""); return; } setError(""); void load(); }, [allowed, authLoading, load]);
- useEffect(() => { if (!canPublish) setIsPublic(false); }, [canPublish]);
- const upload = async (file?: File) => { if (!file) return; if (!file.type.startsWith("image/")) { setError("请选择图片文件"); return; } setBusy(true); setError(""); try { await api.uploadUserStorage(file, file.name, isPublic && canPublish); await load(); } catch (e) { setError(e instanceof Error ? e.message : "上传失败"); } finally { setBusy(false); } };
- const togglePublic = async (item: UserStorageItem) => { const next = !item.isPublic; if (next && !canPublish) { setError("公开资源访问当前已关闭"); return; } try { await api.updateUserStorage(item.id, { isPublic: next }); await load(); } catch (e) { setError(e instanceof Error ? e.message : "公开状态更新失败"); } };
- const remove = async (item: UserStorageItem) => { try { await api.deleteUserStorage(item.id); await load(); } catch (e) { setError(e instanceof Error ? e.message : "删除失败"); } };
- return <RequireLogin requires={["userCenterEnabled", "imageHostingEnabled"]} featureLabel="图床"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">USER TOOLS</span><h2><FileImage size={22}/> 图床</h2><p>图片与头像等数据共享 30MB 用户空间。</p></div><Link to="/user/space" className="user-tool-link">空间管理</Link></header>{space ? <SpaceBar stats={space}/> : null}<div className="tool-upload"><input ref={fileRef} hidden type="file" accept="image/*" onChange={e => { void upload(e.target.files?.[0]); e.currentTarget.value=""; }}/><label className="tool-check"><input type="checkbox" checked={isPublic} disabled={!canPublish} onChange={e => setIsPublic(e.target.checked)}/> {canPublish ? "上传后公开" : "公开访问已关闭"}</label><button type="button" className="user-tool-button primary" disabled={busy} onClick={() => fileRef.current?.click()}><Upload size={16}/> {busy ? "上传中..." : "选择图片上传"}</button></div>{error ? <p className="user-tool-error">{error}</p> : null}<div className="tool-list">{items.length ? items.map(item => <article className="tool-item" key={item.id}><div className="tool-item-preview">{storagePreviewUrl(item) ? <img src={resolveMediaUrl(storagePreviewUrl(item))} alt={item.name || "图片"}/> : <FileImage/>}</div><div className="tool-item-main"><strong>{item.name || "未命名图片"}</strong><small>{formatBytes(item.sizeBytes)} · <Eye size={13}/> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}</small>{item.isPublic && item.publicToken && canPublish ? <div className="tool-public-link"><input readOnly value={publicUrl(item.publicToken)}/><button title="复制公开链接" type="button" onClick={() => void navigator.clipboard?.writeText(publicUrl(item.publicToken))}><Copy size={14}/></button></div> : null}</div><div className="tool-item-actions"><button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : item.isPublic ? "设为私有" : "公开访问"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15}/></button><button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15}/></button></div></article>) : <p className="tool-empty">还没有上传图片。</p>}</div></section></RequireLogin>;
+	const { user, loading: authLoading, features } = useAuth();
+	const [items, setItems] = useState<UserStorageItem[]>([]);
+	const [space, setSpace] = useState<UserSpaceStats | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState("");
+	const fileRef = useRef<HTMLInputElement>(null);
+	const allowed = Boolean(user && !authLoading && features.userCenterEnabled && features.imageHostingEnabled);
+	const canPublish = features.publicResourcesEnabled;
+	const load = useCallback(async () => {
+		try {
+			const [list, stats] = await Promise.all([api.userStorage(), api.userSpace()]);
+			setItems(list);
+			setSpace(stats);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "加载失败");
+		}
+	}, []);
+	useEffect(() => {
+		if (!allowed) {
+			setItems([]);
+			setSpace(null);
+			if (!authLoading) setError("");
+			return;
+		}
+		setError("");
+		void load();
+	}, [allowed, authLoading, load]);
+	const upload = async (file?: File) => {
+		if (!file) return;
+		if (!file.type.startsWith("image/")) { setError("请选择图片文件"); return; }
+		setBusy(true);
+		setError("");
+		try {
+			await api.uploadUserStorage(file, file.name, true);
+			await load();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "上传失败");
+		} finally {
+			setBusy(false);
+		}
+	};
+	const togglePublic = async (item: UserStorageItem) => {
+		const next = !item.isPublic;
+		if (next && !canPublish) { setError("公开资源访问当前已关闭"); return; }
+		try {
+			await api.updateUserStorage(item.id, { isPublic: next });
+			await load();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "公开状态更新失败");
+		}
+	};
+	const remove = async (item: UserStorageItem) => {
+		try {
+			await api.deleteUserStorage(item.id);
+			await load();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "删除失败");
+		}
+	};
+	return <RequireLogin requires={["userCenterEnabled", "imageHostingEnabled"]} featureLabel="图床"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">USER TOOLS</span><h2><FileImage size={22}/> 图床</h2><p>图片与头像等数据共享 30MB 用户空间。新上传默认公开，可在列表中改为私有。</p></div><Link to="/user/space" className="user-tool-link">空间管理</Link></header>{space ? <SpaceBar stats={space}/> : null}<div className="tool-upload"><input ref={fileRef} hidden type="file" accept="image/*" onChange={e => { void upload(e.target.files?.[0]); e.currentTarget.value=""; }}/><button type="button" className="user-tool-button primary" disabled={busy} onClick={() => fileRef.current?.click()}><Upload size={16}/> {busy ? "上传中..." : "选择图片上传"}</button></div>{error ? <p className="user-tool-error">{error}</p> : null}<div className="tool-list">{items.length ? items.map(item => <article className="tool-item" key={item.id}><div className="tool-item-preview">{storagePreviewUrl(item) ? <img src={resolveMediaUrl(storagePreviewUrl(item))} alt={item.name || "图片"}/> : <FileImage/>}</div><div className="tool-item-main"><strong>{item.name || "未命名图片"}</strong><small>{formatBytes(item.sizeBytes)} · <Eye size={13}/> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}</small>{item.isPublic && item.publicToken && canPublish ? <div className="tool-public-link"><input readOnly value={publicUrl(item.publicToken)}/><button title="复制公开链接" type="button" onClick={() => void navigator.clipboard?.writeText(publicUrl(item.publicToken))}><Copy size={14}/></button></div> : null}</div><div className="tool-item-actions"><button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : item.isPublic ? "设为私有" : "公开访问"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15}/></button><button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15}/></button></div></article>) : <p className="tool-empty">还没有上传图片。</p>}</div></section></RequireLogin>;
 }
 
 function SpaceBar({ stats }: { stats: UserSpaceStats }) { const percent = Math.min(100, stats.limitBytes ? stats.usedBytes / stats.limitBytes * 100 : 0); return <div className="space-summary"><div><strong>{formatBytes(stats.usedBytes)}</strong><span> / {formatBytes(stats.limitBytes)} 已使用</span></div><div className="space-progress"><i style={{ width: `${percent}%` }}/></div><small>剩余 {formatBytes(stats.remainingBytes)}</small></div>; }
 
 export function ClipboardPage() {
- const { user, loading: authLoading, features } = useAuth();
- const [items, setItems] = useState<UserClipboard[]>([]); const [editing, setEditing] = useState<UserClipboard | null>(null); const [title, setTitle] = useState(""); const [content, setContent] = useState(""); const [isPublic, setIsPublic] = useState(false); const [error, setError] = useState("");
- const allowed = Boolean(user && !authLoading && features.userCenterEnabled && features.clipboardEnabled);
- const canPublish = features.publicResourcesEnabled;
- const load = useCallback(async () => { try { setItems(await api.userClipboards()); } catch (e) { setError(e instanceof Error ? e.message : "加载失败"); } }, []);
- useEffect(() => { if (!allowed) { setItems([]); if (!authLoading) setError(""); return; } setError(""); void load(); }, [allowed, authLoading, load]);
- useEffect(() => { if (!canPublish) setIsPublic(false); }, [canPublish]);
- const submit = async (e: FormEvent) => { e.preventDefault(); if (!title.trim() || !content.trim()) return; try { const publish = canPublish ? isPublic : Boolean(editing?.isPublic); if (editing) await api.updateClipboard(editing.id, { title, content, isPublic: publish }); else await api.createClipboard({ title, content, isPublic: publish }); setEditing(null); setTitle(""); setContent(""); setIsPublic(false); await load(); } catch (e) { setError(e instanceof Error ? e.message : "保存失败"); } };
- const togglePublic = async (item: UserClipboard) => { const next = !item.isPublic; if (next && !canPublish) { setError("公开资源访问当前已关闭"); return; } try { await api.updateClipboard(item.id, { isPublic: next }); await load(); } catch (e) { setError(e instanceof Error ? e.message : "公开状态更新失败"); } };
- const remove = async (item: UserClipboard) => { try { await api.deleteClipboard(item.id); await load(); } catch (e) { setError(e instanceof Error ? e.message : "删除失败"); } };
- return <RequireLogin requires={["userCenterEnabled", "clipboardEnabled"]} featureLabel="在线剪贴板"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">USER TOOLS</span><h2>在线剪贴板</h2><p>保存 Markdown 或纯文本，按需生成公开链接。</p></div><Link to="/user/space" className="user-tool-link">空间管理</Link></header><form className="clipboard-editor" onSubmit={submit}><input value={title} onChange={e => setTitle(e.target.value)} placeholder="标题" maxLength={120}/><textarea value={content} onChange={e => setContent(e.target.value)} placeholder="输入 Markdown 或文本内容" rows={8}/><div className="tool-form-row"><label className="tool-check"><input type="checkbox" checked={isPublic} disabled={!canPublish} onChange={e => setIsPublic(e.target.checked)}/> {canPublish ? "支持公开访问" : "公开访问已关闭"}</label><button className="user-tool-button primary" type="submit"><Save size={16}/> {editing ? "更新剪贴板" : "保存剪贴板"}</button>{editing ? <button className="user-tool-button" type="button" onClick={() => { setEditing(null); setTitle(""); setContent(""); setIsPublic(false); }}>取消</button> : null}</div></form>{error ? <p className="user-tool-error">{error}</p> : null}<div className="tool-list">{items.map(item => <article className="tool-item clipboard-item" key={item.id}><div className="tool-item-main"><strong>{item.title}</strong><small>{formatBytes(item.sizeBytes)} · <Eye size={13}/> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}</small><pre>{item.content.slice(0, 220)}{item.content.length > 220 ? "…" : ""}</pre>{item.isPublic && item.publicToken && canPublish ? <div className="tool-public-link"><input readOnly value={publicUrl(item.publicToken)}/><button type="button" title="复制公开链接" onClick={() => void navigator.clipboard?.writeText(publicUrl(item.publicToken))}><Copy size={14}/></button></div> : null}</div><div className="tool-item-actions"><button type="button" title="编辑" onClick={() => { setEditing(item); setTitle(item.title); setContent(item.content); setIsPublic(Boolean(item.isPublic)); }}><Save size={15}/></button><button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : "切换公开状态"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15}/></button><button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15}/></button></div></article>)}</div></section></RequireLogin>;
+	const { user, loading: authLoading, features } = useAuth();
+	const [items, setItems] = useState<UserClipboard[]>([]);
+	const [editing, setEditing] = useState<UserClipboard | null>(null);
+	const [title, setTitle] = useState("");
+	const [content, setContent] = useState("");
+	const [error, setError] = useState("");
+	const allowed = Boolean(user && !authLoading && features.userCenterEnabled && features.clipboardEnabled);
+	const canPublish = features.publicResourcesEnabled;
+	const load = useCallback(async () => {
+		try { setItems(await api.userClipboards()); }
+		catch (e) { setError(e instanceof Error ? e.message : "加载失败"); }
+	}, []);
+	useEffect(() => {
+		if (!allowed) {
+			setItems([]);
+			if (!authLoading) setError("");
+			return;
+		}
+		setError("");
+		void load();
+	}, [allowed, authLoading, load]);
+	const submit = async (e: FormEvent) => {
+		e.preventDefault();
+		if (!title.trim() || !content.trim()) return;
+		try {
+			if (editing) await api.updateClipboard(editing.id, { title, content });
+			else await api.createClipboard({ title, content, isPublic: true });
+			setEditing(null);
+			setTitle("");
+			setContent("");
+			await load();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "保存失败");
+		}
+	};
+	const togglePublic = async (item: UserClipboard) => {
+		const next = !item.isPublic;
+		if (next && !canPublish) { setError("公开资源访问当前已关闭"); return; }
+		try {
+			await api.updateClipboard(item.id, { isPublic: next });
+			await load();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "公开状态更新失败");
+		}
+	};
+	const remove = async (item: UserClipboard) => {
+		try {
+			await api.deleteClipboard(item.id);
+			await load();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "删除失败");
+		}
+	};
+	return <RequireLogin requires={["userCenterEnabled", "clipboardEnabled"]} featureLabel="在线剪贴板"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">USER TOOLS</span><h2>在线剪贴板</h2><p>保存 Markdown 或纯文本。新建默认公开，可在列表中改为私有。</p></div><Link to="/user/space" className="user-tool-link">空间管理</Link></header><form className="clipboard-editor" onSubmit={submit}><input value={title} onChange={e => setTitle(e.target.value)} placeholder="标题" maxLength={120}/><textarea value={content} onChange={e => setContent(e.target.value)} placeholder="输入 Markdown 或文本内容" rows={8}/><div className="tool-form-row"><button className="user-tool-button primary" type="submit"><Save size={16}/> {editing ? "更新剪贴板" : "保存剪贴板"}</button>{editing ? <button className="user-tool-button" type="button" onClick={() => { setEditing(null); setTitle(""); setContent(""); }}>取消</button> : null}</div></form>{error ? <p className="user-tool-error">{error}</p> : null}<div className="tool-list">{items.map(item => { const preview = item.content ?? ""; return <article className="tool-item clipboard-item" key={item.id}><div className="tool-item-main"><strong>{item.title}</strong><small>{formatBytes(item.sizeBytes)} · <Eye size={13}/> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}</small><pre>{preview.slice(0, 220)}{preview.length > 220 ? "…" : ""}</pre>{item.isPublic && item.publicToken && canPublish ? <div className="tool-public-link"><input readOnly value={publicUrl(item.publicToken)}/><button type="button" title="复制公开链接" onClick={() => void navigator.clipboard?.writeText(publicUrl(item.publicToken))}><Copy size={14}/></button></div> : null}</div><div className="tool-item-actions"><button type="button" title="编辑" onClick={() => { setEditing(item); setTitle(item.title); setContent(item.content ?? ""); }}><Save size={15}/></button><button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : item.isPublic ? "设为私有" : "公开访问"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15}/></button><button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15}/></button></div></article>; })}</div></section></RequireLogin>;
 }
 
 export function UserProfilePage() {
@@ -56,4 +161,17 @@ export function UserProfilePage() {
  return <RequireLogin feature="userCenterEnabled" featureLabel="用户中心"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">ACCOUNT</span><h2>用户中心</h2><p>管理头像、昵称、账号、邮箱与密码。</p></div><UserAvatar user={user!} size={48}/></header><form className="profile-form" onSubmit={save}><label>昵称<input value={form.nickname} onChange={e => setForm({ ...form, nickname: e.target.value })}/></label><label>账号<input value={form.account} onChange={e => setForm({ ...form, account: e.target.value })}/></label><label>邮箱<input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}/></label><label>头像地址<input value={form.avatar} onChange={e => setForm({ ...form, avatar: e.target.value })} placeholder="可填写公开图片地址"/></label><label>当前密码<input type="password" value={form.currentPassword} onChange={e => setForm({ ...form, currentPassword: e.target.value })} placeholder="修改密码时必填"/></label><label>新密码<input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="留空表示不修改"/></label><label>邮箱验证码<div className="profile-code-row"><input value={form.code} onChange={e => setForm({ ...form, code: e.target.value })} placeholder="修改敏感资料时填写"/><button type="button" className="user-tool-button" disabled={codeBusy || !form.email.trim()} onClick={async () => { setCodeBusy(true); setMessage(""); try { const result = await api.userProfileEmailCode(form.email.trim()); setMessage(result.debugCode ? `验证码已发送：${result.debugCode}` : "验证码已发送，请查收邮箱"); } catch (e) { setMessage(e instanceof Error ? e.message : "验证码发送失败"); } finally { setCodeBusy(false); } }}>{codeBusy ? "发送中..." : "发送验证码"}</button></div></label>{message ? <p className="user-tool-message">{message}</p> : null}<button className="user-tool-button primary" disabled={busy} type="submit"><Save size={16}/>保存资料</button></form><p className="profile-code-hint"><KeyRound size={14}/>开启邮箱验证码后，修改账号、邮箱或密码需要验证当前邮箱。</p></section></RequireLogin>;
 }
 
-export function UserSpacePage() { const { user, loading: authLoading, features } = useAuth(); const [stats, setStats] = useState<UserSpaceStats | null>(null); const allowed = Boolean(user && !authLoading && features.userCenterEnabled); const load = useCallback(async () => { try { setStats(await api.userSpace()); } catch { setStats(null); } }, []); useEffect(() => { if (!allowed) { setStats(null); return; } void load(); }, [allowed, load]); return <RequireLogin feature="userCenterEnabled" featureLabel="空间管理"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">STORAGE</span><h2>空间管理</h2><p>图片、头像、评论图片、表情包与剪贴板共享 30MB。</p></div></header>{stats ? <><SpaceBar stats={stats}/><div className="space-categories">{Object.entries(stats.categories || {}).map(([name, bytes]) => <div key={name}><span>{name}</span><strong>{formatBytes(Number(bytes))}</strong></div>)}</div></> : <p>正在加载空间信息...</p>}<nav className="space-shortcuts">{features.compilerEnabled ? <Link to="/tools/compiler"><Code2 size={17}/>在线编译器</Link> : null}{features.imageHostingEnabled ? <Link to="/tools/image-host"><FileImage size={17}/>管理图床</Link> : null}{features.clipboardEnabled ? <Link to="/tools/clipboard"><Copy size={17}/>管理剪贴板</Link> : null}<Link to="/user/center"><UserRound size={17}/>用户资料</Link></nav></section></RequireLogin>; }
+export function UserSpacePage() {
+	const { user, loading: authLoading, features } = useAuth();
+	const [stats, setStats] = useState<UserSpaceStats | null>(null);
+	const allowed = Boolean(user && !authLoading && features.userCenterEnabled);
+	const load = useCallback(async () => {
+		try { setStats(await api.userSpace()); }
+		catch { setStats(null); }
+	}, []);
+	useEffect(() => {
+		if (!allowed) { setStats(null); return; }
+		void load();
+	}, [allowed, load]);
+	return <RequireLogin feature="userCenterEnabled" featureLabel="空间管理"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">STORAGE</span><h2>空间管理</h2><p>图片、头像、评论图片、表情包与剪贴板共享 30MB。</p></div></header>{stats ? <><SpaceBar stats={stats}/><div className="space-categories">{spaceCategoryEntries(stats.categories).map(([name, bytes]) => <div key={name}><span>{SPACE_CATEGORY_LABELS[name] ?? name}</span><strong>{formatBytes(bytes)}</strong></div>)}</div></> : <p>正在加载空间信息...</p>}<nav className="space-shortcuts">{features.compilerEnabled ? <Link to="/tools/compiler"><Code2 size={17}/>在线编译器</Link> : null}{features.imageHostingEnabled ? <Link to="/tools/image-host"><FileImage size={17}/>管理图床</Link> : null}{features.clipboardEnabled ? <Link to="/tools/clipboard"><Copy size={17}/>管理剪贴板</Link> : null}<Link to="/user/center"><UserRound size={17}/>用户资料</Link></nav></section></RequireLogin>;
+}
