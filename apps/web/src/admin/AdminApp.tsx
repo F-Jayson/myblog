@@ -69,6 +69,7 @@ import {
 } from "lucide-react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { AuthImage } from "../AuthImage";
+import { markdownToPlainText, parseDynamicBody, parseDynamicImageSize, withDynamicImageSize, type DynamicImageSize } from "../markdown";
 import { absoluteMediaUrl } from "../media";
 import MdEditorBridge from "./MdEditorBridge";
 import type { Post, SiteData } from "../types";
@@ -2105,6 +2106,7 @@ function AdminDynamics() {
   const [items, setItems] = useState<AdminDynamic[]>([]);
   const [body, setBody] = useState("");
   const [images, setImages] = useState<string[]>([]);
+  const [imageSize, setImageSize] = useState<DynamicImageSize>("medium");
   const [imageUrl, setImageUrl] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
@@ -2125,6 +2127,7 @@ function AdminDynamics() {
   const resetComposer = () => {
     setBody("");
     setImages([]);
+    setImageSize("medium");
     setImageUrl("");
     setEditingId(null);
   };
@@ -2146,7 +2149,7 @@ function AdminDynamics() {
           : "/api/admin/dynamics",
         {
           method: editingId ? "PUT" : "POST",
-          body: JSON.stringify({ body: body.trim(), images }),
+          body: JSON.stringify({ body: withDynamicImageSize(body.trim(), imageSize), images }),
         },
       );
       resetComposer();
@@ -2178,7 +2181,8 @@ function AdminDynamics() {
   };
   const startEditing = (item: AdminDynamic) => {
     setEditingId(item.id);
-    setBody(item.body);
+    setImageSize(parseDynamicImageSize(item.body));
+    setBody(item.body.replace(/<!--\s*firefly:image-size=(small|medium|large)\s*-->/giu, "").trim());
     setImages(item.images ?? []);
     setImageUrl("");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2214,6 +2218,13 @@ function AdminDynamics() {
           ) : null}
         </div>
         <div className="fa-post-content fa-dynamic-markdown"><span className="fa-post-content-label">Markdown 内容</span><div className="fa-md-editor-wrap"><MdEditorBridge value={body} onChange={setBody} onUploadImage={(file) => uploadAdminMedia(file, "image")} onUploadError={(error) => setMessage(errorText(error, "动态图片上传失败。"))} /></div></div>
+        <div className="fa-dynamic-size">
+          <span>图片尺寸</span>
+          {([["small", "小图"], ["medium", "中图"], ["large", "大图"]] as const).map(([value, label]) => (
+            <button type="button" key={value} className={imageSize === value ? "selected" : ""} onClick={() => setImageSize(value)}>{label}</button>
+          ))}
+          <small>正文插图会以缩略图显示，点击可看原图。也可写成 <code>![](url =240x)</code> 指定宽度。</small>
+        </div>
         {images.length ? (
           <div className="fa-image-grid fa-image-grid-editor">
             {images.map((url) => (
@@ -2281,16 +2292,18 @@ function AdminDynamics() {
       </form>
       <section className="fa-feed">
         {items.length ? (
-          items.map((item) => (
+          items.map((item) => {
+            const parsed = parseDynamicBody(item.body, item.images);
+            return (
             <article className="fa-feed-item fa-dynamic-feed-item" key={item.id}>
               <div className="fa-feed-content">
                 <time>{dateText(item.publishedAt)}</time>
-                <p className="fa-markdown-source-preview">{item.body.slice(0, 280)}{item.body.length > 280 ? "…" : ""}</p>
-                {item.images?.length ? (
+                <p className="fa-markdown-source-preview">{parsed.previewText || markdownToPlainText(item.body, 160) || "分享了一张图片"}</p>
+                {parsed.images.length ? (
                   <div className="fa-image-grid">
-                    {item.images.map((url) => (
-                      <a href={url} target="_blank" rel="noreferrer" key={url}>
-                        <img src={resolveAdminMediaUrl(url)} alt="动态配图" loading="lazy" />
+                    {parsed.images.map((image) => (
+                      <a href={image.src} target="_blank" rel="noreferrer" key={image.src}>
+                        <img src={resolveAdminMediaUrl(image.src)} alt={image.alt || "动态配图"} loading="lazy" />
                       </a>
                     ))}
                   </div>
@@ -2305,7 +2318,8 @@ function AdminDynamics() {
                 </button>
               </div>
             </article>
-          ))
+            );
+          })
         ) : (
           <div className="fa-panel">
             <EmptyState>还没有动态记录</EmptyState>

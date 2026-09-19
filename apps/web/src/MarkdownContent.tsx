@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import { marked, Renderer } from "marked";
 import { useMemo } from "react";
+import { rewriteMarkdownImageSizes } from "./markdown";
 import { resolveMediaUrl } from "./media";
 
 type MarkdownContentProps = {
@@ -16,7 +17,7 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
 			const id = `toc-${headingIndex++}`;
 			return `<h${depth} id="${id}">${inline}</h${depth}>`;
 		};
-		const rendered = marked.parse(content, {
+		const rendered = marked.parse(rewriteMarkdownImageSizes(content), {
 			async: false,
 			renderer,
 		});

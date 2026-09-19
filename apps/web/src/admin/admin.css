@@ -2269,6 +2269,48 @@
 .fa-compose-footer > span { margin-right: auto; }
 .fa-dynamic-media-row { justify-content: flex-start !important; flex-wrap: wrap; }
 .fa-dynamic-media-row > span { margin-left: auto; }
+.fa-dynamic-size {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--fa-line);
+  border-radius: var(--fa-radius-sm);
+  background: var(--fa-surface-sunken);
+}
+.fa-dynamic-size > span {
+  color: var(--fa-muted);
+  font-size: var(--fa-text-sm);
+  font-weight: 700;
+}
+.fa-dynamic-size > button {
+  min-height: 1.75rem;
+  padding: 0 0.65rem;
+  border-radius: 999px;
+  background: var(--fa-panel);
+  color: var(--fa-muted);
+  cursor: pointer;
+  font-size: var(--fa-text-sm);
+  font-weight: 650;
+}
+.fa-dynamic-size > button.selected,
+.fa-dynamic-size > button:hover {
+  background: var(--fa-primary-soft);
+  color: var(--fa-primary-strong);
+}
+.fa-dynamic-size > small {
+  flex: 1 1 12rem;
+  color: var(--fa-soft);
+  font-size: var(--fa-text-xs);
+  line-height: 1.5;
+}
+.fa-dynamic-size code {
+  padding: 0.05rem 0.28rem;
+  border-radius: 0.28rem;
+  background: var(--fa-panel);
+  color: var(--fa-primary-strong);
+}
 .fa-url-adder {
   min-width: min(19rem, 100%);
   flex: 1;
@@ -3129,6 +3171,7 @@
   .fa-accounts-table tbody tr td:nth-child(6) { grid-column: 1 / -1; justify-content: flex-end; padding-top: var(--fa-space-1); border-top: 1px solid var(--fa-line); }
   .fa-dynamic-media-row { align-items: stretch !important; flex-direction: column; }
   .fa-dynamic-media-row > span { margin-left: 0; }
+  .fa-dynamic-size { align-items: flex-start; }
   .fa-url-adder { min-width: 0; width: 100%; }
   .fa-image-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .fa-dynamic-feed-item { flex-direction: column; }

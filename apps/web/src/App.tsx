@@ -66,6 +66,7 @@ import CompilerPage from "./CompilerPage";
 import { ClipboardPage, ImageHostPage, UserProfilePage, UserSpacePage } from "./UserTools";
 import AuthorProfilePage from "./AuthorProfilePage";
 import { fallbackPosts, fallbackPostsFor, fallbackSite } from "./data";
+import { parseDynamicBody } from "./markdown";
 import { isSafeNavigationUrl, isSafeResourceUrl, resolveMediaUrl } from "./media";
 import type { ChangelogEntry, ManagedFriendLink, ManagedPage, ManagedPageKey, Post, PostSummary, SiteData, SiteMusic } from "./types";
 
@@ -740,7 +741,7 @@ function RightSidebar() {
 		return () => { active = false; };
 	}, [articleSlug]);
 	return <aside className="sidebar right-sidebar">
-		<section className="card widget"><WidgetTitle icon={Quote}>最新动态</WidgetTitle><div className="dynamic-mini">{site.dynamics.slice(0, 2).map((dynamic) => { const image = resolveMediaUrl(dynamic.images?.[0]); return <Link to="/dynamic" key={dynamic.id}><p>{dynamic.body}</p>{image ? <img src={image} alt="" loading="lazy" decoding="async" /> : null}<time>{dateText(dynamic.publishedAt)}</time></Link>; })}<Link className="widget-more" to="/dynamic">更多动态 <ChevronRight size={14} /></Link></div></section>
+		<section className="card widget"><WidgetTitle icon={Quote}>最新动态</WidgetTitle><div className="dynamic-mini">{site.dynamics.slice(0, 2).map((dynamic) => { const parsed = parseDynamicBody(dynamic.body, dynamic.images); const image = parsed.images[0]?.src; return <Link to="/dynamic" key={dynamic.id}><p>{parsed.previewText || "查看动态"}</p>{image ? <img src={image} alt="" loading="lazy" decoding="async" /> : null}<time>{dateText(dynamic.publishedAt)}</time></Link>; })}<Link className="widget-more" to="/dynamic">更多动态 <ChevronRight size={14} /></Link></div></section>
 		<section className="card widget"><WidgetTitle icon={Library}>站点统计</WidgetTitle><div className="site-stats-list"><div><Library size={16} /><span>文章</span><strong>{numberText(site.stats.posts)}</strong></div><div><Folder size={16} /><span>分类</span><strong>{numberText(site.categories.length)}</strong></div><div><Tag size={16} /><span>标签</span><strong>{numberText(site.tags.length)}</strong></div><div><Code2 size={16} /><span>总字数</span><strong>{numberText(site.stats.totalWords)}</strong></div><div><Clock3 size={16} /><span>运行时长</span><strong>{runningDays === null ? (site.stats.posts ? "暂不可用" : "暂无文章") : runningDays > 3650 ? "较早" : `${runningDays} 天`}</strong></div><div><CalendarDays size={16} /><span>最后活动</span><strong>{relativeActivityText(site.stats.lastActivityAt)}</strong></div></div></section>
 		<SiteInfoWidget />
 		<div className="sidebar-sticky-section">
@@ -785,7 +786,7 @@ function PostsPanel({ query, category, tag, heading, initialPage = 1 }: { query?
 	}, [page, query, category, tag]);
 	return <section className={`posts-panel ${heading ? "posts-panel-compact" : "posts-panel-home"}`}>
 		{heading ? <div className="page-heading compact"><h2>{heading}</h2><span>{total} 篇文章</span></div> : null}
-		<div className={`post-list ${heading ? "post-list-compact" : "post-list-home"}`}>{loading ? Array.from({ length: 3 }, (_, index) => <div className="card skeleton" key={index} />) : posts.length ? posts.map((post) => <PostCard post={post} key={post.id} />) : <EmptyState title="没有找到文章" description="换个关键词或筛选条件试试。" />}</div>
+		<div className="post-list post-list-home">{loading ? Array.from({ length: 3 }, (_, index) => <div className="card skeleton" key={index} />) : posts.length ? posts.map((post) => <PostCard post={post} key={post.id} />) : <EmptyState title="没有找到文章" description="换个关键词或筛选条件试试。" />}</div>
 		{total > 10 ? <div className="pagination"><button type="button" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>上一页</button><span>{page}</span><button type="button" disabled={posts.length < 10} onClick={() => setPage((value) => value + 1)}>下一页</button></div> : null}
 	</section>;
 }
@@ -947,11 +948,11 @@ function DynamicPage() {
 		<div className="card content-card dynamic-heading"><div className="page-heading"><h2>动态</h2><span>{entries.length} 条动态</span></div><p className="page-lead">随手记下此刻的想法与日常。</p><div className="dynamic-filters"><button type="button" className="selected">全部年份</button></div></div>
 		<div className="dynamic-feed">
 			{entries.length ? entries.map((dynamic) => {
-				const images = (dynamic.images ?? []).map((image) => resolveMediaUrl(image)).filter(Boolean).slice(0, 9);
+				const parsed = parseDynamicBody(dynamic.body, dynamic.images);
 				return <article className="card dynamic-item" key={dynamic.id}>
 					<Link className="dynamic-author-link" to="/author" title={`查看 ${author.name} 的主页`}><img src={avatar} alt={`${author.name} 的头像`} width="42" height="42" loading="lazy" decoding="async" /></Link>
-					<div><header><strong>{author.name}</strong><time>{dateText(dynamic.publishedAt)} UTC+8</time></header><Markdown content={dynamic.body} />
-						{images.length ? <div className="dynamic-image-grid" data-count={images.length}>{images.map((image, index) => <button type="button" className="dynamic-image" key={`${dynamic.id}-${image}-${index}`} title="查看图片" onClick={() => setSelectedImage(image)}><img src={image} alt={`${author.name} 的动态图片 ${index + 1}`} loading="lazy" decoding="async" /></button>)}</div> : null}
+					<div><header><strong>{author.name}</strong><time>{dateText(dynamic.publishedAt)} UTC+8</time></header>{parsed.content ? <Markdown content={parsed.content} /> : null}
+						{parsed.images.length ? <div className={`dynamic-image-grid dynamic-image-size-${parsed.size}`} data-count={parsed.images.length}>{parsed.images.map((image, index) => <button type="button" className={`dynamic-image${image.width ? " is-custom-size" : ""}`} key={`${dynamic.id}-${image.src}-${index}`} title="查看图片" style={image.width ? { width: image.width, height: image.height || undefined } : undefined} onClick={() => setSelectedImage(image.src)}><img src={image.src} alt={image.alt || `${author.name} 的动态图片 ${index + 1}`} width={image.width} height={image.height} loading="lazy" decoding="async" /></button>)}</div> : null}
 						<div className="dynamic-actions"><button type="button" title="回复"><MessageCircle size={16} />评论</button><button type="button" title="喜欢"><Heart size={16} />喜欢</button></div>
 					</div>
 				</article>;
