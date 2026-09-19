@@ -104,11 +104,15 @@ export type UserStorageItem = {
 	updatedAt: string;
 };
 
+export type ClipboardContentType = "text" | "markdown" | "code";
+
 export type UserClipboard = {
 	id: number;
 	userId?: number;
 	title: string;
 	content?: string;
+	contentType: ClipboardContentType;
+	language: string;
 	byteSize: number;
 	isPublic: boolean;
 	publicToken?: string | null;

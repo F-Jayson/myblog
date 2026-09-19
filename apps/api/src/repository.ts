@@ -2,7 +2,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import nodemailer from "nodemailer";
 import { pool } from "./db.js";
-import type { AuthorActivityDay, AuthorLearningProgress, AuthorProfile, AuthorProfileDetails, AuthorSkill, Category, Changelog, FeedbackEntry, FriendLink, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, Tag, UserClipboard, UserStorageItem } from "./types.js";
+import type { AuthorActivityDay, AuthorLearningProgress, AuthorProfile, AuthorProfileDetails, AuthorSkill, Category, Changelog, ClipboardContentType, FeedbackEntry, FriendLink, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, Tag, UserClipboard, UserStorageItem } from "./types.js";
 
 const ADMIN_PASSWORD_KEYLEN = 64;
 const ADMIN_SESSION_DAYS = 7;
@@ -783,9 +783,40 @@ function mapUserStorageItem(row: RowDataPacket): UserStorageItem {
 	return { id: Number(row.id), userId: row.user_id === undefined ? undefined : Number(row.user_id), kind: String(row.kind), name: String(row.name ?? ""), url: Boolean(Number(row.is_public)) && publicUrl ? publicUrl : ownerUrl, storageKey, mimeType: String(row.mime_type ?? "application/octet-stream"), byteSize: Number(row.byte_size ?? 0), isPublic: Boolean(Number(row.is_public)), publicToken: token, publicUrl, viewCount: Number(row.view_count ?? 0), createdAt: String(row.created_at), updatedAt: String(row.updated_at) };
 }
 
+export const CLIPBOARD_CONTENT_TYPES = ["text", "markdown", "code"] as const;
+export const CLIPBOARD_LANGUAGES = ["plaintext", "javascript", "typescript", "python", "java", "c", "cpp", "csharp", "go", "rust", "php", "ruby", "kotlin", "swift", "bash", "sql", "json", "html", "css", "yaml", "xml", "markdown"] as const;
+
+export function normalizeClipboardContentType(value: unknown): ClipboardContentType {
+	const raw = String(value ?? "").trim().toLowerCase();
+	if (raw === "markdown" || raw === "md") return "markdown";
+	if (raw === "code") return "code";
+	return "text";
+}
+
+export function normalizeClipboardLanguage(contentType: ClipboardContentType, value: unknown) {
+	if (contentType !== "code") return "";
+	const raw = String(value ?? "").trim().toLowerCase();
+	return (CLIPBOARD_LANGUAGES as readonly string[]).includes(raw) ? raw : "plaintext";
+}
+
 function mapUserClipboard(row: RowDataPacket): UserClipboard {
 	const token = row.public_token ? String(row.public_token) : null;
-	return { id: Number(row.id), userId: row.user_id === undefined ? undefined : Number(row.user_id), title: String(row.title ?? ""), content: row.content === undefined ? undefined : String(row.content ?? ""), byteSize: Number(row.byte_size ?? 0), isPublic: Boolean(Number(row.is_public)), publicToken: token, publicUrl: token ? `/api/public/resources/${encodeURIComponent(token)}` : null, viewCount: Number(row.view_count ?? 0), createdAt: String(row.created_at), updatedAt: String(row.updated_at) };
+	const contentType = normalizeClipboardContentType(row.content_type);
+	return {
+		id: Number(row.id),
+		userId: row.user_id === undefined ? undefined : Number(row.user_id),
+		title: String(row.title ?? ""),
+		content: row.content === undefined ? undefined : String(row.content ?? ""),
+		contentType,
+		language: normalizeClipboardLanguage(contentType, row.language),
+		byteSize: Number(row.byte_size ?? 0),
+		isPublic: Boolean(Number(row.is_public)),
+		publicToken: token,
+		publicUrl: token ? `/share/${encodeURIComponent(token)}` : null,
+		viewCount: Number(row.view_count ?? 0),
+		createdAt: String(row.created_at),
+		updatedAt: String(row.updated_at),
+	};
 }
 
 async function lockedUserUsage(connection: Awaited<ReturnType<typeof pool.getConnection>>, userId: number) {
@@ -863,15 +894,17 @@ export async function deleteUserStorageItem(userId: number, id: number) {
 	return result.affectedRows ? { url: String(row.storage_url), storageKey: String(row.storage_key ?? "") } : null;
 }
 
-export async function createUserClipboard(input: { userId: number; title?: string; content: string; isPublic?: boolean }) {
+export async function createUserClipboard(input: { userId: number; title?: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean }) {
 	const byteSize = Buffer.byteLength(input.content, "utf8");
+	const contentType = normalizeClipboardContentType(input.contentType);
+	const language = normalizeClipboardLanguage(contentType, input.language);
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
 		const usage = await lockedUserUsage(connection, input.userId);
 		if (usage.total + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
 		const token = input.isPublic ? randomBytes(32).toString("base64url") : null;
-		const [result] = await connection.execute<ResultSetHeader>("INSERT INTO user_clipboards (user_id, title, content, byte_size, is_public, public_token) VALUES (?, ?, ?, ?, ?, ?)", [input.userId, (input.title ?? "未命名剪贴板").slice(0, 255), input.content, byteSize, Boolean(input.isPublic), token]);
+		const [result] = await connection.execute<ResultSetHeader>("INSERT INTO user_clipboards (user_id, title, content, content_type, language, byte_size, is_public, public_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [input.userId, (input.title ?? "未命名剪贴板").slice(0, 255), input.content, contentType, language, byteSize, Boolean(input.isPublic), token]);
 		await connection.commit();
 		const [[row]] = await pool.query<RowDataPacket[]>("SELECT * FROM user_clipboards WHERE id = ?", [result.insertId]);
 		return row ? mapUserClipboard(row) : null;
@@ -879,7 +912,7 @@ export async function createUserClipboard(input: { userId: number; title?: strin
 }
 
 export async function listUserClipboards(userId: number) {
-	const [rows] = await pool.query<RowDataPacket[]>("SELECT id, user_id, title, content, byte_size, is_public, public_token, view_count, created_at, updated_at FROM user_clipboards WHERE user_id = ? ORDER BY updated_at DESC, id DESC", [userId]);
+	const [rows] = await pool.query<RowDataPacket[]>("SELECT * FROM user_clipboards WHERE user_id = ? ORDER BY updated_at DESC, id DESC", [userId]);
 	return rows.map(mapUserClipboard);
 }
 
@@ -888,7 +921,7 @@ export async function getUserClipboard(userId: number, id: number) {
 	return row ? mapUserClipboard(row) : null;
 }
 
-export async function updateUserClipboard(userId: number, id: number, input: { title?: string; content?: string; isPublic?: boolean }) {
+export async function updateUserClipboard(userId: number, id: number, input: { title?: string; content?: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean }) {
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
@@ -897,10 +930,12 @@ export async function updateUserClipboard(userId: number, id: number, input: { t
 		if (!row) { await connection.rollback(); return null; }
 		const existing = mapUserClipboard(row);
 		const content = input.content === undefined ? String(existing.content ?? "") : input.content;
+		const contentType = input.contentType === undefined ? existing.contentType : normalizeClipboardContentType(input.contentType);
+		const language = normalizeClipboardLanguage(contentType, input.language === undefined ? existing.language : input.language);
 		const byteSize = Buffer.byteLength(content, "utf8");
 		if (usage.total - existing.byteSize + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
 		const token = input.isPublic === undefined ? existing.publicToken ?? null : input.isPublic ? existing.publicToken ?? randomBytes(32).toString("base64url") : null;
-		await connection.execute("UPDATE user_clipboards SET title = ?, content = ?, byte_size = ?, is_public = ?, public_token = ? WHERE id = ? AND user_id = ?", [input.title === undefined ? existing.title : input.title.slice(0, 255), content, byteSize, input.isPublic === undefined ? existing.isPublic : input.isPublic, token, id, userId]);
+		await connection.execute("UPDATE user_clipboards SET title = ?, content = ?, content_type = ?, language = ?, byte_size = ?, is_public = ?, public_token = ? WHERE id = ? AND user_id = ?", [input.title === undefined ? existing.title : input.title.slice(0, 255), content, contentType, language, byteSize, input.isPublic === undefined ? existing.isPublic : input.isPublic, token, id, userId]);
 		await connection.commit();
 		return getUserClipboard(userId, id);
 	} catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }

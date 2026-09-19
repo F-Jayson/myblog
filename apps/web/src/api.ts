@@ -1,6 +1,6 @@
 import { fallbackPosts, fallbackPostsFor, fallbackSite } from "./data";
 import { absoluteMediaUrl } from "./media";
-import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
+import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, ClipboardContentType, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const UPLOAD_TIMEOUT_MS = 120_000;
@@ -102,6 +102,24 @@ function unwrapPayload(value: unknown): unknown {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return value;
 	const record = value as Record<string, unknown>;
 	return record.data ?? record.item ?? record.result ?? value;
+}
+
+function mapClipboard(item: Record<string, unknown>): UserClipboard {
+	const contentType = String(item.contentType ?? item.content_type ?? "text").toLowerCase();
+	return {
+		id: item.id as number | string,
+		title: String(item.title ?? ""),
+		content: String(item.content ?? ""),
+		contentType: contentType === "markdown" || contentType === "code" ? contentType : "text",
+		language: String(item.language ?? ""),
+		sizeBytes: Number(item.sizeBytes ?? item.byteSize ?? 0),
+		isPublic: Boolean(item.isPublic ?? item.is_public),
+		publicToken: typeof item.publicToken === "string" ? item.publicToken : typeof item.public_token === "string" ? item.public_token : null,
+		publicUrl: typeof item.publicUrl === "string" ? item.publicUrl : null,
+		accessCount: Number(item.accessCount ?? item.viewCount ?? 0),
+		createdAt: typeof item.createdAt === "string" ? item.createdAt : typeof item.created_at === "string" ? item.created_at : undefined,
+		updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : typeof item.updated_at === "string" ? item.updated_at : undefined,
+	};
 }
 
 function normalizeManagedPage(value: unknown, page: ManagedPageKey): ManagedPage | null {
@@ -402,11 +420,17 @@ export const api = {
 	async userClipboards(): Promise<UserClipboard[]> {
 		const payload = await request<unknown>("/api/user/clipboards"); const value = unwrapPayload(payload);
 		const list = Array.isArray(value) ? value : (value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).items) ? (value as Record<string, unknown>).items : []);
-		return (list as Record<string, unknown>[]).map((item) => ({ ...item, content: String(item.content ?? ""), sizeBytes: Number(item.sizeBytes ?? item.byteSize ?? 0), accessCount: Number(item.accessCount ?? item.viewCount ?? 0) })) as UserClipboard[];
+		return (list as Record<string, unknown>[]).map(mapClipboard);
 	},
-	async createClipboard(input: { title: string; content: string; isPublic?: boolean }) { return request<UserClipboard>("/api/user/clipboards", { method: "POST", body: JSON.stringify({ isPublic: true, ...input }), headers: { "content-type": "application/json" } }); },
-	async updateClipboard(id: number | string, input: Partial<{ title: string; content: string; isPublic: boolean }>) { return request<UserClipboard>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
+	async createClipboard(input: { title: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean }) { return request<UserClipboard>("/api/user/clipboards", { method: "POST", body: JSON.stringify({ isPublic: true, ...input }), headers: { "content-type": "application/json" } }); },
+	async updateClipboard(id: number | string, input: Partial<{ title: string; content: string; contentType: ClipboardContentType; language: string; isPublic: boolean }>) { return request<UserClipboard>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
 	async deleteClipboard(id: number | string) { return request<void>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "DELETE" }); },
+	async publicClipboard(token: string) { return request<{ type?: string; id?: number; title?: string; content?: string; contentType?: ClipboardContentType; language?: string; byteSize?: number; viewCount?: number; updatedAt?: string }>(`/api/public/resources/${encodeURIComponent(token)}`); },
+	clipboardShareUrl(token: string) {
+		const path = `/share/${encodeURIComponent(token)}`;
+		if (typeof window !== "undefined" && window.location?.origin) return `${window.location.origin}${path}`;
+		return path;
+	},
 	async userProfile(): Promise<PublicUser> { return request<PublicUser>("/api/user/profile"); },
 	async updateUserProfile(input: Record<string, unknown>) { return request<PublicUser>("/api/user/profile", { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
 	async userProfileEmailCode(email: string) { return jsonRequest<{ sent?: boolean; debugCode?: string }>("/api/user/profile/email-code", "POST", { email }); },

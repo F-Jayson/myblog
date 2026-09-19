@@ -278,6 +278,8 @@ CREATE TABLE IF NOT EXISTS user_clipboards (
   user_id BIGINT UNSIGNED NOT NULL,
   title VARCHAR(255) NOT NULL DEFAULT '',
   content LONGTEXT NOT NULL,
+  content_type VARCHAR(16) NOT NULL DEFAULT 'text',
+  language VARCHAR(32) NOT NULL DEFAULT '',
   byte_size INT UNSIGNED NOT NULL DEFAULT 0,
   is_public BOOLEAN NOT NULL DEFAULT FALSE,
   public_token CHAR(43) NULL UNIQUE,
@@ -288,6 +290,24 @@ CREATE TABLE IF NOT EXISTS user_clipboards (
   INDEX idx_user_clipboards_user (user_id, updated_at),
   INDEX idx_user_clipboards_public (is_public, public_token)
 ) ENGINE=InnoDB;
+
+SET @firefly_clipboard_type_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_clipboards' AND COLUMN_NAME = 'content_type') = 0,
+  'ALTER TABLE user_clipboards ADD COLUMN content_type VARCHAR(16) NOT NULL DEFAULT ''text'' AFTER content',
+  'SELECT 1'
+);
+PREPARE firefly_clipboard_type_statement FROM @firefly_clipboard_type_sql;
+EXECUTE firefly_clipboard_type_statement;
+DEALLOCATE PREPARE firefly_clipboard_type_statement;
+
+SET @firefly_clipboard_language_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_clipboards' AND COLUMN_NAME = 'language') = 0,
+  'ALTER TABLE user_clipboards ADD COLUMN language VARCHAR(32) NOT NULL DEFAULT '''' AFTER content_type',
+  'SELECT 1'
+);
+PREPARE firefly_clipboard_language_statement FROM @firefly_clipboard_language_sql;
+EXECUTE firefly_clipboard_language_statement;
+DEALLOCATE PREPARE firefly_clipboard_language_statement;
 
 -- The original comments table predates user sessions and threaded replies.
 -- Add the new columns only when they are missing so this file remains safe to

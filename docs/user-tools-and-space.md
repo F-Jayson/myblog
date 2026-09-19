@@ -16,7 +16,7 @@ The current space response reports the total, remaining bytes and these categori
 
 ## Data model
 
-`user_storage_items` contains owner, kind, display name, storage URL/key, MIME type, byte size, publication state, nullable opaque public token, view count and timestamps. `user_clipboards` contains owner, title, long-text content, UTF-8 byte size, publication state, opaque public token, view count and timestamps. Both reference `comment_users(id)` with `ON DELETE CASCADE` and index owner/date plus public token lookup.
+`user_storage_items` contains owner, kind, display name, storage URL/key, MIME type, byte size, publication state, nullable opaque public token, view count and timestamps. `user_clipboards` contains owner, title, long-text content, content type (`text`, `markdown` or `code`), optional highlight language, UTF-8 byte size, publication state, opaque public token, view count and timestamps. Both reference `comment_users(id)` with `ON DELETE CASCADE` and index owner/date plus public token lookup. Public clipboard links open `/share/:token` for a rendered preview; the JSON payload remains at `/api/public/resources/:token`.
 
 Public tokens are 32 random bytes encoded as base64url (43 characters) and are unique at database level. Enabling public access creates a token only when none exists; repeatedly saving public access keeps the current link. Disabling public access clears the token, immediately invalidating the old link. Public reads must always require both the token and `is_public = true`, then atomically increment the appropriate view counter.
 

@@ -37,6 +37,8 @@ import {
 	getUserClipboard,
 	updateUserClipboard,
 	deleteUserClipboard,
+	normalizeClipboardContentType,
+	normalizeClipboardLanguage,
 	getPublicUserResource,
 	listAdminUserSpace,
 	listAdminUserResources,
@@ -651,8 +653,9 @@ app.get("/api/user/clipboards", requireFeature("userCenterEnabled", "用户中�
 });
 app.post("/api/user/clipboards", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("clipboardEnabled", "在线剪贴板功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try {
-		const input = z.object({ title: z.string().trim().max(255).optional(), content: z.string().max(USER_SPACE_QUOTA_BYTES).default(""), isPublic: z.boolean().optional() }).parse(req.body);
-		res.status(201).json(await createUserClipboard({ userId: req.commentUser!.id, title: input.title, content: input.content, isPublic: input.isPublic ?? true }));
+		const input = z.object({ title: z.string().trim().max(255).optional(), content: z.string().max(USER_SPACE_QUOTA_BYTES).default(""), contentType: z.string().trim().max(16).optional(), language: z.string().trim().max(32).optional(), isPublic: z.boolean().optional() }).parse(req.body);
+		const contentType = normalizeClipboardContentType(input.contentType);
+		res.status(201).json(await createUserClipboard({ userId: req.commentUser!.id, title: input.title, content: input.content, contentType, language: normalizeClipboardLanguage(contentType, input.language), isPublic: input.isPublic ?? true }));
 	} catch (error) { next(error); }
 });
 app.get("/api/user/clipboards/:id", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("clipboardEnabled", "在线剪贴板功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
@@ -668,8 +671,9 @@ app.patch("/api/user/clipboards/:id", requireFeature("userCenterEnabled", "用�
 	try {
 		const id = parseCommentUserId(String(req.params.id));
 		if (!id) { res.status(400).json({ error: "剪贴板编号无效" }); return; }
-		const input = z.object({ title: z.string().trim().max(255).optional(), content: z.string().max(USER_SPACE_QUOTA_BYTES).optional(), isPublic: z.boolean().optional() }).parse(req.body);
-		const item = await updateUserClipboard(req.commentUser!.id, id, input);
+		const input = z.object({ title: z.string().trim().max(255).optional(), content: z.string().max(USER_SPACE_QUOTA_BYTES).optional(), contentType: z.string().trim().max(16).optional(), language: z.string().trim().max(32).optional(), isPublic: z.boolean().optional() }).parse(req.body);
+		const contentType = input.contentType === undefined ? undefined : normalizeClipboardContentType(input.contentType);
+		const item = await updateUserClipboard(req.commentUser!.id, id, { ...input, contentType, language: contentType ? normalizeClipboardLanguage(contentType, input.language) : input.language });
 		if (!item) { res.status(404).json({ error: "剪贴板不存在" }); return; }
 		res.json(item);
 	} catch (error) { next(error); }
@@ -697,7 +701,7 @@ app.get("/api/public/resources/:token", requireFeature("publicResourcesEnabled",
 			res.sendFile(filePath, (error) => { if (error && !res.headersSent) next(error); });
 			return;
 		}
-		res.json({ type: "clipboard", id: result.item.id, title: result.item.title, content: result.item.content ?? "", byteSize: result.item.byteSize, viewCount: result.item.viewCount, updatedAt: result.item.updatedAt });
+		res.json({ type: "clipboard", id: result.item.id, title: result.item.title, content: result.item.content ?? "", contentType: result.item.contentType, language: result.item.language, byteSize: result.item.byteSize, viewCount: result.item.viewCount, updatedAt: result.item.updatedAt });
 	} catch (error) { next(error); }
 });
 

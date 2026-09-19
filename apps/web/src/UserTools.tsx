@@ -1,10 +1,12 @@
-import { Code2, Copy, Eye, FileImage, KeyRound, Link as LinkIcon, Save, Trash2, Upload, UserRound } from "lucide-react";
+import { Code2, Copy, Eye, FileCode2, FileImage, FileText, KeyRound, Link as LinkIcon, Pencil, Save, Trash2, Upload, UserRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { api } from "./api";
 import { AuthImage } from "./AuthImage";
 import { useAuth, UserAvatar } from "./auth";
-import type { FeatureSettings, PublicUser, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
+import { CLIPBOARD_LANGUAGES } from "./codeHighlight";
+import { ClipboardRenderedBody } from "./ClipboardSharePage";
+import type { ClipboardContentType, FeatureSettings, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
 
 function RequireLogin({ children, feature, requires, featureLabel = "该功能" }: { children: ReactNode; feature?: keyof FeatureSettings; requires?: Array<keyof FeatureSettings>; featureLabel?: string }) {
  const { user, loading, openAuth, features } = useAuth();
@@ -97,12 +99,27 @@ export function ImageHostPage() {
 
 function SpaceBar({ stats }: { stats: UserSpaceStats }) { const percent = Math.min(100, stats.limitBytes ? stats.usedBytes / stats.limitBytes * 100 : 0); return <div className="space-summary"><div><strong>{formatBytes(stats.usedBytes)}</strong><span> / {formatBytes(stats.limitBytes)} 已使用</span></div><div className="space-progress"><i style={{ width: `${percent}%` }}/></div><small>剩余 {formatBytes(stats.remainingBytes)}</small></div>; }
 
+const CLIPBOARD_TYPES: Array<{ key: ClipboardContentType; label: string; icon: typeof FileText; hint: string }> = [
+	{ key: "text", label: "纯文本", icon: FileText, hint: "按原样保存，适合备忘和短消息。" },
+	{ key: "markdown", label: "Markdown", icon: FileCode2, hint: "分享页会渲染标题、列表、链接和图片。" },
+	{ key: "code", label: "代码", icon: Code2, hint: "按语言高亮显示，适合片段和配置。" },
+];
+
+function clipboardTypeLabel(item: UserClipboard) {
+	if (item.contentType === "markdown") return "Markdown";
+	if (item.contentType === "code") return CLIPBOARD_LANGUAGES.find((language) => language.key === item.language)?.label || "代码";
+	return "纯文本";
+}
+
 export function ClipboardPage() {
 	const { user, loading: authLoading, features } = useAuth();
 	const [items, setItems] = useState<UserClipboard[]>([]);
 	const [editing, setEditing] = useState<UserClipboard | null>(null);
 	const [title, setTitle] = useState("");
 	const [content, setContent] = useState("");
+	const [contentType, setContentType] = useState<ClipboardContentType>("text");
+	const [language, setLanguage] = useState("javascript");
+	const [preview, setPreview] = useState(false);
 	const [error, setError] = useState("");
 	const allowed = Boolean(user && !authLoading && features.userCenterEnabled && features.clipboardEnabled);
 	const canPublish = features.publicResourcesEnabled;
@@ -119,18 +136,25 @@ export function ClipboardPage() {
 		setError("");
 		void load();
 	}, [allowed, authLoading, load]);
+	const resetForm = () => {
+		setEditing(null);
+		setTitle("");
+		setContent("");
+		setContentType("text");
+		setLanguage("javascript");
+		setPreview(false);
+	};
 	const submit = async (e: FormEvent) => {
 		e.preventDefault();
 		if (!title.trim() || !content.trim()) return;
 		try {
-			if (editing) await api.updateClipboard(editing.id, { title, content });
-			else await api.createClipboard({ title, content, isPublic: true });
-			setEditing(null);
-			setTitle("");
-			setContent("");
+			const payload = { title, content, contentType, language: contentType === "code" ? language : "" };
+			if (editing) await api.updateClipboard(editing.id, payload);
+			else await api.createClipboard({ ...payload, isPublic: true });
+			resetForm();
 			await load();
-		} catch (e) {
-			setError(e instanceof Error ? e.message : "保存失败");
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : "保存失败");
 		}
 	};
 	const togglePublic = async (item: UserClipboard) => {
@@ -139,19 +163,73 @@ export function ClipboardPage() {
 		try {
 			await api.updateClipboard(item.id, { isPublic: next });
 			await load();
-		} catch (e) {
-			setError(e instanceof Error ? e.message : "公开状态更新失败");
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : "公开状态更新失败");
 		}
 	};
 	const remove = async (item: UserClipboard) => {
 		try {
 			await api.deleteClipboard(item.id);
 			await load();
-		} catch (e) {
-			setError(e instanceof Error ? e.message : "删除失败");
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : "删除失败");
 		}
 	};
-	return <RequireLogin requires={["userCenterEnabled", "clipboardEnabled"]} featureLabel="在线剪贴板"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">USER TOOLS</span><h2>在线剪贴板</h2><p>保存 Markdown 或纯文本。新建默认公开，可在列表中改为私有。</p></div><Link to="/user/space" className="user-tool-link">空间管理</Link></header><form className="clipboard-editor" onSubmit={submit}><input value={title} onChange={e => setTitle(e.target.value)} placeholder="标题" maxLength={120}/><textarea value={content} onChange={e => setContent(e.target.value)} placeholder="输入 Markdown 或文本内容" rows={8}/><div className="tool-form-row"><button className="user-tool-button primary" type="submit"><Save size={16}/> {editing ? "更新剪贴板" : "保存剪贴板"}</button>{editing ? <button className="user-tool-button" type="button" onClick={() => { setEditing(null); setTitle(""); setContent(""); }}>取消</button> : null}</div></form>{error ? <p className="user-tool-error">{error}</p> : null}<div className="tool-list">{items.map(item => { const preview = item.content ?? ""; const link = item.isPublic && item.publicToken && canPublish ? publicUrl(item.publicToken) : ""; return <article className="tool-item clipboard-item" key={item.id}><div className="tool-item-main"><strong>{item.title}</strong><small>{formatBytes(item.sizeBytes)} · <Eye size={13}/> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}</small><pre>{preview.slice(0, 220)}{preview.length > 220 ? "…" : ""}</pre>{link ? <div className="tool-public-link"><input readOnly value={link} /></div> : null}</div><div className="tool-item-actions"><button type="button" title={link ? "复制公开链接" : "公开后可复制链接"} disabled={!link} onClick={() => { if (link) void navigator.clipboard?.writeText(link); }}><Copy size={15}/></button><button type="button" title="编辑" onClick={() => { setEditing(item); setTitle(item.title); setContent(item.content ?? ""); }}><Save size={15}/></button><button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : item.isPublic ? "设为私有" : "公开访问"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15}/></button><button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15}/></button></div></article>; })}</div></section></RequireLogin>;
+	const placeholder = contentType === "markdown" ? "输入 Markdown 内容，例如 ## 标题" : contentType === "code" ? "粘贴代码片段" : "输入纯文本内容";
+	return <RequireLogin requires={["userCenterEnabled", "clipboardEnabled"]} featureLabel="在线剪贴板">
+		<section className="card content-card user-tool-page">
+			<header className="user-tool-heading">
+				<div>
+					<span className="tool-eyebrow">USER TOOLS</span>
+					<h2>在线剪贴板</h2>
+					<p>可选择纯文本、Markdown 或代码。新建默认公开，分享链接会打开预览页。</p>
+				</div>
+				<Link to="/user/space" className="user-tool-link">空间管理</Link>
+			</header>
+			<form className="clipboard-editor" onSubmit={submit}>
+				<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="标题" maxLength={120} />
+				<div className="clipboard-type-switch" role="group" aria-label="文本类型">
+					{CLIPBOARD_TYPES.map((item) => {
+						const Icon = item.icon;
+						return <button type="button" key={item.key} className={contentType === item.key ? "selected" : ""} onClick={() => setContentType(item.key)}>
+							<Icon size={15} />{item.label}
+						</button>;
+					})}
+				</div>
+				<p className="clipboard-type-hint">{CLIPBOARD_TYPES.find((item) => item.key === contentType)?.hint}</p>
+				{contentType === "code" ? <label className="clipboard-language-field">代码语言
+					<select value={language} onChange={(event) => setLanguage(event.target.value)}>
+						{CLIPBOARD_LANGUAGES.map((item) => <option value={item.key} key={item.key}>{item.label}</option>)}
+					</select>
+				</label> : null}
+				{contentType !== "text" ? <div className="clipboard-preview-toggle"><button type="button" className={!preview ? "selected" : ""} onClick={() => setPreview(false)}>编辑</button><button type="button" className={preview ? "selected" : ""} onClick={() => setPreview(true)}>预览</button></div> : null}
+				{preview && contentType !== "text" ? <div className="clipboard-live-preview"><ClipboardRenderedBody content={content || "暂无内容"} contentType={contentType} language={language} /></div> : <textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder={placeholder} rows={10} />}
+				<div className="tool-form-row">
+					<button className="user-tool-button primary" type="submit"><Save size={16} /> {editing ? "更新剪贴板" : "保存剪贴板"}</button>
+					{editing ? <button className="user-tool-button" type="button" onClick={resetForm}>取消</button> : null}
+				</div>
+			</form>
+			{error ? <p className="user-tool-error">{error}</p> : null}
+			<div className="tool-list">{items.length ? items.map((item) => {
+				const snippet = item.content ?? "";
+				const link = item.isPublic && item.publicToken && canPublish ? api.clipboardShareUrl(item.publicToken) : "";
+				return <article className="tool-item clipboard-item" key={item.id}>
+					<div className="tool-item-main">
+						<strong>{item.title}</strong>
+						<small><em>{clipboardTypeLabel(item)}</em> · {formatBytes(item.sizeBytes)} · <Eye size={13} /> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}</small>
+						<pre>{snippet.slice(0, 220)}{snippet.length > 220 ? "…" : ""}</pre>
+						{link ? <div className="tool-public-link"><input readOnly value={link} /><Link to={`/share/${encodeURIComponent(item.publicToken ?? "")}`} className="user-tool-link" target="_blank" rel="noreferrer">预览</Link></div> : null}
+					</div>
+					<div className="tool-item-actions">
+						<button type="button" title={link ? "复制公开链接" : "公开后可复制链接"} disabled={!link} onClick={() => { if (link) void navigator.clipboard?.writeText(link); }}><Copy size={15} /></button>
+						<button type="button" title="编辑" onClick={() => { setEditing(item); setTitle(item.title); setContent(item.content ?? ""); setContentType(item.contentType === "markdown" || item.contentType === "code" ? item.contentType : "text"); setLanguage(item.language || "javascript"); setPreview(false); }}><Pencil size={15} /></button>
+						<button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : item.isPublic ? "设为私有" : "公开访问"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15} /></button>
+						<button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15} /></button>
+					</div>
+				</article>;
+			}) : <p className="tool-empty">还没有剪贴板记录。</p>}</div>
+		</section>
+	</RequireLogin>;
 }
 
 export function UserProfilePage() {
