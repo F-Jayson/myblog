@@ -665,6 +665,18 @@ export async function getCommentSettings() {
 	};
 }
 
+export async function verifyCommentUserCredentials(accountOrEmail: string, password: string) {
+	const login = accountOrEmail.trim().toLowerCase();
+	if (!login || !password) return null;
+	const [[row]] = await pool.query<RowDataPacket[]>(
+		"SELECT * FROM comment_users WHERE (LOWER(account) = ? OR LOWER(email) = ?) AND is_active <> 0 LIMIT 1",
+		[login, login],
+	);
+	if (!row || !verifyCommentPassword(password, String(row.password_hash))) return null;
+	const user = mapCommentUser(row);
+	return { ...user, is_active: true, isActive: true };
+}
+
 export async function authenticateCommentUser(accountOrEmail: string, password: string) {
 	const login = accountOrEmail.trim().toLowerCase();
 	const [[row]] = await pool.query<RowDataPacket[]>(

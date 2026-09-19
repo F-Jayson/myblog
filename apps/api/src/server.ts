@@ -17,6 +17,7 @@ import {
 	archivePosts,
 	authenticateAdmin,
 	authenticateCommentUser,
+	verifyCommentUserCredentials,
 	clearAuditLogs,
 	createAdminUser,
 	createAnnouncementHistory,
@@ -508,6 +509,16 @@ app.post("/api/auth/login", async (req, res, next) => {
 		const result = await authenticateCommentUser(input.account ?? input.username ?? input.email ?? "", input.password);
 		if (!result) { res.status(401).json({ error: "账号或密码错误" }); return; }
 		res.json(result);
+	} catch (error) { next(error); }
+});
+app.post("/api/auth/verify-password", async (req, res, next) => {
+	try {
+		const features = await getFeatureSettings();
+		if (!features.loginEnabled) { res.status(403).json({ error: "用户登录功能未开启" }); return; }
+		const input = commentLoginInput.parse(req.body);
+		const user = await verifyCommentUserCredentials(input.account ?? input.username ?? input.email ?? "", input.password);
+		if (!user) { res.status(401).json({ error: "账号或密码错误" }); return; }
+		res.json({ user });
 	} catch (error) { next(error); }
 });
 app.post("/api/user/auth/login", async (req, res, next) => {
