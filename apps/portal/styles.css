@@ -132,6 +132,7 @@ img { display: block; max-width: 100%; }
 	overflow: hidden;
 	background: #152320;
 }
+.hero-slides { position: absolute; inset: 0; }
 .hero-image {
 	position: absolute;
 	inset: 0;
@@ -140,6 +141,12 @@ img { display: block; max-width: 100%; }
 	background-size: cover;
 	background-repeat: no-repeat;
 }
+.hero-image-current,
+.hero-image-outgoing { will-change: opacity; }
+.hero-image-outgoing { z-index: 1; animation: wallpaper-fade-out 1.1s ease both; }
+.hero-image-current.is-crossfading { z-index: 2; animation: wallpaper-fade-in 1.1s ease both; }
+@keyframes wallpaper-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes wallpaper-fade-out { from { opacity: 1; } to { opacity: 0; } }
 .hero-scrim {
 	position: absolute;
 	inset: 0;
@@ -167,20 +174,48 @@ img { display: block; max-width: 100%; }
 	font-size: clamp(1rem, 2vw, 1.24rem);
 	color: rgb(255 255 255 / .88);
 }
+.hero-subtitle { min-height: 1.7em; }
+.typewriter-subtitle::after {
+	content: "|";
+	display: inline-block;
+	margin-left: .16rem;
+	color: currentColor;
+	animation: typewriter-caret 1s steps(1, end) infinite;
+}
+@keyframes typewriter-caret { 0%, 48% { opacity: 1; } 49%, 100% { opacity: 0; } }
 .hero-waves {
 	position: absolute;
 	right: 0;
 	bottom: -1px;
 	left: 0;
 	z-index: 3;
-	height: 15vh;
-	min-height: 3rem;
+	height: 12vh;
+	min-height: 3.5rem;
+	overflow: hidden;
 	color: var(--page-bg);
+	isolation: isolate;
+	contain: layout style paint;
+	transform: translateZ(0);
+	backface-visibility: hidden;
+	pointer-events: none;
 }
-.hero-waves svg { display: block; width: 100%; height: 100%; }
-.hero-waves path { fill: currentColor; opacity: .35; }
-.hero-waves path + path { opacity: .52; transform: translateY(3px); }
-.hero-waves path + path + path { opacity: .82; transform: translateY(6px); }
+.hero-waves svg { display: block; width: 100%; height: 100%; overflow: hidden; transform: translateZ(0); backface-visibility: hidden; }
+.hero-waves path { fill: currentColor; opacity: 1; }
+.hero-waves use { fill: currentColor; }
+.wave-parallax { transform: translateZ(0); backface-visibility: hidden; }
+.wave-layer {
+	transform-box: fill-box;
+	transform-origin: center;
+	will-change: transform;
+	backface-visibility: hidden;
+	animation: wave-slide 25s cubic-bezier(.5, .5, .45, .5) infinite;
+}
+.wave-layer-one { opacity: .25; animation-duration: 7s; animation-delay: -2s; }
+.wave-layer-two { opacity: .5; animation-duration: 10s; animation-delay: -3s; }
+.wave-layer-three { opacity: .65; animation-duration: 13s; animation-delay: -4s; }
+.wave-layer-four { opacity: .75; animation-duration: 20s; animation-delay: -5s; }
+/* Shift by one wave period so the loop does not jump. */
+@keyframes wave-slide { from { transform: translate3d(-90px, 0, 0); } to { transform: translate3d(85px, 0, 0); } }
 
 .page {
 	position: relative;
@@ -304,7 +339,7 @@ img { display: block; max-width: 100%; }
 	.hero-content { padding-top: 4rem; }
 	.hero-content h1 { font-size: clamp(1.8rem, 9vw, 2.6rem); }
 	.hero-content p { font-size: .95rem; }
-	.hero-waves { height: 20%; }
+	.hero-waves { height: 15vh; min-height: 3rem; }
 	.page { width: 100%; margin-top: -2.2rem; padding: 0 .65rem 1.5rem; }
 	.panel { padding: 1.1rem .95rem 1.35rem; }
 	.cards { grid-template-columns: 1fr; }
@@ -317,5 +352,11 @@ img { display: block; max-width: 100%; }
 		transition-duration: .01ms !important;
 		animation-duration: .01ms !important;
 		animation-iteration-count: 1 !important;
+	}
+	.hero-waves .wave-layer,
+	.hero-image-outgoing,
+	.hero-image-current.is-crossfading,
+	.typewriter-subtitle::after {
+		animation: none !important;
 	}
 }

@@ -33,17 +33,25 @@
       </div>
 
       <section class="hero" aria-label="页头">
-        <div class="hero-image"></div>
+        <div class="hero-slides" id="hero-slides">
+          <div class="hero-image hero-image-current" style="--hero-desktop-image: url('https://blog.fjayson.com/images/DesktopWallpaper/d2.avif'); --hero-mobile-image: url('https://blog.fjayson.com/images/MobileWallpaper/m2.avif');"></div>
+        </div>
         <div class="hero-scrim"></div>
         <div class="hero-content">
           <h1>站点导航</h1>
-          <p>博客、项目、监控与代码，都从这里进去</p>
+          <p class="hero-subtitle" id="hero-subtitle">博客、项目、监控与代码，都从这里进去</p>
         </div>
         <div class="hero-waves" aria-hidden="true">
-          <svg viewBox="0 0 1200 120" preserveAspectRatio="none">
-            <path d="M0,64 C150,96 350,16 600,48 C850,80 1050,32 1200,56 L1200,120 L0,120 Z"></path>
-            <path d="M0,80 C200,40 400,104 600,72 C800,40 1000,88 1200,64 L1200,120 L0,120 Z"></path>
-            <path d="M0,96 C180,72 360,108 600,92 C840,76 1020,108 1200,88 L1200,120 L0,120 Z"></path>
+          <svg viewBox="0 24 150 28" preserveAspectRatio="none" shape-rendering="geometricPrecision">
+            <defs>
+              <path id="firefly-wave" d="M-160 44c30 0 58-18 88-18s58 18 88 18 58-18 88-18 58 18 88 18v48h-352z" />
+            </defs>
+            <g class="wave-parallax">
+              <use class="wave-layer wave-layer-one" href="#firefly-wave" x="48" y="0" />
+              <use class="wave-layer wave-layer-two" href="#firefly-wave" x="48" y="3" />
+              <use class="wave-layer wave-layer-three" href="#firefly-wave" x="48" y="5" />
+              <use class="wave-layer wave-layer-four" href="#firefly-wave" x="48" y="7" />
+            </g>
           </svg>
         </div>
       </section>
@@ -139,6 +147,123 @@
           root.classList.toggle("dark", next === "dark");
           localStorage.setItem("portal-theme", next);
         });
+      })();
+
+      (function () {
+        var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        var subtitle = document.getElementById("hero-subtitle");
+        if (subtitle && !reduceMotion) {
+          var full = (subtitle.textContent || "").trim();
+          if (full) {
+            subtitle.classList.add("typewriter-subtitle");
+            subtitle.textContent = "";
+            var typed = 0;
+            var typeNext = function () {
+              typed += 1;
+              subtitle.textContent = full.slice(0, typed);
+              if (typed < full.length) window.setTimeout(typeNext, 72);
+            };
+            window.setTimeout(typeNext, 280);
+          }
+        }
+
+        var slides = document.getElementById("hero-slides");
+        if (!slides || reduceMotion) return;
+        var imageRoot = "https://blog.fjayson.com/images/";
+        var sources = [1, 2, 3, 4, 5, 6].map(function (index) {
+          return {
+            desktop: imageRoot + "DesktopWallpaper/d" + index + ".avif",
+            mobile: imageRoot + "MobileWallpaper/m" + index + ".avif"
+          };
+        });
+        var intervalMs = 15000;
+        var fadeMs = 1100;
+        var index = 1;
+        var fading = false;
+        var pending = false;
+        var timer = 0;
+        var failures = 0;
+
+        function cssUrl(value) {
+          return 'url("' + value.replace(/["\\]/g, "\\$&") + '")';
+        }
+
+        function whenReady(source, done) {
+          var images = [];
+          var left = 2;
+          function finish() {
+            left -= 1;
+            if (left === 0) done(images.some(function (img) { return img.naturalWidth > 0; }));
+          }
+          [source.desktop, source.mobile].forEach(function (src) {
+            var img = new Image();
+            var settled = false;
+            function settle() {
+              if (settled) return;
+              settled = true;
+              finish();
+            }
+            img.onload = img.onerror = settle;
+            img.src = src;
+            images.push(img);
+            if (img.complete) settle();
+          });
+        }
+
+        function show(nextIndex) {
+          var previous = slides.querySelector(".hero-image-current");
+          var next = document.createElement("div");
+          var source = sources[nextIndex];
+          next.className = "hero-image hero-image-current is-crossfading";
+          next.style.setProperty("--hero-desktop-image", cssUrl(source.desktop));
+          next.style.setProperty("--hero-mobile-image", cssUrl(source.mobile));
+          if (previous) {
+            previous.classList.remove("hero-image-current", "is-crossfading");
+            previous.classList.add("hero-image-outgoing");
+          }
+          slides.appendChild(next);
+          index = nextIndex;
+          fading = true;
+          window.setTimeout(function () {
+            if (previous && previous.parentNode) previous.parentNode.removeChild(previous);
+            next.classList.remove("is-crossfading");
+            fading = false;
+          }, fadeMs);
+        }
+
+        function advance() {
+          if (fading || pending || document.hidden) return;
+          var nextIndex = (index + 1) % sources.length;
+          pending = true;
+          whenReady(sources[nextIndex], function (ok) {
+            pending = false;
+            if (fading || document.hidden) return;
+            if (!ok) {
+              failures += 1;
+              index = nextIndex;
+              if (failures < sources.length) advance();
+              return;
+            }
+            failures = 0;
+            show(nextIndex);
+          });
+        }
+
+        function start() {
+          if (timer) window.clearInterval(timer);
+          timer = window.setInterval(advance, intervalMs);
+        }
+
+        whenReady(sources[(index + 1) % sources.length], function () { return undefined; });
+        document.addEventListener("visibilitychange", function () {
+          if (document.hidden) {
+            if (timer) window.clearInterval(timer);
+            timer = 0;
+            return;
+          }
+          start();
+        });
+        start();
       })();
     </script>
   </body>
