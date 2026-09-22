@@ -1630,7 +1630,6 @@ function AdminAudit() {
           const rows = Array.isArray(result.items) ? result.items.map((item, index) => normalizeAuditGroup(item, index)) : [];
           setGroupRows(rows);
           setTimelineRows([]);
-          setExpandedIps(rows[0]?.ip ? new Set([rows[0].ip]) : new Set());
           if (result.groupLogPreviewLimit != null) setGroupPreviewLimit(Math.max(1, Math.round(result.groupLogPreviewLimit)));
         } else {
           setTimelineRows(Array.isArray(result.items) ? result.items.map((item, index) => normalizeAuditTimeline(item, index)) : []);
@@ -2217,7 +2216,7 @@ function AdminDynamics() {
             </GhostButton>
           ) : null}
         </div>
-        <div className="fa-post-content fa-dynamic-markdown"><span className="fa-post-content-label">Markdown 内容</span><div className="fa-md-editor-wrap"><MdEditorBridge value={body} onChange={setBody} onUploadImage={(file) => uploadAdminMedia(file, "image")} onUploadError={(error) => setMessage(errorText(error, "动态图片上传失败。"))} /></div></div>
+        <div className="fa-post-content fa-dynamic-markdown"><div className="fa-md-editor-wrap"><MdEditorBridge value={body} onChange={setBody} onUploadImage={(file) => uploadAdminMedia(file, "image")} onUploadError={(error) => setMessage(errorText(error, "动态图片上传失败。"))} /></div></div>
         <div className="fa-dynamic-size">
           <span>图片尺寸</span>
           {([["small", "小图"], ["medium", "中图"], ["large", "大图"]] as const).map(([value, label]) => (
