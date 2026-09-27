@@ -40,6 +40,7 @@ REPO_URL=""
 BRANCH="main"
 DOMAIN=""
 FILES_DOMAIN=""
+SERVE_HTTP_ORIGIN="false"
 API_PORT="5180"
 APP_USER="firefly"
 NODE_MAJOR="22"
@@ -124,7 +125,7 @@ load_config() {
   while IFS='=' read -r key value || [[ -n "${key}" ]]; do
     [[ "${key}" =~ ^[A-Z0-9_]+$ ]] || continue
     case "${key}" in
-      APP_DIR|REPO_URL|BRANCH|DOMAIN|FILES_DOMAIN|API_PORT|APP_USER|NODE_MAJOR|NGINX_SITE|DB_MODE|MYSQL_HOST|MYSQL_PORT|MYSQL_DATABASE|MYSQL_USER|SSL_EMAIL|PUBLIC_SCHEME)
+      APP_DIR|REPO_URL|BRANCH|DOMAIN|FILES_DOMAIN|SERVE_HTTP_ORIGIN|API_PORT|APP_USER|NODE_MAJOR|NGINX_SITE|DB_MODE|MYSQL_HOST|MYSQL_PORT|MYSQL_DATABASE|MYSQL_USER|SSL_EMAIL|PUBLIC_SCHEME)
         printf -v "${key}" '%s' "${value}" ;;
     esac
   done < "${CONFIG_FILE}"
@@ -240,6 +241,7 @@ write_config() {
     printf 'BRANCH=%s\n' "${BRANCH}"
     printf 'DOMAIN=%s\n' "${DOMAIN}"
     printf 'FILES_DOMAIN=%s\n' "${FILES_DOMAIN}"
+    printf 'SERVE_HTTP_ORIGIN=%s\n' "${SERVE_HTTP_ORIGIN}"
     printf 'API_PORT=%s\n' "${API_PORT}"
     printf 'APP_USER=%s\n' "${APP_USER}"
     printf 'NODE_MAJOR=%s\n' "${NODE_MAJOR}"
@@ -262,6 +264,7 @@ validate_loaded_config() {
   valid_repo "${REPO_URL}" || die "配置中的 REPO_URL 无效。"
   valid_branch "${BRANCH}" || die "配置中的 Git 分支无效。"
   valid_domain "${DOMAIN}" || die "配置中的域名无效。"
+  [[ "${SERVE_HTTP_ORIGIN}" == true || "${SERVE_HTTP_ORIGIN}" == false ]] || die "配置中的 SERVE_HTTP_ORIGIN 只能是 true 或 false。"
   valid_port "${API_PORT}" || die "配置中的 API 端口无效。"
   valid_id "${APP_USER}" || die "配置中的服务用户无效。"
   valid_node "${NODE_MAJOR}" || die "配置中的 Node.js 版本无效。"
@@ -724,7 +727,39 @@ certificate_pair_exists() {
 render_nginx_site() {
   local scheme="$1"
   if [[ "${scheme}" == https ]]; then
-    cat <<EOF
+    if [[ "${SERVE_HTTP_ORIGIN}" == true ]]; then
+      cat <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type text/plain;
+        try_files \$uri =404;
+    }
+
+    location / {
+        client_max_body_size 2200m;
+        proxy_pass https://127.0.0.1;
+        proxy_ssl_server_name on;
+        proxy_ssl_name ${DOMAIN};
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${DOMAIN};
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_request_buffering off;
+        proxy_read_timeout 7200s;
+        proxy_send_timeout 7200s;
+    }
+}
+EOF
+    else
+      cat <<EOF
 server {
     listen 80;
     listen [::]:80;
@@ -740,6 +775,9 @@ server {
         return 301 https://\$host\$request_uri;
     }
 }
+EOF
+    fi
+    cat <<EOF
 
 server {
     listen 443 ssl http2;
