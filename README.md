@@ -85,6 +85,7 @@ pnpm --filter @firefly-rebuild/api exec tsx src/cli.ts set-admin-password
 - 一言副标题、标题/文章字体文件、音乐和作者资料配置
 - 动态发布、编辑、删除及图片上传
 - 管理员账号新增、编辑、停用、删除和重置密码（当前登录账号受保护）
+- 文件网盘：管理员上传不超过 2GB 的任意文件，获得公开下载链接，并查看自己文件的下载次数
 
 登录 session 只保存在当前浏览器会话中，退出登录时会撤销服务端 session。
 
@@ -122,6 +123,9 @@ GET/POST/PUT/DELETE /api/admin/tags
 GET/POST/PUT/DELETE /api/admin/dynamics
 GET/PATCH/DELETE /api/admin/comments
 GET/PUT /api/admin/site
+GET/POST /api/admin/drive
+DELETE /api/admin/drive/:id
+GET  /api/files/:token/:filename
 ```
 
 文章正文以 Markdown 原文存储在 MySQL，React 端进行安全渲染；图片、壁纸、二维码和音乐继续作为静态资源存放，不写入数据库。

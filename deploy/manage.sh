@@ -39,6 +39,7 @@ APP_DIR=""
 REPO_URL=""
 BRANCH="main"
 DOMAIN=""
+FILES_DOMAIN=""
 API_PORT="5180"
 APP_USER="firefly"
 NODE_MAJOR="22"
@@ -123,7 +124,7 @@ load_config() {
   while IFS='=' read -r key value || [[ -n "${key}" ]]; do
     [[ "${key}" =~ ^[A-Z0-9_]+$ ]] || continue
     case "${key}" in
-      APP_DIR|REPO_URL|BRANCH|DOMAIN|API_PORT|APP_USER|NODE_MAJOR|NGINX_SITE|DB_MODE|MYSQL_HOST|MYSQL_PORT|MYSQL_DATABASE|MYSQL_USER|SSL_EMAIL|PUBLIC_SCHEME)
+      APP_DIR|REPO_URL|BRANCH|DOMAIN|FILES_DOMAIN|API_PORT|APP_USER|NODE_MAJOR|NGINX_SITE|DB_MODE|MYSQL_HOST|MYSQL_PORT|MYSQL_DATABASE|MYSQL_USER|SSL_EMAIL|PUBLIC_SCHEME)
         printf -v "${key}" '%s' "${value}" ;;
     esac
   done < "${CONFIG_FILE}"
@@ -225,6 +226,7 @@ random_secret() {
 }
 
 write_config() {
+  normalize_files_domain
   mkdir -p "${CONFIG_DIR}"
   chmod 700 "${CONFIG_DIR}"
   local tmp
@@ -237,6 +239,7 @@ write_config() {
     printf 'REPO_URL=%s\n' "${REPO_URL}"
     printf 'BRANCH=%s\n' "${BRANCH}"
     printf 'DOMAIN=%s\n' "${DOMAIN}"
+    printf 'FILES_DOMAIN=%s\n' "${FILES_DOMAIN}"
     printf 'API_PORT=%s\n' "${API_PORT}"
     printf 'APP_USER=%s\n' "${APP_USER}"
     printf 'NODE_MAJOR=%s\n' "${NODE_MAJOR}"
@@ -586,6 +589,7 @@ verify_database_connection() {
 }
 
 write_application_env() {
+  normalize_files_domain
   [[ -d "${APP_DIR}" ]] || die "应用目录不存在。"
   [[ ! -L "${APP_DIR}/.env" ]] || die "拒绝写入符号链接 .env。"
   load_existing_password
@@ -595,7 +599,7 @@ write_application_env() {
   tmp="$(mktemp "${APP_DIR}/.env.XXXXXX")"
   SECRET_TEMP_FILES+=("${tmp}")
   chmod 600 "${tmp}"
-  managed=' API_HOST API_PORT CLIENT_ORIGIN VITE_API_ORIGIN MYSQL_HOST MYSQL_PORT MYSQL_DATABASE MYSQL_USER MYSQL_PASSWORD MYSQL_PASSWORD_BASE64 MYSQL_CONNECTION_LIMIT NODE_ENV COMPILER_WORKDIR COMPILER_DOCKER_BIN COMPILER_DOCKER_NETWORK '
+  managed=' API_HOST API_PORT CLIENT_ORIGIN VITE_API_ORIGIN FILES_PUBLIC_ORIGIN MYSQL_HOST MYSQL_PORT MYSQL_DATABASE MYSQL_USER MYSQL_PASSWORD MYSQL_PASSWORD_BASE64 MYSQL_CONNECTION_LIMIT NODE_ENV COMPILER_WORKDIR COMPILER_DOCKER_BIN COMPILER_DOCKER_NETWORK '
   if [[ -f "${APP_DIR}/.env" ]]; then
     while IFS= read -r line || [[ -n "${line}" ]]; do
       key="${line%%=*}"
@@ -611,6 +615,9 @@ write_application_env() {
     printf 'API_PORT=%s\n' "${API_PORT}"
     printf 'CLIENT_ORIGIN=%s://%s\n' "${PUBLIC_SCHEME}" "${DOMAIN}"
     printf 'VITE_API_ORIGIN=\n'
+    if [[ -n "${FILES_DOMAIN}" ]]; then
+      printf 'FILES_PUBLIC_ORIGIN=%s\n' "$(files_public_origin)"
+    fi
     printf 'MYSQL_HOST=%s\n' "${MYSQL_HOST}"
     printf 'MYSQL_PORT=%s\n' "${MYSQL_PORT}"
     printf 'MYSQL_DATABASE=%s\n' "${MYSQL_DATABASE}"
@@ -629,11 +636,28 @@ write_application_env() {
 
 prepare_persistent_directories() {
   mkdir -p "${APP_DIR}/uploads/user-space"
+  mkdir -p "${APP_DIR}/uploads/admin-drive"
   mkdir -p "${APP_DIR}/.compiler-work"
   chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}/uploads"
-  chmod 750 "${APP_DIR}/uploads" "${APP_DIR}/uploads/user-space"
+  chmod 750 "${APP_DIR}/uploads" "${APP_DIR}/uploads/user-space" "${APP_DIR}/uploads/admin-drive"
   chown "${APP_USER}:${APP_USER}" "${APP_DIR}/.compiler-work"
   chmod 750 "${APP_DIR}/.compiler-work"
+}
+
+# fjayson.com is not the built blog. Nginx serves /var/www/portal, which is a
+# separate copy of apps/portal and is not updated by git pull alone.
+publish_portal() {
+  local src="${APP_DIR}/apps/portal"
+  local dest="/var/www/portal"
+  [[ -f "${src}/index.html" && -f "${src}/styles.css" ]] || die "缺少 ${src} 下的导航页文件。"
+  if [[ ! -d "${dest}" && ! -e /etc/nginx/sites-enabled/portal && ! -e /etc/nginx/sites-enabled/portal-http ]]; then
+    info "未发现导航页站点，跳过同步。"
+    return 0
+  fi
+  mkdir -p "${dest}"
+  install -m 644 "${src}/index.html" "${dest}/index.html"
+  install -m 644 "${src}/styles.css" "${dest}/styles.css"
+  info "已把站点导航同步到 ${dest}。"
 }
 
 install_and_build_application() {
@@ -732,6 +756,41 @@ server {
     index index.html;
     client_max_body_size 64m;
 
+    location = /api/admin/drive {
+        client_max_body_size 2200m;
+        client_body_timeout 3600s;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
+        proxy_request_buffering off;
+    }
+
+    location /api/files/ {
+        limit_rate 0;
+        client_max_body_size 1m;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_max_temp_file_size 0;
+        gzip off;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
+    }
+
     location /api/ {
         proxy_pass http://127.0.0.1:${API_PORT};
         proxy_http_version 1.1;
@@ -773,6 +832,41 @@ server {
         root /var/www/letsencrypt;
         default_type text/plain;
         try_files \$uri =404;
+    }
+
+    location = /api/admin/drive {
+        client_max_body_size 2200m;
+        client_body_timeout 3600s;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
+        proxy_request_buffering off;
+    }
+
+    location /api/files/ {
+        limit_rate 0;
+        client_max_body_size 1m;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_max_temp_file_size 0;
+        gzip off;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
     }
 
     location /api/ {
@@ -851,6 +945,184 @@ restore_nginx_config() {
   fi
 }
 
+normalize_files_domain() {
+  if [[ -z "${FILES_DOMAIN}" && "${DOMAIN}" == "blog.fjayson.com" ]]; then
+    FILES_DOMAIN="files.fjayson.com"
+  fi
+  if [[ -n "${FILES_DOMAIN}" ]]; then
+    valid_domain "${FILES_DOMAIN}" || die "配置中的文件下载域名无效。"
+    [[ "${FILES_DOMAIN}" != "${DOMAIN}" ]] || die "文件下载域名不能与站点域名相同。"
+  fi
+}
+
+files_certificate_pair_exists() {
+  [[ -n "${FILES_DOMAIN}" && -s "/etc/letsencrypt/live/${FILES_DOMAIN}/fullchain.pem" && -s "/etc/letsencrypt/live/${FILES_DOMAIN}/privkey.pem" ]]
+}
+
+files_public_origin() {
+  local scheme="http"
+  normalize_files_domain
+  files_certificate_pair_exists && scheme="https"
+  printf '%s://%s' "${scheme}" "${FILES_DOMAIN}"
+}
+
+render_files_nginx_site() {
+  local scheme="$1"
+  if [[ "${scheme}" == https ]]; then
+    cat <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${FILES_DOMAIN};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type text/plain;
+        try_files \$uri =404;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${FILES_DOMAIN};
+
+    ssl_certificate /etc/letsencrypt/live/${FILES_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${FILES_DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:FILESSL:10m;
+    ssl_session_timeout 1d;
+
+    limit_rate 0;
+    client_max_body_size 1m;
+
+    location / {
+        rewrite ^/(.*)\$ /api/files/\$1 break;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_max_temp_file_size 0;
+        gzip off;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
+    }
+}
+EOF
+    return
+  fi
+
+  cat <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${FILES_DOMAIN};
+
+    limit_rate 0;
+    client_max_body_size 1m;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type text/plain;
+        try_files \$uri =404;
+    }
+
+    location / {
+        rewrite ^/(.*)\$ /api/files/\$1 break;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_max_temp_file_size 0;
+        gzip off;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
+    }
+}
+EOF
+}
+
+write_files_nginx_config() {
+  normalize_files_domain
+  [[ -n "${FILES_DOMAIN}" ]] || return 0
+  local scheme="http" target enabled staged backup="" had_target=false
+  target="/etc/nginx/sites-available/firefly-files"
+  enabled="/etc/nginx/sites-enabled/firefly-files"
+  files_certificate_pair_exists && scheme="https"
+  mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /var/www/letsencrypt
+  [[ ! -L "${target}" && ( ! -e "${target}" || -f "${target}" ) ]] || die "${target} 不是普通文件，拒绝覆盖。"
+  [[ ! -e "${enabled}" || -L "${enabled}" ]] || die "${enabled} 已存在且不是符号链接，拒绝覆盖。"
+  staged="$(mktemp /etc/nginx/sites-available/.firefly-files.XXXXXX)"
+  SECRET_TEMP_FILES+=("${staged}")
+  render_files_nginx_site "${scheme}" > "${staged}"
+  chmod 644 "${staged}"
+  if [[ -f "${target}" ]]; then
+    backup="$(mktemp /etc/nginx/sites-available/.firefly-files-backup.XXXXXX)"
+    cp -a "${target}" "${backup}"
+    had_target=true
+  fi
+  if ! mv -f "${staged}" "${target}"; then
+    [[ -z "${backup}" ]] || rm -f -- "${backup}"
+    die "无法安装文件下载站点配置。"
+  fi
+  if ! ln -sfn "${target}" "${enabled}"; then
+    die "无法启用文件下载站点。"
+  fi
+  if ! nginx -t; then
+    if [[ "${had_target}" == true ]]; then
+      cp -a -- "${backup}" "${target}" || true
+    else
+      rm -f -- "${target}" "${enabled}"
+    fi
+    nginx -t >/dev/null 2>&1 || true
+    die "文件下载站点 Nginx 配置校验失败。"
+  fi
+  systemctl reload nginx || die "文件下载站点 Nginx 重载失败。"
+  [[ -z "${backup}" ]] || rm -f -- "${backup}"
+  info "文件下载站点已配置：${scheme}://${FILES_DOMAIN}"
+}
+
+ensure_files_certificate() {
+  normalize_files_domain
+  [[ -n "${FILES_DOMAIN}" ]] || return 0
+  if files_certificate_pair_exists; then
+    write_files_nginx_config
+    return 0
+  fi
+  if [[ -z "${SSL_EMAIL}" ]] || ! valid_email "${SSL_EMAIL}"; then
+    warn "未配置 SSL 邮箱，${FILES_DOMAIN} 暂时使用 HTTP。"
+    return 0
+  fi
+  install_certbot
+  mkdir -p /var/www/letsencrypt
+  info "为 ${FILES_DOMAIN} 申请 Let's Encrypt 证书。"
+  if certbot certonly --non-interactive --agree-tos --email "${SSL_EMAIL}" --webroot --webroot-path /var/www/letsencrypt --cert-name "${FILES_DOMAIN}" -d "${FILES_DOMAIN}" --keep-until-expiring; then
+    write_files_nginx_config
+    load_existing_password
+    write_application_env
+    systemctl restart "${SYSTEMD_UNIT}"
+    wait_for_health
+  else
+    warn "${FILES_DOMAIN} 证书申请失败。请把该域名的 A 记录指向本机后重新运行 update。在此之前下载链接使用 HTTP。"
+  fi
+}
+
 write_nginx_config() {
   local scheme="${PUBLIC_SCHEME}" target enabled staged backup="" old_link=""
   local had_target=false had_link=false was_active=false was_enabled=false
@@ -899,6 +1171,7 @@ write_nginx_config() {
     die "Nginx 启动或重载失败。"
   fi
   [[ -z "${backup}" ]] || rm -f -- "${backup}"
+  write_files_nginx_config
 }
 
 restart_application() {
@@ -1080,6 +1353,7 @@ run_first_deploy() {
   install_node_pnpm
   ensure_service_user
   ensure_repository
+  publish_portal
   ensure_compiler_runtime
   write_config
   prepare_database
@@ -1095,6 +1369,7 @@ run_first_deploy() {
   if [[ "${ENABLE_SSL}" == true ]]; then
     issue_or_renew_ssl
   fi
+  ensure_files_certificate
   info "首次部署完成：${PUBLIC_SCHEME}://${DOMAIN}"
 }
 
@@ -1102,6 +1377,7 @@ run_pull_only() {
   load_config
   validate_loaded_config
   safe_git_sync
+  publish_portal
   info "代码已安全快进到 origin/${BRANCH}；未安装依赖、迁移、构建或重启。"
 }
 
@@ -1113,6 +1389,7 @@ run_update() {
   # Sync the application first so compiler image changes shipped with the
   # update are included before the runtime preparation step below.
   safe_git_sync
+  publish_portal
   ensure_compiler_runtime
   if [[ "${DB_MODE}" == local ]]; then
     systemctl enable --now mysql 2>/dev/null || systemctl enable --now mariadb
@@ -1132,6 +1409,7 @@ run_update() {
   write_nginx_config
   restart_application
   verify_public_proxy
+  ensure_files_certificate
   info "拉取并更新完成。"
 }
 
@@ -1148,6 +1426,7 @@ run_configure() {
   install_node_pnpm
   ensure_service_user
   [[ -d "${APP_DIR}/.git" ]] || die "部署目录尚无应用代码，请先运行 first。"
+  publish_portal
   ensure_compiler_runtime
   prepare_database
   write_config
@@ -1166,6 +1445,7 @@ run_configure() {
   write_nginx_config
   restart_application
   verify_public_proxy
+  ensure_files_certificate
   info "配置已保存并应用。"
 }
 
@@ -1230,6 +1510,7 @@ run_ssl() {
   load_runtime_config
   prompt_validated SSL_EMAIL "Let's Encrypt 通知邮箱" "${SSL_EMAIL:-admin@${DOMAIN}}" valid_email
   issue_or_renew_ssl
+  ensure_files_certificate
 }
 
 show_usage() {
@@ -1240,7 +1521,7 @@ Firefly React 部署管理器
 
 命令:
   first       首次部署（配置、依赖、数据库、构建、服务、Nginx、可选 SSL）
-  pull        仅安全拉取代码，不构建、不迁移、不重启
+  pull        仅安全拉取代码并同步导航页，不构建、不迁移、不重启
   update      安全拉取并安装依赖、迁移、构建和重启
   configure   修改并应用全部部署配置
   status      查看 API、Nginx、健康检查和证书续期状态

@@ -71,6 +71,7 @@ import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { AuthImage } from "../AuthImage";
 import { markdownToPlainText, parseDynamicBody, parseDynamicImageSize, withDynamicImageSize, type DynamicImageSize } from "../markdown";
 import { absoluteMediaUrl } from "../media";
+import AdminDrive from "./AdminDrive";
 import MdEditorBridge from "./MdEditorBridge";
 import type { Post, SiteData } from "../types";
 import "./admin.css";
@@ -813,6 +814,12 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     label: "账号与资源",
     items: [
       {
+        href: "/admin/drive",
+        label: "文件网盘",
+        hint: "上传文件并分享下载链接",
+        icon: HardDrive,
+      },
+      {
         href: "/admin/storage",
         label: "媒体与空间",
         hint: "用户空间与资源管理",
@@ -908,6 +915,7 @@ function AdminShell() {
   else if (location.pathname === "/admin/comment-settings") page = <AdminCommentSettings />;
   else if (location.pathname === "/admin/users") page = <AdminUsers />;
   else if (location.pathname === "/admin/storage") page = <AdminUserSpace />;
+  else if (location.pathname === "/admin/drive") page = <AdminDrive />;
   else if (location.pathname === "/admin/site") page = <AdminSiteSettings />;
   else if (location.pathname === "/admin/accounts") page = <AdminAccounts />;
   else if (location.pathname !== "/admin")
@@ -1247,6 +1255,11 @@ function AdminDashboard() {
             <Monitor size={22} />
             <strong>看状态</strong>
             <span>服务资源与请求性能</span>
+          </Link>
+          <Link to="/admin/drive">
+            <HardDrive size={22} />
+            <strong>传文件</strong>
+            <span>生成公开下载链接</span>
           </Link>
         </div>
       </section>

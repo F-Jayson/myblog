@@ -500,3 +500,25 @@ CREATE TABLE IF NOT EXISTS announcement_history (
   INDEX idx_announcement_history_published (published_at),
   INDEX idx_announcement_history_display (is_visible, is_pinned, sort_order, published_at)
 ) ENGINE=InnoDB;
+
+-- Files shared by an administrator. Bytes stay in a private directory; the
+-- public token is the only download credential. Each administrator lists and
+-- deletes only the rows they uploaded.
+CREATE TABLE IF NOT EXISTS admin_drive_files (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  owner_admin_id BIGINT UNSIGNED NULL,
+  owner_username VARCHAR(60) NOT NULL,
+  original_name VARCHAR(255) NOT NULL,
+  storage_name CHAR(64) NOT NULL,
+  mime_type VARCHAR(127) NOT NULL DEFAULT 'application/octet-stream',
+  byte_size BIGINT UNSIGNED NOT NULL,
+  public_token CHAR(43) NOT NULL,
+  download_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_admin_drive_token (public_token),
+  UNIQUE KEY uniq_admin_drive_storage (storage_name),
+  INDEX idx_admin_drive_owner_created (owner_admin_id, created_at, id),
+  INDEX idx_admin_drive_username_created (owner_username, created_at, id),
+  CONSTRAINT fk_admin_drive_owner FOREIGN KEY (owner_admin_id) REFERENCES admin_users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

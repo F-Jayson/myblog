@@ -1,13 +1,16 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { dirname, extname, resolve, sep } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
+import { ADMIN_DRIVE_MAX_BYTES, adminDriveFilePath, contentDispositionAttachment, countsAsDriveDownload, driveDownloadUrl, isDriveToken, normalizeDriveFileName, parseSingleByteRange, safeDriveMimeType } from "./adminDrive.js";
 import { config } from "./config.js";
 import { pool } from "./db.js";
 import { getDatabaseStatus, pingDatabase } from "./db.js";
@@ -58,6 +61,12 @@ import {
 	deleteTag,
 	deleteAnnouncementHistory,
 	deleteAdminUser,
+	createAdminDriveFile,
+	listAdminDriveFiles,
+	getAdminDriveFileByToken,
+	incrementAdminDriveDownload,
+	deleteAdminDriveFile,
+	listAdminDriveStorageNames,
 	getCurrentAnnouncement,
 	getChangelog,
 	getFeedback,
@@ -139,6 +148,14 @@ const applicationMetadata = await readApplicationMetadata();
 const app = express();
 const uploadsDirectory = fileURLToPath(new URL("../../../uploads/", import.meta.url));
 await mkdir(uploadsDirectory, { recursive: true });
+const adminDriveRoot = fileURLToPath(new URL("../../../uploads/admin-drive/", import.meta.url));
+await mkdir(adminDriveRoot, { recursive: true });
+
+async function removeStoredDriveFile(storageName: string) {
+	const full = adminDriveFilePath(adminDriveRoot, storageName);
+	if (!full) return;
+	await unlink(full).catch(() => undefined);
+}
 
 const publicImageUpload = (maxFileSize: number) => multer({
 	storage: multer.diskStorage({
@@ -170,6 +187,7 @@ app.disable("x-powered-by");
 app.use(cors({ origin: config.clientOrigin.split(","), credentials: false }));
 app.use(express.json({ limit: "32mb" }));
 app.use("/api/uploads/user-space", (_req, res) => { res.status(404).end(); });
+app.use("/api/uploads/admin-drive", (_req, res) => { res.status(404).end(); });
 app.use("/api/uploads", express.static(uploadsDirectory, { fallthrough: true, index: false, maxAge: "1d" }));
 function auditExcludedRequest(method: string, path: string) {
 	if (path === "/api/health" || path === "/api/wallpaper" || path.startsWith("/api/uploads/")) return true;
@@ -179,6 +197,7 @@ function auditExcludedRequest(method: string, path: string) {
 	// Reading the audit stream must not add another row on every refresh. Keep
 	// mutating audit actions (such as clear) observable through the same hook.
 	if ((method === "GET" || method === "HEAD") && (path === "/api/admin/audit-logs" || path === "/api/admin/audit")) return true;
+	if ((method === "GET" || method === "HEAD") && path.startsWith("/api/files/")) return true;
 	return false;
 }
 function requestClientIp(req: Request) {
@@ -194,7 +213,8 @@ app.use((req, res, next) => {
 	const started = performance.now();
 	res.on("finish", () => {
 		const durationMs = Math.round(performance.now() - started);
-		recordRequest({ method: req.method, path: req.path, status: res.statusCode, durationMs });
+		const metricPath = req.path.startsWith("/api/files/") ? "/api/files/:token" : req.path;
+		recordRequest({ method: req.method, path: metricPath, status: res.statusCode, durationMs });
 		if (auditExcludedRequest(req.method, req.path)) return;
 		const admin = (req as RequestWithAdmin).adminUser;
 		void writeAuditLog({
@@ -1782,7 +1802,14 @@ app.post("/api/admin/accounts/:id/reset-password", requireAdmin, async (req: Req
 	try { const id = parseAdminUserId(typeof req.params.id === "string" ? req.params.id : ""); if (!ensureOtherUser(req, res, id)) return; const ok = await resetAdminPassword(id, adminPasswordInput.parse(req.body).password); res.status(ok ? 204 : 404).end(); } catch (error) { next(error); }
 });
 app.delete("/api/admin/accounts/:id", requireAdmin, async (req: RequestWithAdmin, res, next) => {
-	try { const id = parseAdminUserId(typeof req.params.id === "string" ? req.params.id : ""); if (!ensureOtherUser(req, res, id)) return; const ok = await deleteAdminUser(id); res.status(ok ? 204 : 404).end(); } catch (error) { next(error); }
+	try {
+		const id = parseAdminUserId(typeof req.params.id === "string" ? req.params.id : "");
+		if (!ensureOtherUser(req, res, id)) return;
+		const storageNames = await listAdminDriveStorageNames(id);
+		const ok = await deleteAdminUser(id);
+		if (ok) await Promise.all(storageNames.map((storageName) => removeStoredDriveFile(storageName)));
+		res.status(ok ? 204 : 404).end();
+	} catch (error) { next(error); }
 });
 app.patch("/api/admin/comments/:id", requireAdmin, async (req, res, next) => {
 	try { const status = z.enum(["pending", "approved", "spam"]).parse(req.body?.status); const ok = await updateCommentStatus(Number(req.params.id), status); res.status(ok ? 204 : 404).end(); } catch (error) { next(error); }
@@ -2160,13 +2187,188 @@ function uploadMedia(req: Request, res: Response, next: NextFunction) {
 app.post("/api/admin/media/upload", requireAdmin, uploadMedia);
 app.post("/api/admin/uploads", requireAdmin, uploadMedia);
 
-app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+const adminDriveUpload = multer({
+	storage: multer.diskStorage({
+		destination: adminDriveRoot,
+		filename: (_req, _file, callback) => callback(null, randomBytes(32).toString("hex")),
+	}),
+	limits: { files: 1, fileSize: ADMIN_DRIVE_MAX_BYTES, fields: 1, fieldSize: 1024 },
+});
+
+function driveOwner(admin: NonNullable<RequestWithAdmin["adminUser"]>) {
+	return { id: admin.id, username: admin.username.slice(0, 60) };
+}
+
+function presentDriveFile(file: { id: number; originalName: string; mimeType: string; byteSize: number; publicToken: string; downloadCount: number; createdAt: string }) {
+	return {
+		id: file.id,
+		name: file.originalName,
+		mimeType: file.mimeType,
+		byteSize: file.byteSize,
+		downloadCount: file.downloadCount,
+		downloadUrl: driveDownloadUrl(config.filesPublicOrigin, file.publicToken, file.originalName),
+		createdAt: file.createdAt,
+	};
+}
+
+app.get("/api/admin/drive", requireAdmin, async (req: RequestWithAdmin, res, next) => {
+	try {
+		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		const listed = await listAdminDriveFiles(driveOwner(req.adminUser));
+		res.json({ items: listed.items.map(presentDriveFile), total: listed.total, maxBytes: ADMIN_DRIVE_MAX_BYTES, publicOrigin: config.filesPublicOrigin });
+	} catch (error) { next(error); }
+});
+
+app.post("/api/admin/drive", requireAdmin, (req: RequestWithAdmin, res, next) => {
+	req.setTimeout(0);
+	res.setTimeout(0);
+	adminDriveUpload.single("file")(req, res, async (uploadError) => {
+		const uploadedPath = req.file?.path;
+		const removeUpload = () => uploadedPath ? unlink(uploadedPath).catch(() => undefined) : Promise.resolve();
+		if (uploadError) {
+			await removeUpload();
+			next(uploadError);
+			return;
+		}
+		if (!req.file || !req.adminUser) {
+			await removeUpload();
+			res.status(req.adminUser ? 400 : 401).json({ error: req.adminUser ? "请选择要上传的文件" : "登录状态已失效，请重新登录" });
+			return;
+		}
+		if (req.file.size > ADMIN_DRIVE_MAX_BYTES) {
+			await removeUpload();
+			res.status(413).json({ error: "文件不能超过 2GB" });
+			return;
+		}
+		const storageName = req.file.filename;
+		if (!adminDriveFilePath(adminDriveRoot, storageName)) {
+			await removeUpload();
+			res.status(500).json({ error: "文件保存失败" });
+			return;
+		}
+		try {
+			let saved = null;
+			for (let attempt = 0; attempt < 2 && !saved; attempt += 1) {
+				const publicToken = randomBytes(32).toString("base64url");
+				try {
+					saved = await createAdminDriveFile({
+						ownerAdminId: req.adminUser.id,
+						ownerUsername: req.adminUser.username.slice(0, 60),
+						originalName: normalizeDriveFileName(req.file.originalname),
+						storageName,
+						mimeType: safeDriveMimeType(req.file.mimetype),
+						byteSize: req.file.size,
+						publicToken,
+					});
+				} catch (error) {
+					if (attempt === 0 && databaseErrorCode(error) === "ER_DUP_ENTRY") continue;
+					throw error;
+				}
+			}
+			if (!saved) throw new Error("Drive file was not stored");
+			res.status(201).json(presentDriveFile(saved));
+		} catch (error) {
+			await removeUpload();
+			next(error);
+		}
+	});
+});
+
+app.delete("/api/admin/drive/:id", requireAdmin, async (req: RequestWithAdmin, res, next) => {
+	try {
+		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		const id = Number(req.params.id);
+		if (!Number.isSafeInteger(id) || id < 1) { res.status(400).json({ error: "文件编号无效" }); return; }
+		const removed = await deleteAdminDriveFile(id, driveOwner(req.adminUser));
+		if (!removed) { res.status(404).json({ error: "文件不存在" }); return; }
+		await removeStoredDriveFile(removed.storageName);
+		res.status(204).end();
+	} catch (error) { next(error); }
+});
+
+async function sendPublicDriveFile(req: Request, res: Response, next: NextFunction) {
+	try {
+		const token = typeof req.params.token === "string" ? req.params.token : "";
+		if (!isDriveToken(token)) {
+			res.status(404).type("text/plain; charset=utf-8").send("文件不存在或链接已失效。");
+			return;
+		}
+		const file = await getAdminDriveFileByToken(token);
+		const full = file ? adminDriveFilePath(adminDriveRoot, file.storageName) : null;
+		if (!file || !full) {
+			res.status(404).type("text/plain; charset=utf-8").send("文件不存在或链接已失效。");
+			return;
+		}
+		let info;
+		try {
+			info = await stat(full);
+		} catch {
+			res.status(404).type("text/plain; charset=utf-8").send("文件不存在或链接已失效。");
+			return;
+		}
+		if (!info.isFile()) {
+			res.status(404).type("text/plain; charset=utf-8").send("文件不存在或链接已失效。");
+			return;
+		}
+		const size = info.size;
+		const rangeHeader = req.header("range");
+		let start = 0;
+		let end = Math.max(0, size - 1);
+		if (rangeHeader) {
+			const parsed = parseSingleByteRange(rangeHeader, size);
+			if (parsed === null || parsed === "unsatisfiable") {
+				res.status(416).setHeader("Content-Range", `bytes */${size}`).type("text/plain; charset=utf-8").send("请求的下载范围无效。");
+				return;
+			}
+			start = parsed.start;
+			end = parsed.end;
+			res.status(206);
+			res.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
+		} else {
+			res.status(200);
+		}
+		res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+		res.setHeader("Content-Disposition", contentDispositionAttachment(file.originalName));
+		res.setHeader("Content-Length", String(size === 0 ? 0 : end - start + 1));
+		res.setHeader("Accept-Ranges", "bytes");
+		res.setHeader("Cache-Control", "no-store");
+		res.setHeader("X-Content-Type-Options", "nosniff");
+		res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+		res.setHeader("Referrer-Policy", "no-referrer");
+		res.setHeader("X-Download-Options", "noopen");
+		if (req.method === "HEAD") {
+			res.end();
+			return;
+		}
+		if (countsAsDriveDownload(req.method, rangeHeader, size)) await incrementAdminDriveDownload(file.id);
+		if (size === 0) {
+			res.end();
+			return;
+		}
+		await pipeline(createReadStream(full, { start, end, highWaterMark: 1024 * 1024 }), res);
+	} catch (error) {
+		if (res.headersSent || res.writableEnded) return;
+		next(error);
+	}
+}
+
+app.get("/api/files/:token", sendPublicDriveFile);
+app.get("/api/files/:token/:fileName", sendPublicDriveFile);
+app.head("/api/files/:token", sendPublicDriveFile);
+app.head("/api/files/:token/:fileName", sendPublicDriveFile);
+
+app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 	if (error instanceof CompilerError) {
 		res.status(error.statusCode).json({ error: error.message, code: error.code });
 		return;
 	}
 	if (error instanceof multer.MulterError) {
-		res.status(400).json({ error: error.code === "LIMIT_FILE_SIZE" ? "Media file is too large" : "Unsupported media upload" });
+		const driveUpload = req.path === "/api/admin/drive";
+		if (error.code === "LIMIT_FILE_SIZE") {
+			res.status(413).json({ error: driveUpload ? "文件不能超过 2GB" : "Media file is too large" });
+			return;
+		}
+		res.status(400).json({ error: driveUpload ? "上传失败，请重新选择一个不超过 2GB 的文件" : "Unsupported media upload" });
 		return;
 	}
 	if (error instanceof z.ZodError) {
@@ -2186,11 +2388,18 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 		res.status(400).json({ error: "Invalid database value" });
 		return;
 	}
+	const osCode = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+	if (osCode === "ENOSPC") {
+		res.status(507).json({ error: "服务器磁盘空间不足" });
+		return;
+	}
 	console.error(error);
 	res.status(500).json({ error: "Internal server error" });
 });
 
-app.listen(config.port, config.host, () => {
+const server = app.listen(config.port, config.host, () => {
 	const displayHost = config.host.includes(":") ? `[${config.host}]` : config.host;
 	console.log(`Firefly API listening on http://${displayHost}:${config.port}`);
 });
+server.requestTimeout = 2 * 60 * 60 * 1000;
+server.timeout = 0;

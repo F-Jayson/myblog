@@ -1599,6 +1599,93 @@ export async function deleteAdminUser(id: number) {
 	}
 }
 
+export type AdminDriveRecord = {
+	id: number;
+	originalName: string;
+	storageName: string;
+	mimeType: string;
+	byteSize: number;
+	publicToken: string;
+	downloadCount: number;
+	createdAt: string;
+};
+
+type DriveOwner = { id: number | null; username: string };
+
+function mapAdminDrive(row: RowDataPacket): AdminDriveRecord {
+	return {
+		id: Number(row.id),
+		originalName: String(row.originalName),
+		storageName: String(row.storageName),
+		mimeType: String(row.mimeType),
+		byteSize: Number(row.byteSize),
+		publicToken: String(row.publicToken),
+		downloadCount: Number(row.downloadCount),
+		createdAt: String(row.createdAt),
+	};
+}
+
+const adminDriveProjection = "id, original_name AS originalName, storage_name AS storageName, mime_type AS mimeType, byte_size AS byteSize, public_token AS publicToken, download_count AS downloadCount, created_at AS createdAt";
+
+function driveOwnerClause(owner: DriveOwner) {
+	if (owner.id !== null) return { sql: "owner_admin_id = ?", params: [owner.id] as Array<string | number> };
+	return { sql: "owner_admin_id IS NULL AND owner_username = ?", params: [owner.username] };
+}
+
+export async function createAdminDriveFile(input: {
+	ownerAdminId: number | null;
+	ownerUsername: string;
+	originalName: string;
+	storageName: string;
+	mimeType: string;
+	byteSize: number;
+	publicToken: string;
+}) {
+	const [result] = await pool.execute<ResultSetHeader>(
+		"INSERT INTO admin_drive_files (owner_admin_id, owner_username, original_name, storage_name, mime_type, byte_size, public_token) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		[input.ownerAdminId, input.ownerUsername, input.originalName, input.storageName, input.mimeType, input.byteSize, input.publicToken],
+	);
+	const [[row]] = await pool.query<RowDataPacket[]>(`SELECT ${adminDriveProjection} FROM admin_drive_files WHERE id = ? LIMIT 1`, [result.insertId]);
+	if (!row) throw new Error("Drive file was not stored");
+	return mapAdminDrive(row);
+}
+
+export async function listAdminDriveFiles(owner: DriveOwner) {
+	const clause = driveOwnerClause(owner);
+	const [[count]] = await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM admin_drive_files WHERE ${clause.sql}`, clause.params);
+	const [rows] = await pool.query<RowDataPacket[]>(
+		`SELECT ${adminDriveProjection} FROM admin_drive_files WHERE ${clause.sql} ORDER BY created_at DESC, id DESC LIMIT 500`,
+		clause.params,
+	);
+	return { items: rows.map(mapAdminDrive), total: Number(count?.total ?? 0) };
+}
+
+export async function getAdminDriveFileByToken(token: string) {
+	const [[row]] = await pool.query<RowDataPacket[]>(`SELECT ${adminDriveProjection} FROM admin_drive_files WHERE public_token = ? LIMIT 1`, [token]);
+	return row ? mapAdminDrive(row) : null;
+}
+
+export async function incrementAdminDriveDownload(id: number) {
+	await pool.execute("UPDATE admin_drive_files SET download_count = download_count + 1 WHERE id = ?", [id]);
+}
+
+export async function deleteAdminDriveFile(id: number, owner: DriveOwner) {
+	const clause = driveOwnerClause(owner);
+	const [[row]] = await pool.query<RowDataPacket[]>(
+		`SELECT storage_name AS storageName FROM admin_drive_files WHERE id = ? AND ${clause.sql} LIMIT 1`,
+		[id, ...clause.params],
+	);
+	if (!row) return null;
+	const [result] = await pool.execute<ResultSetHeader>(`DELETE FROM admin_drive_files WHERE id = ? AND ${clause.sql}`, [id, ...clause.params]);
+	if (!result.affectedRows) return null;
+	return { storageName: String(row.storageName) };
+}
+
+export async function listAdminDriveStorageNames(ownerAdminId: number) {
+	const [rows] = await pool.query<RowDataPacket[]>("SELECT storage_name AS storageName FROM admin_drive_files WHERE owner_admin_id = ?", [ownerAdminId]);
+	return rows.map((row) => String(row.storageName));
+}
+
 function auditText(value: unknown, maximum: number) {
 	const text = value === null || value === undefined ? "" : String(value).trim();
 	return text.length > maximum ? text.slice(0, Math.max(0, maximum - 3)) + "..." : text;

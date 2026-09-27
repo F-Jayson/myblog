@@ -32,6 +32,7 @@ export const config = {
 	// `change-me` was the old example value and must never enable a real login.
 	adminToken: configuredLegacyAdminToken === "change-me" ? "" : configuredLegacyAdminToken,
 	adminName: process.env.ADMIN_DISPLAY_NAME?.trim() || "admin",
+	filesPublicOrigin: (process.env.FILES_PUBLIC_ORIGIN?.trim() || "https://files.fjayson.com").replace(/\/+$/u, ""),
 	monitorSlowRequestMs: numberFromEnv(process.env.MONITOR_SLOW_REQUEST_MS, 1000),
 	monitorSlowSqlMs: numberFromEnv(process.env.MONITOR_SLOW_SQL_MS, 200),
 	compiler: {

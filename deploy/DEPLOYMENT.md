@@ -14,7 +14,7 @@ sudo ./deploy/manage.sh
 | 命令 | 实际行为 |
 | --- | --- |
 | `first` | 收集配置与管理员密码，安装依赖，克隆代码，准备数据库，安装项目依赖、迁移、可选 seed、构建，并创建/启动 systemd 和 Nginx；可选申请 SSL。 |
-| `pull` | 仅安全拉取并快进远程代码；不安装依赖、不迁移、不构建、不重启。 |
+| `pull` | 仅安全拉取并快进远程代码，并把 `apps/portal` 同步到 `/var/www/portal`；不安装依赖、不迁移、不构建、不重启。 |
 | `update` | 安全拉取，安装系统与 Node/pnpm 依赖，验证数据库，安装项目依赖、迁移、构建、更新服务/Nginx 并重启。 |
 | `configure` | 重新收集并应用部署和数据库配置（包括数据库密码）；安装依赖、准备/验证数据库、迁移、构建、更新服务/Nginx 并重启。 |
 | `status` | 查看 API、Nginx、本地健康检查和存在时的 Certbot 定时器状态。 |
@@ -71,7 +71,7 @@ sudo ./deploy/manage.sh
 
 已有仓库使用 fetch、切换目标分支和 `merge --ff-only` 同步。受 Git 跟踪文件有本地修改、分支已分叉或远程版本不匹配时会中止；脚本不使用 `git clean` 或破坏性 reset，也不删除未跟踪持久化数据。
 
-上传文件位于 `<APP_DIR>/uploads`，用户空间位于 `<APP_DIR>/uploads/user-space`。脚本会为服务用户创建和授权这些目录；更新、重新配置和同步时不得删除它们或 `.env`。
+上传文件位于 `<APP_DIR>/uploads`，用户空间位于 `<APP_DIR>/uploads/user-space`，管理员网盘文件位于 `<APP_DIR>/uploads/admin-drive`。脚本会为服务用户创建和授权这些目录；更新、重新配置和同步时不得删除它们或 `.env`。
 
 `update` 与 `configure` 都运行 `pnpm install --frozen-lockfile`、`pnpm db:migrate` 和 `pnpm build`。迁移可能修改线上数据结构，务必在执行前备份数据库并选择合适维护窗口。
 
@@ -86,7 +86,9 @@ sudo systemctl status firefly-react
 sudo journalctl -u firefly-react -n 200 --no-pager
 ```
 
-Nginx 提供 `<APP_DIR>/apps/web/dist` 的静态文件，并把 `/api/` 反代到本机 API。站点配置以临时文件生成，先经独立及完整 `nginx -t` 校验，失败会恢复旧配置；上传请求体限制为 64 MB，并设置较长反向代理超时。
+Nginx 提供 `<APP_DIR>/apps/web/dist` 的静态文件，并把 `/api/` 反代到本机 API。站点配置以临时文件生成，先经独立及完整 `nginx -t` 校验，失败会恢复旧配置。普通上传请求体限制为 64 MB。管理员网盘 `POST /api/admin/drive` 单独放宽到约 2.15 GB，并把上传和下载代理超时放到 2 小时。下载响应关闭代理缓冲，且不设置 `limit_rate`。
+
+当站点域名是 `blog.fjayson.com`，或部署配置里写了 `FILES_DOMAIN` 时，脚本会额外启用文件下载站。公开链接形如 `https://files.fjayson.com/<token>/<文件名>`，由该站点反代到 `/api/files/`。证书通过 webroot 单独申请；申请失败时下载站保持 HTTP，不回滚博客站点。
 
 ## HTTPS、webroot 与自动续期
 
