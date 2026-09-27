@@ -522,3 +522,21 @@ CREATE TABLE IF NOT EXISTS admin_drive_files (
   INDEX idx_admin_drive_username_created (owner_username, created_at, id),
   CONSTRAINT fk_admin_drive_owner FOREIGN KEY (owner_admin_id) REFERENCES admin_users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- An in-progress upload. The file is appended in chunks so the browser can
+-- advance progress only after this server has stored those bytes.
+CREATE TABLE IF NOT EXISTS admin_drive_uploads (
+  id CHAR(32) NOT NULL PRIMARY KEY,
+  owner_admin_id BIGINT UNSIGNED NULL,
+  owner_username VARCHAR(60) NOT NULL,
+  original_name VARCHAR(255) NOT NULL,
+  storage_name CHAR(64) NOT NULL,
+  mime_type VARCHAR(127) NOT NULL DEFAULT 'application/octet-stream',
+  byte_size BIGINT UNSIGNED NOT NULL,
+  received_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_admin_drive_upload_storage (storage_name),
+  INDEX idx_admin_drive_upload_owner (owner_admin_id, updated_at),
+  CONSTRAINT fk_admin_drive_upload_owner FOREIGN KEY (owner_admin_id) REFERENCES admin_users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -22,6 +22,13 @@ type DriveList = {
   publicOrigin: string;
 };
 
+type DriveSession = {
+  uploadId: string;
+  chunkSize: number;
+  receivedBytes: number;
+  byteSize: number;
+};
+
 function authHeaders() {
   const headers = new Headers();
   const token = sessionStorage.getItem("firefly-admin-token");
@@ -43,6 +50,7 @@ async function readError(response: Response) {
 
 async function driveRequest<T>(path: string, options: RequestInit = {}) {
   const headers = authHeaders();
+  new Headers(options.headers).forEach((value, key) => headers.set(key, value));
   const response = await fetch(API_ORIGIN + path, { ...options, headers });
   if (response.status === 401) {
     expireAdminSession();
@@ -89,6 +97,7 @@ export default function AdminDrive() {
   const [keyword, setKeyword] = useState("");
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [phase, setPhase] = useState<"uploading" | "saving">("uploading");
   const [progress, setProgress] = useState(0);
   const [uploadedBytes, setUploadedBytes] = useState(0);
   const [uploadTotal, setUploadTotal] = useState(0);
@@ -146,63 +155,106 @@ export default function AdminDrive() {
     }
   };
 
+  const reportUpload = (sent: number, total: number) => {
+    if (total < 1 || sent >= total) {
+      setPhase("saving");
+      setProgress(99);
+      setUploadedBytes(total);
+      return;
+    }
+    setPhase("uploading");
+    setUploadedBytes(sent);
+    setProgress(Math.min(99, Math.round((sent / total) * 100)));
+  };
+
+  const sendChunk = (uploadId: string, body: Blob, offset: number, total: number) => new Promise<number>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", API_ORIGIN + "/api/admin/drive/sessions/" + uploadId);
+    xhr.timeout = 0;
+    const token = sessionStorage.getItem("firefly-admin-token");
+    if (token) xhr.setRequestHeader("authorization", "Bearer " + token);
+    xhr.setRequestHeader("content-type", "application/octet-stream");
+    xhr.setRequestHeader("x-upload-offset", String(offset));
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      reportUpload(offset + event.loaded, total);
+    };
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        expireAdminSession();
+        reject(new Error("登录状态已失效"));
+        return;
+      }
+      let payload: { error?: string; receivedBytes?: number } | null = null;
+      try { payload = JSON.parse(xhr.responseText) as { error?: string; receivedBytes?: number }; } catch { payload = null; }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(payload?.error || "上传失败，请稍后重试。"));
+        return;
+      }
+      const receivedBytes = payload?.receivedBytes;
+      if (typeof receivedBytes !== "number" || !Number.isFinite(receivedBytes)) {
+        reject(new Error("上传失败，请稍后重试。"));
+        return;
+      }
+      resolve(receivedBytes);
+    };
+    xhr.onerror = () => reject(new Error("无法连接到内容服务。"));
+    xhr.onabort = () => reject(new Error("上传已中断。"));
+    xhr.send(body);
+  });
+
   const uploadFile = (file: File | undefined) => {
     if (!file || uploadingRef.current) return;
     if (file.size > maxBytes) {
       setMessage("单个文件不能超过 2GB。");
       return;
     }
-    const formData = new FormData();
-    formData.append("file", file);
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", API_ORIGIN + "/api/admin/drive");
-    xhr.timeout = 0;
-    const token = sessionStorage.getItem("firefly-admin-token");
-    if (token) xhr.setRequestHeader("authorization", "Bearer " + token);
-    xhr.upload.onprogress = (event) => {
-      if (!event.lengthComputable) return;
-      setUploadedBytes(event.loaded);
-      setUploadTotal(event.total);
-      setProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
-    };
-    xhr.onload = () => {
-      uploadingRef.current = false;
-      setUploading(false);
-      if (xhr.status === 401) {
-        expireAdminSession();
-        return;
-      }
-      if (xhr.status < 200 || xhr.status >= 300) {
-        let reason = "上传失败，请稍后重试。";
-        try {
-          const payload = JSON.parse(xhr.responseText) as { error?: string };
-          if (payload.error) reason = payload.error;
-        } catch { /* keep fallback */ }
-        setMessage(reason);
-        return;
-      }
-      const saved = JSON.parse(xhr.responseText) as DriveFile;
-      setLatestUrl(saved.downloadUrl);
-      setMessage("");
-      setItems((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
-      void load(true);
-    };
-    xhr.onerror = () => {
-      uploadingRef.current = false;
-      setUploading(false);
-      setMessage("无法连接到内容服务。");
-    };
-    xhr.onabort = () => {
-      uploadingRef.current = false;
-      setUploading(false);
-    };
     uploadingRef.current = true;
     setUploading(true);
+    setPhase("uploading");
     setProgress(0);
     setUploadedBytes(0);
     setUploadTotal(file.size);
     setMessage("");
-    xhr.send(formData);
+    void (async () => {
+      let uploadId = "";
+      try {
+        const session = await driveRequest<DriveSession>("/api/admin/drive/sessions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: file.name || "file", byteSize: file.size, mimeType: file.type || "application/octet-stream" }),
+        });
+        uploadId = session.uploadId;
+        const chunkSize = Number.isFinite(session.chunkSize) && session.chunkSize >= 1024 * 1024 ? session.chunkSize : 8 * 1024 * 1024;
+        let offset = session.receivedBytes || 0;
+        while (offset < file.size) {
+          const end = Math.min(file.size, offset + chunkSize);
+          const received = await sendChunk(uploadId, file.slice(offset, end), offset, file.size);
+          if (received <= offset) throw new Error("上传没有继续写入，请重试。");
+          offset = received;
+          reportUpload(offset, file.size);
+        }
+        setPhase("saving");
+        setProgress(99);
+        const saved = await driveRequest<DriveFile>("/api/admin/drive/sessions/" + uploadId + "/complete", { method: "POST" });
+        uploadId = "";
+        setLatestUrl(saved.downloadUrl);
+        setMessage("");
+        setItems((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+        void load(true);
+      } catch (error) {
+        if (uploadId) {
+          await driveRequest("/api/admin/drive/sessions/" + uploadId, { method: "DELETE" }).catch(() => undefined);
+        }
+        if (!(error instanceof Error) || error.message !== "登录状态已失效") {
+          setMessage(error instanceof Error ? error.message : "上传失败，请稍后重试。");
+        }
+      } finally {
+        uploadingRef.current = false;
+        setUploading(false);
+        setPhase("uploading");
+      }
+    })();
   };
 
   const remove = async (item: DriveFile) => {
@@ -261,15 +313,15 @@ export default function AdminDrive() {
             }}
           />
           <span className="fa-drive-drop-icon">{uploading ? <RefreshCw size={22} className="fa-spin" /> : <Upload size={22} />}</span>
-          <strong>{uploading ? "正在上传" : "选择文件或拖到这里"}</strong>
+          <strong>{uploading ? (phase === "saving" ? "正在保存" : "正在上传") : "选择文件或拖到这里"}</strong>
           <small>任意格式，最大 {bytesText(maxBytes)}</small>
         </label>
         {uploading ? (
           <div className="fa-drive-progress-wrap">
-            <div className="fa-drive-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+            <div className={"fa-drive-progress" + (phase === "saving" ? " is-saving" : "")} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
               <span style={{ width: progress + "%" }} />
             </div>
-            <small>{progress}% · {bytesText(uploadedBytes)} / {bytesText(uploadTotal)}</small>
+            <small>{phase === "saving" ? "正在写入服务器，请稍候" : progress + "% · " + bytesText(uploadedBytes) + " / " + bytesText(uploadTotal)}</small>
           </div>
         ) : null}
         {latestUrl ? (

@@ -124,6 +124,9 @@ GET/POST/PUT/DELETE /api/admin/dynamics
 GET/PATCH/DELETE /api/admin/comments
 GET/PUT /api/admin/site
 GET/POST /api/admin/drive
+POST /api/admin/drive/sessions
+PUT  /api/admin/drive/sessions/:id
+POST /api/admin/drive/sessions/:id/complete
 DELETE /api/admin/drive/:id
 GET  /api/files/:token/:filename
 ```

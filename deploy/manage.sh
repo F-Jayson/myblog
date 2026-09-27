@@ -810,6 +810,23 @@ server {
         proxy_request_buffering off;
     }
 
+    location /api/admin/drive/ {
+        client_max_body_size 32m;
+        client_body_timeout 3600s;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
+    }
+
     location /api/files/ {
         limit_rate 0;
         client_max_body_size 1m;
@@ -886,6 +903,23 @@ server {
         proxy_send_timeout 7200s;
         proxy_read_timeout 7200s;
         proxy_request_buffering off;
+    }
+
+    location /api/admin/drive/ {
+        client_max_body_size 32m;
+        client_body_timeout 3600s;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
     }
 
     location /api/files/ {

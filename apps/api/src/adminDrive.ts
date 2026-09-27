@@ -1,6 +1,7 @@
 import { resolve, sep } from "node:path";
 
 export const ADMIN_DRIVE_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+export const ADMIN_DRIVE_CHUNK_BYTES = 8 * 1024 * 1024;
 const STORAGE_NAME_PATTERN = /^[a-f0-9]{64}$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 

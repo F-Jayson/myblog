@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { dirname, extname, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -10,7 +10,7 @@ import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
-import { ADMIN_DRIVE_MAX_BYTES, adminDriveFilePath, contentDispositionAttachment, countsAsDriveDownload, driveDownloadUrl, isDriveToken, normalizeDriveFileName, parseSingleByteRange, safeDriveMimeType } from "./adminDrive.js";
+import { ADMIN_DRIVE_CHUNK_BYTES, ADMIN_DRIVE_MAX_BYTES, adminDriveFilePath, contentDispositionAttachment, countsAsDriveDownload, driveDownloadUrl, isDriveToken, normalizeDriveFileName, parseSingleByteRange, safeDriveMimeType } from "./adminDrive.js";
 import { config } from "./config.js";
 import { pool } from "./db.js";
 import { getDatabaseStatus, pingDatabase } from "./db.js";
@@ -67,6 +67,14 @@ import {
 	incrementAdminDriveDownload,
 	deleteAdminDriveFile,
 	listAdminDriveStorageNames,
+	createAdminDriveUpload,
+	getAdminDriveUpload,
+	advanceAdminDriveUpload,
+	discardAdminDriveUpload,
+	removeAdminDriveUploadRow,
+	listAdminDriveUploadStorageNames,
+	listExpiredAdminDriveUploads,
+	deleteAdminDriveUploadById,
 	getCurrentAnnouncement,
 	getChangelog,
 	getFeedback,
@@ -1805,7 +1813,7 @@ app.delete("/api/admin/accounts/:id", requireAdmin, async (req: RequestWithAdmin
 	try {
 		const id = parseAdminUserId(typeof req.params.id === "string" ? req.params.id : "");
 		if (!ensureOtherUser(req, res, id)) return;
-		const storageNames = await listAdminDriveStorageNames(id);
+		const storageNames = [...await listAdminDriveStorageNames(id), ...await listAdminDriveUploadStorageNames(id)];
 		const ok = await deleteAdminUser(id);
 		if (ok) await Promise.all(storageNames.map((storageName) => removeStoredDriveFile(storageName)));
 		res.status(ok ? 204 : 404).end();
@@ -2272,6 +2280,194 @@ app.post("/api/admin/drive", requireAdmin, (req: RequestWithAdmin, res, next) =>
 			next(error);
 		}
 	});
+});
+
+const driveUploadLocks = new Set<string>();
+const driveSessionInput = z.object({
+	name: z.string().trim().min(1).max(255),
+	byteSize: z.number().int().min(0).max(ADMIN_DRIVE_MAX_BYTES),
+	mimeType: z.string().trim().max(127).optional(),
+});
+
+function isDriveUploadId(value: string) {
+	return /^[a-f0-9]{32}$/.test(value);
+}
+
+async function cleanupExpiredDriveUploads() {
+	const expired = await listExpiredAdminDriveUploads(24);
+	for (const item of expired) {
+		await removeStoredDriveFile(item.storageName);
+		await deleteAdminDriveUploadById(item.id);
+	}
+}
+
+async function writeDriveChunk(req: Request, filePath: string, offset: number, maxBytes: number) {
+	const handle = await open(filePath, "r+");
+	try {
+		await handle.truncate(offset);
+		let written = 0;
+		let tooLarge = false;
+		try {
+			for await (const piece of req) {
+				const buffer = Buffer.isBuffer(piece) ? piece : Buffer.from(piece);
+				if (written + buffer.length > maxBytes) {
+					tooLarge = true;
+					req.destroy();
+					break;
+				}
+				await handle.write(buffer, 0, buffer.length, offset + written);
+				written += buffer.length;
+			}
+		} catch (error) {
+			if (!tooLarge) throw error;
+		}
+		if (tooLarge) {
+			const error = new Error("Drive chunk is too large") as Error & { statusCode?: number };
+			error.statusCode = 413;
+			throw error;
+		}
+		return written;
+	} finally {
+		await handle.close();
+	}
+}
+
+app.post("/api/admin/drive/sessions", requireAdmin, async (req: RequestWithAdmin, res, next) => {
+	let storedPath = "";
+	try {
+		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		const input = driveSessionInput.parse(req.body);
+		await cleanupExpiredDriveUploads().catch((error) => console.error(error));
+		const storageName = randomBytes(32).toString("hex");
+		const full = adminDriveFilePath(adminDriveRoot, storageName);
+		if (!full) { res.status(500).json({ error: "文件保存失败" }); return; }
+		await writeFile(full, Buffer.alloc(0), { flag: "wx" });
+		storedPath = full;
+		const created = await createAdminDriveUpload({
+			id: randomBytes(16).toString("hex"),
+			ownerAdminId: req.adminUser.id,
+			ownerUsername: req.adminUser.username.slice(0, 60),
+			originalName: normalizeDriveFileName(input.name),
+			storageName,
+			mimeType: safeDriveMimeType(input.mimeType || "application/octet-stream"),
+			byteSize: input.byteSize,
+		});
+		if (!created) throw new Error("Drive upload was not stored");
+		storedPath = "";
+		res.status(201).json({ uploadId: created.id, chunkSize: ADMIN_DRIVE_CHUNK_BYTES, receivedBytes: created.receivedBytes, byteSize: created.byteSize });
+	} catch (error) {
+		if (storedPath) await unlink(storedPath).catch(() => undefined);
+		next(error);
+	}
+});
+
+app.put("/api/admin/drive/sessions/:id", requireAdmin, async (req: RequestWithAdmin, res, next) => {
+	req.setTimeout(0);
+	res.setTimeout(0);
+	const id = typeof req.params.id === "string" ? req.params.id : "";
+	if (!isDriveUploadId(id)) { res.status(404).json({ error: "上传任务不存在或已失效" }); return; }
+	if (driveUploadLocks.has(id)) { res.status(409).json({ error: "上一个分片还在保存，请稍候" }); return; }
+	driveUploadLocks.add(id);
+	try {
+		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		const owner = driveOwner(req.adminUser);
+		const upload = await getAdminDriveUpload(id, owner);
+		if (!upload) { res.status(404).json({ error: "上传任务不存在或已失效" }); return; }
+		if (upload.receivedBytes >= upload.byteSize) {
+			res.status(409).json({ error: "文件已经上传完成", receivedBytes: upload.receivedBytes });
+			return;
+		}
+		const headerOffset = Number(req.header("x-upload-offset"));
+		if (!Number.isSafeInteger(headerOffset) || headerOffset !== upload.receivedBytes) {
+			res.status(409).json({ error: "上传位置不正确，请重新选择文件", receivedBytes: upload.receivedBytes });
+			return;
+		}
+		const limit = Math.min(ADMIN_DRIVE_CHUNK_BYTES, upload.byteSize - upload.receivedBytes);
+		const declaredLength = req.header("content-length");
+		if (declaredLength !== undefined) {
+			const length = Number(declaredLength);
+			if (!Number.isSafeInteger(length) || length < 1 || length > limit) {
+				res.status(413).json({ error: "分片大小不正确" });
+				return;
+			}
+		}
+		const full = adminDriveFilePath(adminDriveRoot, upload.storageName);
+		if (!full) { res.status(500).json({ error: "文件保存失败" }); return; }
+		let written = 0;
+		try {
+			written = await writeDriveChunk(req, full, upload.receivedBytes, limit);
+		} catch (error) {
+			const statusCode = typeof error === "object" && error !== null && "statusCode" in error ? Number((error as { statusCode?: number }).statusCode) : 0;
+			if (statusCode === 413) { res.status(413).json({ error: "分片不能超过 8MB" }); return; }
+			throw error;
+		}
+		if (written < 1) { res.status(400).json({ error: "分片不能为空" }); return; }
+		const advanced = await advanceAdminDriveUpload(id, owner, upload.receivedBytes, written);
+		if (!advanced) {
+			const current = await getAdminDriveUpload(id, owner);
+			res.status(409).json({ error: "上传位置不正确，请重新选择文件", receivedBytes: current?.receivedBytes ?? upload.receivedBytes });
+			return;
+		}
+		res.json({ receivedBytes: upload.receivedBytes + written });
+	} catch (error) {
+		next(error);
+	} finally {
+		driveUploadLocks.delete(id);
+	}
+});
+
+app.post("/api/admin/drive/sessions/:id/complete", requireAdmin, async (req: RequestWithAdmin, res, next) => {
+	try {
+		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		const id = typeof req.params.id === "string" ? req.params.id : "";
+		if (!isDriveUploadId(id)) { res.status(404).json({ error: "上传任务不存在或已失效" }); return; }
+		const owner = driveOwner(req.adminUser);
+		const upload = await getAdminDriveUpload(id, owner);
+		if (!upload) { res.status(404).json({ error: "上传任务不存在或已失效" }); return; }
+		if (upload.receivedBytes !== upload.byteSize) {
+			res.status(409).json({ error: "文件还没有上传完成", receivedBytes: upload.receivedBytes });
+			return;
+		}
+		const full = adminDriveFilePath(adminDriveRoot, upload.storageName);
+		if (!full) { res.status(500).json({ error: "文件保存失败" }); return; }
+		const info = await stat(full).catch(() => null);
+		if (!info?.isFile() || info.size !== upload.byteSize) {
+			res.status(409).json({ error: "服务器上的文件不完整，请重新上传" });
+			return;
+		}
+		let saved = null;
+		for (let attempt = 0; attempt < 2 && !saved; attempt += 1) {
+			try {
+				saved = await createAdminDriveFile({
+					ownerAdminId: req.adminUser.id,
+					ownerUsername: req.adminUser.username.slice(0, 60),
+					originalName: upload.originalName,
+					storageName: upload.storageName,
+					mimeType: upload.mimeType,
+					byteSize: upload.byteSize,
+					publicToken: randomBytes(32).toString("base64url"),
+				});
+			} catch (error) {
+				if (attempt === 0 && databaseErrorCode(error) === "ER_DUP_ENTRY") continue;
+				throw error;
+			}
+		}
+		if (!saved) throw new Error("Drive file was not stored");
+		await removeAdminDriveUploadRow(id, owner);
+		res.status(201).json(presentDriveFile(saved));
+	} catch (error) { next(error); }
+});
+
+app.delete("/api/admin/drive/sessions/:id", requireAdmin, async (req: RequestWithAdmin, res, next) => {
+	try {
+		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		const id = typeof req.params.id === "string" ? req.params.id : "";
+		if (!isDriveUploadId(id)) { res.status(404).json({ error: "上传任务不存在或已失效" }); return; }
+		const removed = await discardAdminDriveUpload(id, driveOwner(req.adminUser));
+		if (!removed) { res.status(404).json({ error: "上传任务不存在或已失效" }); return; }
+		await removeStoredDriveFile(removed.storageName);
+		res.status(204).end();
+	} catch (error) { next(error); }
 });
 
 app.delete("/api/admin/drive/:id", requireAdmin, async (req: RequestWithAdmin, res, next) => {

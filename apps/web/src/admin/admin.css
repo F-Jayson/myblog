@@ -3716,6 +3716,8 @@
 .fa-drive-progress-wrap { display: grid; gap: var(--fa-space-2); margin-top: var(--fa-space-4); }
 .fa-drive-progress { height: 0.5rem; overflow: hidden; border-radius: var(--fa-radius-full); background: var(--fa-line); }
 .fa-drive-progress > span { display: block; height: 100%; background: var(--fa-primary); }
+.fa-drive-progress.is-saving > span { width: 100% !important; animation: fa-drive-save 1.1s ease-in-out infinite; }
+@keyframes fa-drive-save { 50% { opacity: .45; } }
 .fa-drive-progress-wrap small { color: var(--fa-muted); font-size: var(--fa-text-sm); }
 .fa-drive-link {
   display: grid;

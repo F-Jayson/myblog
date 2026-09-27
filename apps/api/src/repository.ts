@@ -1627,9 +1627,10 @@ function mapAdminDrive(row: RowDataPacket): AdminDriveRecord {
 
 const adminDriveProjection = "id, original_name AS originalName, storage_name AS storageName, mime_type AS mimeType, byte_size AS byteSize, public_token AS publicToken, download_count AS downloadCount, created_at AS createdAt";
 
-function driveOwnerClause(owner: DriveOwner) {
-	if (owner.id !== null) return { sql: "owner_admin_id = ?", params: [owner.id] as Array<string | number> };
-	return { sql: "owner_admin_id IS NULL AND owner_username = ?", params: [owner.username] };
+function driveOwnerClause(owner: DriveOwner, alias = "") {
+	const column = (name: string) => alias ? `${alias}.${name}` : name;
+	if (owner.id !== null) return { sql: `${column("owner_admin_id")} = ?`, params: [owner.id] as Array<string | number> };
+	return { sql: `${column("owner_admin_id")} IS NULL AND ${column("owner_username")} = ?`, params: [owner.username] };
 }
 
 export async function createAdminDriveFile(input: {
@@ -1684,6 +1685,111 @@ export async function deleteAdminDriveFile(id: number, owner: DriveOwner) {
 export async function listAdminDriveStorageNames(ownerAdminId: number) {
 	const [rows] = await pool.query<RowDataPacket[]>("SELECT storage_name AS storageName FROM admin_drive_files WHERE owner_admin_id = ?", [ownerAdminId]);
 	return rows.map((row) => String(row.storageName));
+}
+
+export type AdminDriveUploadRecord = {
+	id: string;
+	originalName: string;
+	storageName: string;
+	mimeType: string;
+	byteSize: number;
+	receivedBytes: number;
+};
+
+const adminDriveUploadProjection = "id, original_name AS originalName, storage_name AS storageName, mime_type AS mimeType, byte_size AS byteSize, received_bytes AS receivedBytes";
+
+function mapAdminDriveUpload(row: RowDataPacket): AdminDriveUploadRecord {
+	return {
+		id: String(row.id),
+		originalName: String(row.originalName),
+		storageName: String(row.storageName),
+		mimeType: String(row.mimeType),
+		byteSize: Number(row.byteSize),
+		receivedBytes: Number(row.receivedBytes),
+	};
+}
+
+export async function createAdminDriveUpload(input: {
+	id: string;
+	ownerAdminId: number | null;
+	ownerUsername: string;
+	originalName: string;
+	storageName: string;
+	mimeType: string;
+	byteSize: number;
+}) {
+	await pool.execute(
+		"INSERT INTO admin_drive_uploads (id, owner_admin_id, owner_username, original_name, storage_name, mime_type, byte_size, received_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+		[input.id, input.ownerAdminId, input.ownerUsername, input.originalName, input.storageName, input.mimeType, input.byteSize],
+	);
+	return getAdminDriveUpload(input.id, { id: input.ownerAdminId, username: input.ownerUsername });
+}
+
+export async function getAdminDriveUpload(id: string, owner: DriveOwner) {
+	const clause = driveOwnerClause(owner);
+	const [[row]] = await pool.query<RowDataPacket[]>(
+		`SELECT ${adminDriveUploadProjection} FROM admin_drive_uploads WHERE id = ? AND ${clause.sql} LIMIT 1`,
+		[id, ...clause.params],
+	);
+	return row ? mapAdminDriveUpload(row) : null;
+}
+
+export async function advanceAdminDriveUpload(id: string, owner: DriveOwner, fromBytes: number, addedBytes: number) {
+	const clause = driveOwnerClause(owner);
+	const [result] = await pool.execute<ResultSetHeader>(
+		`UPDATE admin_drive_uploads SET received_bytes = received_bytes + ? WHERE id = ? AND received_bytes = ? AND ${clause.sql}`,
+		[addedBytes, id, fromBytes, ...clause.params],
+	);
+	return result.affectedRows > 0;
+}
+
+export async function discardAdminDriveUpload(id: string, owner: DriveOwner) {
+	const clause = driveOwnerClause(owner, "u");
+	const [[row]] = await pool.query<RowDataPacket[]>(
+		`SELECT u.storage_name AS storageName
+		 FROM admin_drive_uploads u
+		 LEFT JOIN admin_drive_files f ON f.storage_name = u.storage_name
+		 WHERE u.id = ? AND f.id IS NULL AND ${clause.sql}
+		 LIMIT 1`,
+		[id, ...clause.params],
+	);
+	if (!row) return null;
+	const [result] = await pool.execute<ResultSetHeader>(
+		`DELETE u FROM admin_drive_uploads u
+		 LEFT JOIN admin_drive_files f ON f.storage_name = u.storage_name
+		 WHERE u.id = ? AND f.id IS NULL AND ${clause.sql}`,
+		[id, ...clause.params],
+	);
+	if (!result.affectedRows) return null;
+	return { storageName: String(row.storageName) };
+}
+
+export async function removeAdminDriveUploadRow(id: string, owner: DriveOwner) {
+	const clause = driveOwnerClause(owner);
+	const [result] = await pool.execute<ResultSetHeader>(`DELETE FROM admin_drive_uploads WHERE id = ? AND ${clause.sql}`, [id, ...clause.params]);
+	return result.affectedRows > 0;
+}
+
+export async function listAdminDriveUploadStorageNames(ownerAdminId: number) {
+	const [rows] = await pool.query<RowDataPacket[]>("SELECT storage_name AS storageName FROM admin_drive_uploads WHERE owner_admin_id = ?", [ownerAdminId]);
+	return rows.map((row) => String(row.storageName));
+}
+
+export async function listExpiredAdminDriveUploads(olderThanHours: number) {
+	const hours = Math.trunc(olderThanHours);
+	if (!Number.isInteger(hours) || hours < 1 || hours > 24 * 30) throw new Error("Invalid upload expiry");
+	const [rows] = await pool.query<RowDataPacket[]>(
+		`SELECT u.id AS id, u.storage_name AS storageName
+		 FROM admin_drive_uploads u
+		 LEFT JOIN admin_drive_files f ON f.storage_name = u.storage_name
+		 WHERE f.id IS NULL AND u.updated_at < DATE_SUB(NOW(), INTERVAL ${hours} HOUR)`,
+	);
+	return rows.map((row) => ({ id: String(row.id), storageName: String(row.storageName) }));
+}
+
+export async function deleteAdminDriveUploadById(id: string) {
+	const [result] = await pool.execute<ResultSetHeader>("DELETE FROM admin_drive_uploads WHERE id = ?", [id]);
+	return result.affectedRows > 0;
 }
 
 function auditText(value: unknown, maximum: number) {
