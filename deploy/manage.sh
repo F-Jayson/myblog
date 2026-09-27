@@ -962,7 +962,12 @@ files_certificate_pair_exists() {
 files_public_origin() {
   local scheme="http"
   normalize_files_domain
-  files_certificate_pair_exists && scheme="https"
+  # The download hostname is often reached through the same HTTPS front as the
+  # blog. Keep published links on HTTPS once the blog itself is HTTPS, even
+  # while this origin is still waiting for its own certificate.
+  if files_certificate_pair_exists || [[ "${PUBLIC_SCHEME}" == https ]]; then
+    scheme="https"
+  fi
   printf '%s://%s' "${scheme}" "${FILES_DOMAIN}"
 }
 
@@ -1321,6 +1326,9 @@ database_needs_admin_password() {
   table_count="$(mysql "--defaults-extra-file=${defaults_file}" --batch --skip-column-names -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${MYSQL_DATABASE}' AND TABLE_NAME = 'admin_users';")"
   [[ "${table_count}" == 1 ]] || return 0
   password_hash="$(mysql "--defaults-extra-file=${defaults_file}" --database="${MYSQL_DATABASE}" --batch --skip-column-names -e "SELECT password_hash FROM admin_users WHERE username = 'admin' AND is_active <> 0 LIMIT 1;")"
+  if [[ -z "${password_hash}" ]]; then
+    password_hash="$(mysql "--defaults-extra-file=${defaults_file}" --database="${MYSQL_DATABASE}" --batch --skip-column-names -e "SELECT password_hash FROM admin_users WHERE is_active <> 0 ORDER BY id ASC LIMIT 1;")"
+  fi
   [[ -n "${password_hash}" ]] || return 0
   [[ "${password_hash}" != "${BOOTSTRAP_ADMIN_HASH_PREFIX}"* ]] || return 0
   [[ "${password_hash}" =~ ^scrypt\$[0-9a-fA-F]{32}\$[0-9a-fA-F]{128}$ ]] || return 0

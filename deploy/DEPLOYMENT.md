@@ -88,7 +88,7 @@ sudo journalctl -u firefly-react -n 200 --no-pager
 
 Nginx 提供 `<APP_DIR>/apps/web/dist` 的静态文件，并把 `/api/` 反代到本机 API。站点配置以临时文件生成，先经独立及完整 `nginx -t` 校验，失败会恢复旧配置。普通上传请求体限制为 64 MB。管理员网盘 `POST /api/admin/drive` 单独放宽到约 2.15 GB，并把上传和下载代理超时放到 2 小时。下载响应关闭代理缓冲，且不设置 `limit_rate`。
 
-当站点域名是 `blog.fjayson.com`，或部署配置里写了 `FILES_DOMAIN` 时，脚本会额外启用文件下载站。公开链接形如 `https://files.fjayson.com/<token>/<文件名>`，由该站点反代到 `/api/files/`。证书通过 webroot 单独申请；申请失败时下载站保持 HTTP，不回滚博客站点。
+当站点域名是 `blog.fjayson.com`，或部署配置里写了 `FILES_DOMAIN` 时，脚本会额外启用文件下载站。公开链接形如 `https://files.fjayson.com/<token>/<文件名>`，由该站点反代到 `/api/files/`。证书通过 webroot 单独申请；申请失败时下载站的源站保持 HTTP，不回滚博客站点。博客已经启用 HTTPS 时，公开链接仍写成 HTTPS。更新时只要存在任一启用中的管理员且密码不是初始占位哈希，就不会要求把用户名改回 `admin`。
 
 ## HTTPS、webroot 与自动续期
 
