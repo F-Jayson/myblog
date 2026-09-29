@@ -789,6 +789,8 @@ server {
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 1d;
+    # The CDN's HTTP/3 path stalls response bodies. Tell browsers to drop any cached QUIC endpoint.
+    add_header Alt-Svc clear always;
 
     root ${APP_DIR}/apps/web/dist;
     index index.html;
