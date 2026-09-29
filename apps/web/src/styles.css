@@ -212,6 +212,25 @@ img { display: block; max-width: 100%; }
 .clipboard-share-body .markdown-body { margin-top:0; }
 .clipboard-share-body.is-code { padding:.75rem; background:#0f1c1a; }
 .clipboard-share-footer { margin-top:1rem; color:var(--faint-text); font-size:.72rem; }
+.highlight-page { width:100%; }
+.highlight-controls { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:.7rem; }
+.highlight-controls label, .highlight-editor-wrap { display:grid; gap:.32rem; color:var(--muted-text); font-size:.76rem; font-weight:700; }
+.highlight-controls select, .highlight-editor-wrap textarea { width:100%; border:1px solid var(--line); border-radius:.5rem; outline:0; background:var(--btn-bg); color:var(--deep-text); font-size:.8rem; }
+.highlight-controls select { min-height:2.25rem; padding:0 .6rem; }
+.highlight-hint, .highlight-message { margin:.65rem 0 0; color:var(--faint-text); font-size:.75rem; line-height:1.55; }
+.highlight-actions { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin-top:.75rem; }
+.highlight-work { display:grid; gap:.85rem; margin-top:.85rem; }
+.highlight-editor-wrap textarea { min-height:22rem; padding:.75rem .8rem; resize:vertical; font:500 .82rem/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; background:transparent; }
+.highlight-preview-wrap { min-width:0; }
+.highlight-preview-label { display:flex; align-items:center; justify-content:space-between; gap:.6rem; margin-bottom:.35rem; color:var(--muted-text); font-size:.76rem; font-weight:700; }
+.highlight-preview-label em { color:var(--primary); font-style:normal; font-size:.72rem; }
+.highlight-preview { max-height:32rem; overflow:auto; border:1px solid #e4e4e4; border-radius:.55rem; background:#fff; }
+.highlight-line { display:grid; grid-template-columns:auto minmax(0, 1fr); min-height:1.55em; }
+.highlight-gutter { padding:0 .55rem; font:500 .72rem/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; text-align:right; user-select:none; }
+.highlight-code { margin:0; padding:0 .7rem 0 0; overflow:visible; font:500 12.5px/1.55 Consolas, "Courier New", monospace; white-space:pre; }
+.highlight-preview.is-screen { border-color:#24332f; }
+@media (min-width: 1400px) { .highlight-work { grid-template-columns:minmax(0, .92fr) minmax(0, 1.08fr); } .highlight-editor-wrap textarea { min-height:28rem; } .highlight-preview { max-height:none; } }
+@media (max-width: 800px) { .highlight-controls { grid-template-columns:1fr; } .highlight-actions .user-tool-button { flex:1; } }
 @media (max-width:700px) {
 	.clipboard-share-header { flex-direction:column; }
 	.clipboard-share-actions { width:100%; }

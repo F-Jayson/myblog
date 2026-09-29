@@ -32,7 +32,12 @@ export function ClipboardRenderedBody({ content, contentType, language }: { cont
 	if (contentType === "code") {
 		const html = highlightedCode(content, language);
 		const lines = Math.max(1, content.split("\n").length);
-		return <div className="clipboard-code-frame">
+		return <div className="clipboard-code-frame" onCopy={(event) => {
+			const text = document.getSelection()?.toString();
+			if (!text) return;
+			event.preventDefault();
+			event.clipboardData?.setData("text/plain", text);
+		}}>
 			<div className="clipboard-code-gutter" aria-hidden="true">{Array.from({ length: lines }, (_, index) => <span key={index}>{index + 1}</span>)}</div>
 			<pre className="clipboard-code"><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
 		</div>;
