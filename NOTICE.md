@@ -34,6 +34,7 @@ Firefly 要求：若参考或使用了其组件设计和相关代码，请注明
 | mysql2 | MySQL 客户端与连接池 | MIT |
 | Zod | API 输入校验 | MIT |
 | dotenv | 环境变量加载 | BSD-2-Clause |
+| ip2region.js | 评论与审计的离线 IP 属地查询 | Apache-2.0 OR MIT |
 | Vite / @vitejs/plugin-react | 前端构建工具 | MIT |
 | TypeScript | 类型检查与编译 | Apache-2.0 |
 | tsx | TypeScript 开发运行器 | MIT |

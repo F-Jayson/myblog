@@ -2,6 +2,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import nodemailer from "nodemailer";
 import { pool } from "./db.js";
+import { displayIpLocation, locateIp } from "./ipLocation.js";
 import type { AuthorActivityDay, AuthorLearningProgress, AuthorProfile, AuthorProfileDetails, AuthorSkill, Category, Changelog, ClipboardContentType, FeedbackEntry, FriendLink, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, Tag, UserClipboard, UserStorageItem } from "./types.js";
 
 const ADMIN_PASSWORD_KEYLEN = 64;
@@ -574,7 +575,7 @@ function mapPublicComment(row: RowDataPacket) {
 		authorEmail: row.author_email ? String(row.author_email) : null,
 		avatar: String(row.author_avatar || row.avatar_url || randomPresetAvatar()),
 		createdAt: String(row.created_at),
-		ipLocation: row.ip_location ? String(row.ip_location) : row.client_ip ? String(row.client_ip) : null,
+		ipLocation: row.ip_location ? String(row.ip_location) : null,
 		ip: row.client_ip ? String(row.client_ip) : null,
 		device: row.client_device ? String(row.client_device) : null,
 		browser: row.client_browser ? String(row.client_browser) : null,
@@ -594,7 +595,11 @@ export async function getComments(postId: number) {
 		 WHERE c.post_id = ? AND c.status = 'approved' ORDER BY c.created_at ASC, c.id ASC`,
 		[postId],
 	);
-	const flat = rows.map(mapPublicComment);
+	const flat = await Promise.all(rows.map(async (row) => {
+		const mapped = mapPublicComment(row);
+		mapped.ipLocation = await displayIpLocation(row.ip_location, row.client_ip);
+		return mapped;
+	}));
 	type PublicComment = ReturnType<typeof mapPublicComment> & { children: PublicComment[] };
 	const byId = new Map<number, PublicComment>();
 	const roots: PublicComment[] = [];
@@ -1506,7 +1511,7 @@ export async function listAdminComments(status?: string) {
 	const clause = validStatus ? "WHERE c.status = ?" : "";
 	if (validStatus) params.push(validStatus);
 	const [rows] = await pool.query<RowDataPacket[]>(`SELECT c.id, c.post_id AS postId, c.user_id AS userId, c.parent_id AS parentId, c.author_name AS authorName, c.author_email AS authorEmail, c.author_avatar AS authorAvatar, c.body, c.status, c.created_at AS createdAt, c.client_ip AS ip, c.ip_location AS ipLocation, c.client_device AS device, c.client_browser AS browser, c.client_ua AS userAgent, c.is_admin AS isAdmin, p.title AS postTitle FROM comments c LEFT JOIN posts p ON p.id = c.post_id ${clause} ORDER BY c.created_at DESC`, params);
-	return rows.map((row) => ({ id: Number(row.id), postId: row.postId ? Number(row.postId) : null, userId: row.userId ? Number(row.userId) : null, parentId: row.parentId ? Number(row.parentId) : null, authorName: String(row.authorName), authorEmail: row.authorEmail ? String(row.authorEmail) : null, authorAvatar: row.authorAvatar ? String(row.authorAvatar) : null, body: String(row.body), status: String(row.status), createdAt: String(row.createdAt), ip: row.ip ? String(row.ip) : null, ipLocation: row.ipLocation ? String(row.ipLocation) : null, device: row.device ? String(row.device) : null, browser: row.browser ? String(row.browser) : null, userAgent: row.userAgent ? String(row.userAgent) : null, isAdmin: Boolean(Number(row.isAdmin)), postTitle: row.postTitle ? String(row.postTitle) : null }));
+	return Promise.all(rows.map(async (row) => ({ id: Number(row.id), postId: row.postId ? Number(row.postId) : null, userId: row.userId ? Number(row.userId) : null, parentId: row.parentId ? Number(row.parentId) : null, authorName: String(row.authorName), authorEmail: row.authorEmail ? String(row.authorEmail) : null, authorAvatar: row.authorAvatar ? String(row.authorAvatar) : null, body: String(row.body), status: String(row.status), createdAt: String(row.createdAt), ip: row.ip ? String(row.ip) : null, ipLocation: await displayIpLocation(row.ipLocation, row.ip), device: row.device ? String(row.device) : null, browser: row.browser ? String(row.browser) : null, userAgent: row.userAgent ? String(row.userAgent) : null, isAdmin: Boolean(Number(row.isAdmin)), postTitle: row.postTitle ? String(row.postTitle) : null })));
 }
 
 export async function updateCommentStatus(id: number, status: "pending" | "approved" | "spam") {
@@ -1861,7 +1866,6 @@ function mapAuditLogRow(row: RowDataPacket) {
 		id: String(row.id),
 		createdAt: String(row.createdAt ?? row.created_at ?? ""),
 		ip: normalizeAuditIp(row.ip),
-		ipLocation: null,
 		method: auditNullableText(row.method, AUDIT_TEXT_LIMITS.method),
 		path: auditNullableText(row.path, AUDIT_TEXT_LIMITS.path),
 		action: auditNullableText(row.action ?? row.action_name, AUDIT_TEXT_LIMITS.action),
@@ -1966,9 +1970,9 @@ export async function listAuditLogs(filters: AuditLogFilters = {}) {
 			"INNER JOIN audit_logs latestLog ON latestLog.id = grouped.latestId ORDER BY grouped.latestId DESC",
 			[...params, limit, offset],
 		);
-		const groups = groupRows.map((row) => ({
+		const groups = await Promise.all(groupRows.map(async (row) => ({
 			ip: normalizeAuditIp(row.ip),
-			ipLocation: null,
+			ipLocation: await locateIp(normalizeAuditIp(row.ip)),
 			hitCount: Number(row.hitCount ?? 0),
 			errorCount: Number(row.errorCount ?? 0),
 			avgDurationMs: Number.isFinite(Number(row.avgDurationMs)) ? Math.round(Number(row.avgDurationMs)) : 0,
@@ -1981,8 +1985,8 @@ export async function listAuditLogs(filters: AuditLogFilters = {}) {
 			latestActorRole: auditNullableText(row.latestActorRole, AUDIT_TEXT_LIMITS.actorRole),
 			latestActorAccount: auditNullableText(row.latestActorAccount, AUDIT_TEXT_LIMITS.actorAccount),
 			latestClientName: auditNullableText(row.latestClientName, AUDIT_TEXT_LIMITS.clientName),
-			recent: [] as ReturnType<typeof mapAuditLogRow>[],
-		}));
+			recent: [] as Array<ReturnType<typeof mapAuditLogRow> & { ipLocation: Awaited<ReturnType<typeof locateIp>> }>,
+		})));
 		if (groups.length) {
 			const ips = groups.map((item) => item.ip);
 			const placeholders = ips.map(() => "?").join(", ");
@@ -1994,11 +1998,11 @@ export async function listAuditLogs(filters: AuditLogFilters = {}) {
 				"WHERE rowNumber <= ? ORDER BY id DESC",
 				[...params, ...ips, groupLogPreviewLimit],
 			);
-			const recentByIp = new Map<string, ReturnType<typeof mapAuditLogRow>[]>();
+			const recentByIp = new Map<string, Array<ReturnType<typeof mapAuditLogRow> & { ipLocation: Awaited<ReturnType<typeof locateIp>> }>>();
 			for (const row of recentRows) {
 				const ip = normalizeAuditIp(row.ip);
 				const list = recentByIp.get(ip) ?? [];
-				list.push(mapAuditLogRow(row));
+				list.push({ ...mapAuditLogRow(row), ipLocation: await locateIp(ip) });
 				recentByIp.set(ip, list);
 			}
 			for (const group of groups) group.recent = recentByIp.get(group.ip) ?? [];
@@ -2012,7 +2016,11 @@ export async function listAuditLogs(filters: AuditLogFilters = {}) {
 		"client_ua AS clientUa, duration_ms AS durationMs FROM audit_logs " + whereSql + " ORDER BY id DESC LIMIT ? OFFSET ?",
 		[...params, limit, offset],
 	);
-	return { page, limit, groupLogPreviewLimit, total: summary.totalLogs, viewMode, summary, items: rows.map(mapAuditLogRow) };
+	const items = await Promise.all(rows.map(async (row) => {
+		const mapped = mapAuditLogRow(row);
+		return { ...mapped, ipLocation: await locateIp(mapped.ip) };
+	}));
+	return { page, limit, groupLogPreviewLimit, total: summary.totalLogs, viewMode, summary, items };
 }
 
 export async function clearAuditLogs() {

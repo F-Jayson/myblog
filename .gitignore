@@ -9,6 +9,7 @@ screenshots/
 *.tsbuildinfo
 .firefly-run/
 .compiler-work/
+data/ip2region/*.xdb
 .edge-check/
 .edge-cdp*/
 

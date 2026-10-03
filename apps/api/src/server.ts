@@ -16,6 +16,7 @@ import { pool } from "./db.js";
 import { getDatabaseStatus, pingDatabase } from "./db.js";
 import { getProcessSnapshot, getRequestMetrics, recordRequest } from "./telemetry.js";
 import { CompilerError, executeCompiler, formatCompilerCode, listCompilerLanguages } from "./compiler.js";
+import { locateIp, warmIpLocation } from "./ipLocation.js";
 import {
 	archivePosts,
 	authenticateAdmin,
@@ -1377,6 +1378,8 @@ app.post("/api/comments", requireFeature("commentsEnabled", "评论功能当前�
 		if (!req.commentUser && !settings.allowAnonymous) { res.status(401).json({ error: "请登录后发表评论" }); return; }
 		const ua = req.header("user-agent") ?? "";
 		const user = req.commentUser;
+		const clientIp = requestClientIp(req);
+		const ipLocation = await locateIp(clientIp);
 		const id = await createComment({
 			postId: input.postId,
 			userId: user?.id,
@@ -1386,8 +1389,8 @@ app.post("/api/comments", requireFeature("commentsEnabled", "评论功能当前�
 			body: input.body,
 			parentId: input.parentId,
 			images: input.images,
-			clientIp: requestClientIp(req),
-			ipLocation: "",
+			clientIp,
+			ipLocation: ipLocation.type === "unknown" || ipLocation.type === "invalid" ? "" : ipLocation.label,
 			clientBrowser: requestClientBrowser(ua),
 			clientOs: requestClientOs(ua),
 			clientDevice: requestClientDevice(ua),
@@ -2596,6 +2599,7 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 const server = app.listen(config.port, config.host, () => {
 	const displayHost = config.host.includes(":") ? `[${config.host}]` : config.host;
 	console.log(`Firefly API listening on http://${displayHost}:${config.port}`);
+	warmIpLocation();
 });
 server.requestTimeout = 2 * 60 * 60 * 1000;
 server.timeout = 0;

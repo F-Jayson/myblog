@@ -19,6 +19,9 @@ importers:
       express:
         specifier: ^5.1.0
         version: 5.2.1
+      ip2region.js:
+        specifier: ^3.1.8
+        version: 3.1.8
       multer:
         specifier: ^2.2.0
         version: 2.2.0
@@ -1179,6 +1182,9 @@ packages:
 
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
+
+  ip2region.js@3.1.8:
+    resolution: {integrity: sha512-USvUDme5Gyh0qs21Xpjb7QAXN5eRFDe5ZNtPVk3Ns2wYOc5eLIC57zPXZYBbN9kvA2yK0dBpJImArf1ekobSNA==}
 
   ipaddr.js@1.9.1:
     resolution: {integrity: sha512-0KI/607xoxSToH7GjN1FfSbLoU0+btTicjsQSWQlh/hZykN8KpmMf7uYwPW3R+akZ6R/w18ZlXSHBYXiYUPO3g==}
@@ -2797,6 +2803,8 @@ snapshots:
       safer-buffer: 2.1.2
 
   inherits@2.0.4: {}
+
+  ip2region.js@3.1.8: {}
 
   ipaddr.js@1.9.1: {}
 
