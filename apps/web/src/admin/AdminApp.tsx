@@ -3542,6 +3542,7 @@ type FeatureSettings = {
   userCenterEnabled: boolean;
   publicResourcesEnabled: boolean;
   compilerEnabled: boolean;
+  gamesEnabled: boolean;
 };
 
 const DEFAULT_FEATURE_SETTINGS: FeatureSettings = {
@@ -3553,6 +3554,7 @@ const DEFAULT_FEATURE_SETTINGS: FeatureSettings = {
   userCenterEnabled: true,
   publicResourcesEnabled: true,
   compilerEnabled: true,
+  gamesEnabled: true,
 };
 
 const FEATURE_SETTINGS_ENDPOINT = "/api/admin/features";
@@ -3570,6 +3572,7 @@ const FEATURE_SETTINGS_FIELDS: Array<{
   { key: "userCenterEnabled", label: "用户中心", description: "开放头像、昵称、账号、邮箱和密码等个人资料管理。" },
   { key: "publicResourcesEnabled", label: "公开资源访问", description: "允许通过公开链接访问图床图片和剪贴板内容。" },
   { key: "compilerEnabled", label: "在线编译器", description: "允许已登录用户在容器沙箱中运行、格式化和调试代码。" },
+  { key: "gamesEnabled", label: "小游戏", description: "开放贪吃蛇、扫雷、2048 和斐波那契 2048，并记录排行榜。" },
 ];
 
 function normalizeFeatureSettings(value: unknown): FeatureSettings {

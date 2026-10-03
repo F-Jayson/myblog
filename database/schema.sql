@@ -540,3 +540,32 @@ CREATE TABLE IF NOT EXISTS admin_drive_uploads (
   INDEX idx_admin_drive_upload_owner (owner_admin_id, updated_at),
   CONSTRAINT fk_admin_drive_upload_owner FOREIGN KEY (owner_admin_id) REFERENCES admin_users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Guest players keep a stable display name and avatar across games. Logged-in
+-- scores point at comment_users instead, so nickname and avatar stay current.
+CREATE TABLE IF NOT EXISTS game_guests (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  token_hash CHAR(64) NOT NULL,
+  display_name VARCHAR(32) NOT NULL,
+  avatar_url VARCHAR(512) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_game_guest_token (token_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One best record per player per board. Minesweeper stores elapsed milliseconds
+-- and sorts upward; the other games store points and sort downward.
+CREATE TABLE IF NOT EXISTS game_records (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  game_key VARCHAR(40) NOT NULL,
+  user_id BIGINT UNSIGNED NULL,
+  guest_id BIGINT UNSIGNED NULL,
+  score BIGINT NOT NULL,
+  lower_is_better TINYINT(1) NOT NULL DEFAULT 0,
+  duration_ms INT UNSIGNED NOT NULL DEFAULT 0,
+  achieved_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_game_record_user (game_key, user_id),
+  UNIQUE KEY uniq_game_record_guest (game_key, guest_id),
+  INDEX idx_game_records_rank (game_key, score, duration_ms, achieved_at),
+  CONSTRAINT fk_game_records_user FOREIGN KEY (user_id) REFERENCES comment_users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_game_records_guest FOREIGN KEY (guest_id) REFERENCES game_guests(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

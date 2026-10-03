@@ -16,6 +16,7 @@ import { pool } from "./db.js";
 import { getDatabaseStatus, pingDatabase } from "./db.js";
 import { getProcessSnapshot, getRequestMetrics, recordRequest } from "./telemetry.js";
 import { CompilerError, executeCompiler, formatCompilerCode, listCompilerLanguages } from "./compiler.js";
+import { gameRouter } from "./games.js";
 import { locateIp, warmIpLocation } from "./ipLocation.js";
 import {
 	archivePosts,
@@ -207,6 +208,7 @@ function auditExcludedRequest(method: string, path: string) {
 	// mutating audit actions (such as clear) observable through the same hook.
 	if ((method === "GET" || method === "HEAD") && (path === "/api/admin/audit-logs" || path === "/api/admin/audit")) return true;
 	if ((method === "GET" || method === "HEAD") && path.startsWith("/api/files/")) return true;
+	if ((method === "GET" || method === "HEAD") && path.startsWith("/api/games")) return true;
 	return false;
 }
 function requestClientIp(req: Request) {
@@ -267,6 +269,7 @@ const FEATURE_KEYS = [
 	"userCenterEnabled",
 	"publicResourcesEnabled",
 	"compilerEnabled",
+	"gamesEnabled",
 ] as const;
 type FeatureKey = typeof FEATURE_KEYS[number];
 type FeatureSettings = Record<FeatureKey, boolean>;
@@ -279,6 +282,7 @@ const DEFAULT_FEATURE_SETTINGS: FeatureSettings = {
 	userCenterEnabled: true,
 	publicResourcesEnabled: true,
 	compilerEnabled: true,
+	gamesEnabled: true,
 };
 
 function normalizeFeatureSettings(value: unknown): FeatureSettings {
@@ -438,6 +442,8 @@ app.post("/api/admin/logout", requireAdmin, async (req, res, next) => {
 app.get("/api/admin/me", requireAdmin, (req: RequestWithAdmin, res) => {
 	res.json({ user: req.adminUser ?? null });
 });
+
+app.use("/api/games", requireFeature("gamesEnabled", "小游戏当前已关闭"), loadCommentUser, gameRouter);
 
 app.get("/api/features", async (_req, res, next) => {
 	try {
@@ -1593,6 +1599,7 @@ const featureSettingsInput = z.object({
 	userCenterEnabled: z.boolean().optional(),
 	publicResourcesEnabled: z.boolean().optional(),
 	compilerEnabled: z.boolean().optional(),
+	gamesEnabled: z.boolean().optional(),
 }).strict();
 
 app.get("/api/admin/features", requireAdmin, async (_req, res, next) => {

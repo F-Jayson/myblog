@@ -1,6 +1,6 @@
 import { fallbackPosts, fallbackPostsFor, fallbackSite } from "./data";
 import { absoluteMediaUrl } from "./media";
-import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, ClipboardContentType, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
+import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, ClipboardContentType, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, GameLeaderboard, GameScoreResult, GamesHome, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const UPLOAD_TIMEOUT_MS = 120_000;
@@ -10,6 +10,33 @@ const requestCache = new Map<string, Promise<unknown>>();
 const retryAfter = new Map<string, number>();
 
 const USER_TOKEN_KEY = "firefly-user-token";
+const GAME_GUEST_KEY = "firefly-game-guest";
+
+export function ensureGameGuestToken() {
+	try {
+		const existing = localStorage.getItem(GAME_GUEST_KEY)?.trim().toLowerCase() ?? "";
+		if (/^[a-f0-9]{32,64}$/u.test(existing)) return existing;
+		const bytes = new Uint8Array(16);
+		const cryptoApi = globalThis.crypto;
+		if (cryptoApi?.getRandomValues) cryptoApi.getRandomValues(bytes);
+		else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+		const token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+		localStorage.setItem(GAME_GUEST_KEY, token);
+		return token;
+	} catch {
+		return "";
+	}
+}
+
+function gameGuestHeader(): Record<string, string> {
+	try {
+		const token = localStorage.getItem(GAME_GUEST_KEY)?.trim().toLowerCase() ?? "";
+		if (!/^[a-f0-9]{32,64}$/u.test(token)) return {};
+		return { "x-game-guest": token };
+	} catch {
+		return {};
+	}
+}
 
 function userToken() {
 	try { return localStorage.getItem(USER_TOKEN_KEY) ?? ""; } catch { return ""; }
@@ -359,7 +386,7 @@ export const api = {
 		} catch { return fallback; }
 	},
 	async features(): Promise<FeatureSettings> {
-		const fallback: FeatureSettings = { commentsEnabled: true, registrationEnabled: true, loginEnabled: true, imageHostingEnabled: true, clipboardEnabled: true, userCenterEnabled: true, publicResourcesEnabled: true, compilerEnabled: true };
+		const fallback: FeatureSettings = { commentsEnabled: true, registrationEnabled: true, loginEnabled: true, imageHostingEnabled: true, clipboardEnabled: true, userCenterEnabled: true, publicResourcesEnabled: true, compilerEnabled: true, gamesEnabled: true };
 		try {
 			const result = await request<Partial<FeatureSettings>>("/api/features");
 			return { ...fallback, ...result };
@@ -444,6 +471,21 @@ export const api = {
 				publishedAt: post.publishedAt ?? "",
 				category: post.category?.name ?? null,
 			})));
+	},
+	async gamesHome() {
+		return request<GamesHome>("/api/games", { headers: gameGuestHeader() });
+	},
+	async gameLeaderboard(game: string, difficulty?: string) {
+		const query = difficulty ? `?difficulty=${encodeURIComponent(difficulty)}` : "";
+		return request<GameLeaderboard>(`/api/games/${encodeURIComponent(game)}/leaderboard${query}`, { headers: gameGuestHeader() });
+	},
+	async recordGameScore(game: string, input: { score: number; durationMs: number; difficulty?: "beginner" | "intermediate" | "expert" }) {
+		return request<GameScoreResult>(`/api/games/${encodeURIComponent(game)}/scores`, {
+			method: "POST",
+			headers: { ...gameGuestHeader(), "content-type": "application/json" },
+			body: JSON.stringify(input),
+			keepalive: true,
+		});
 	},
 	async fetchWallpaper(): Promise<{ blob: Blob; filename: string }> {
 		const controller = new AbortController();

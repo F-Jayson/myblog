@@ -11,7 +11,7 @@ const COMMENT_PASSWORD_KEYLEN = 64;
 const COMMENT_SESSION_DAYS = 30;
 const COMMENT_EMAIL_CODE_TTL_MINUTES = 15;
 export const USER_SPACE_LIMIT_BYTES = 30 * 1024 * 1024;
-const PRESET_AVATAR_PATHS = Object.freeze([
+export const PRESET_AVATAR_PATHS = Object.freeze([
 	...Array.from({ length: 14 }, (_, index) => `/avatars/头像 女孩 (${index}).svg`),
 	...Array.from({ length: 7 }, (_, index) => `/avatars/头像 男孩 (${index}).svg`),
 ]);
@@ -174,8 +174,13 @@ function verifyCommentPassword(password: string, encoded: string) {
 	} catch { return false; }
 }
 
-function randomPresetAvatar() {
+export function randomPresetAvatar() {
 	return PRESET_AVATAR_PATHS[Math.floor(Math.random() * PRESET_AVATAR_PATHS.length)] ?? PRESET_AVATAR_PATHS[0];
+}
+
+export function presetAvatarForSeed(seed: number) {
+	const index = Math.abs(Math.trunc(seed)) % PRESET_AVATAR_PATHS.length;
+	return PRESET_AVATAR_PATHS[index] ?? PRESET_AVATAR_PATHS[0];
 }
 
 function mapCommentUser(row: RowDataPacket) {

@@ -37,6 +37,7 @@ const defaultFeatures: FeatureSettings = {
 	userCenterEnabled: true,
 	publicResourcesEnabled: true,
 	compilerEnabled: true,
+	gamesEnabled: true,
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);

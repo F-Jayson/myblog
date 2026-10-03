@@ -125,6 +125,41 @@ export type FeatureSettings = {
 	userCenterEnabled: boolean;
 	publicResourcesEnabled: boolean;
 	compilerEnabled: boolean;
+	gamesEnabled: boolean;
+};
+
+export type GamePlayer = {
+	playerKey: string;
+	name: string;
+	avatar: string;
+	isGuest: boolean;
+};
+
+export type GameLeaderEntry = GamePlayer & {
+	rank: number;
+	score: number;
+	durationMs: number;
+	achievedAt: string;
+};
+
+export type GameLeaderboard = {
+	game: string;
+	difficulty: string | null;
+	lowerIsBetter: boolean;
+	entries: GameLeaderEntry[];
+	me: GameLeaderEntry | null;
+	player: GamePlayer | null;
+};
+
+export type GameScoreResult = {
+	saved: boolean;
+	improved: boolean;
+	leaderboard: GameLeaderboard;
+};
+
+export type GamesHome = {
+	games: Array<{ id: string; title: string; lowerIsBetter: boolean; difficulties?: string[] }>;
+	player: GamePlayer | null;
 };
 
 export type CompilerLanguage = {
