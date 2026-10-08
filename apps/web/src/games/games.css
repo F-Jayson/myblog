@@ -19,25 +19,42 @@
 .game-button:disabled { opacity: .55; cursor: default; }
 .game-toolbar, .game-status { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
 .game-status b { font-variant-numeric: tabular-nums; }
-.game-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(15rem, 20rem); gap: 1rem; align-items: start; }
+.game-layout { display: block; }
 .game-stage, .game-board-card, .game-rank { padding: .9rem; border: 1px solid var(--line); border-radius: .9rem; background: color-mix(in srgb, var(--card-bg-solid) 88%, transparent); }
 .game-stage { display: grid; gap: .75rem; justify-items: center; }
 .snake-board, .number-board { touch-action: none; user-select: none; }
-.snake-board { display: grid; gap: 1px; width: min(100%, 28rem); padding: .35rem; border-radius: .8rem; background: color-mix(in srgb, var(--deep-text) 8%, var(--btn-bg)); }
+.snake-board { display: grid; gap: 2px; width: min(100%, 38rem); padding: .4rem; border-radius: .8rem; background: color-mix(in srgb, var(--deep-text) 8%, var(--btn-bg)); }
 .snake-cell { aspect-ratio: 1; border-radius: .18rem; background: color-mix(in srgb, var(--card-bg-solid) 70%, transparent); }
 .snake-cell.is-snake { background: color-mix(in srgb, var(--primary) 62%, #0b3b2c); }
 .snake-cell.is-head { background: var(--primary); box-shadow: inset 0 0 0 2px #073126; }
 .snake-cell.is-food { background: #ef6a4a; border-radius: 50%; }
-.number-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .45rem; width: min(100%, 26rem); padding: .55rem; border-radius: .9rem; background: color-mix(in srgb, var(--deep-text) 12%, var(--btn-bg)); }
-.number-tile { display: grid; place-items: center; aspect-ratio: 1; overflow: hidden; border-radius: .55rem; background: color-mix(in srgb, var(--card-bg-solid) 55%, transparent); color: var(--deep-text); font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.number-board { --tile-gap: .5rem; position: relative; width: min(100%, 34rem); aspect-ratio: 1; padding: .55rem; border-radius: .7rem; background: #bbada0; }
+.number-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--tile-gap); width: 100%; height: 100%; }
+.number-slot { border-radius: .4rem; background: rgba(238, 228, 218, .35); }
+.number-tile { position: absolute; top: .55rem; left: .55rem; width: calc((100% - 1.1rem - 1.5rem) / 4); height: calc((100% - 1.1rem - 1.5rem) / 4); transition: transform .15s ease-in; z-index: 1; }
+.number-tile.is-pop { z-index: 2; }
+.number-tile.is-ghost { z-index: 1; animation: tile-fade .16s linear forwards; }
+@keyframes tile-fade { to { opacity: 0; } }
+.number-face { display: grid; place-items: center; width: 100%; height: 100%; overflow: hidden; border-radius: .4rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.number-face.is-fresh { animation: tile-in .15s ease; }
+.number-face.is-pop { animation: tile-pop .16s ease; }
+@keyframes tile-in { from { transform: scale(.15); } to { transform: scale(1); } }
+@keyframes tile-pop { 0% { transform: scale(.86); } 55% { transform: scale(1.14); } 100% { transform: scale(1); } }
 .mine-scroll { width: 100%; overflow-x: auto; }
-.mine-board { display: grid; width: max-content; margin: 0 auto; border: 1px solid var(--line); background: var(--line); gap: 1px; }
-.mine-cell { display: grid; place-items: center; width: 1.7rem; height: 1.7rem; padding: 0; background: color-mix(in srgb, var(--btn-bg) 80%, var(--card-bg-solid)); color: var(--deep-text); font-size: .82rem; font-weight: 800; }
-.mine-cell.is-open { background: var(--card-bg-solid); }
-.mine-cell.is-mine { background: #c94c4c; color: white; }
+.mine-board { --mine-cell: 1.85rem; display: grid; width: max-content; margin: 0 auto; padding: .35rem; border: 0; border-radius: .55rem; background: #3f624f; gap: 2px; }
+.mine-cell { display: grid; place-items: center; width: var(--mine-cell); height: var(--mine-cell); margin: 0; padding: 0; border-radius: .22rem; background: #d7efe3; box-shadow: inset 0 1px 0 #fff, inset 0 -2px 0 #7eae96; color: #17372a; font-size: .82rem; font-weight: 800; }
+.mine-cell.is-b:not(.is-open) { background: #b7dcc8; }
+.mine-cell.is-open { background: #f7fbf8; box-shadow: inset 0 0 0 1px #d5e6dc; }
+.mine-cell.is-open.is-b { background: #e7f3ec; }
+.mine-cell.is-mine { background: #e15b4c; box-shadow: none; color: white; }
+.mine-cell.is-flag { background: #ffe4c4; box-shadow: inset 0 -2px 0 #e2a36a; color: #c2410c; }
+.mine-cell.is-question { background: #e5f0ff; box-shadow: inset 0 -2px 0 #8eb0db; color: #1d4e89; }
 .mine-cell.is-bad { outline: 2px solid #c94c4c; }
-.mine-cell.n1 { color: #2563eb; } .mine-cell.n2 { color: #15803d; } .mine-cell.n3 { color: #dc2626; } .mine-cell.n4 { color: #1d4ed8; }
-.mine-cell.n5 { color: #b45309; } .mine-cell.n6 { color: #0f766e; } .mine-cell.n7 { color: #7c3aed; } .mine-cell.n8 { color: #44403c; }
+.mine-cell.n1 { color: #1d4ed8; } .mine-cell.n2 { color: #15803d; } .mine-cell.n3 { color: #dc2626; } .mine-cell.n4 { color: #1e3a8a; }
+.mine-cell.n5 { color: #b45309; } .mine-cell.n6 { color: #0f766e; } .mine-cell.n7 { color: #6d28d9; } .mine-cell.n8 { color: #292524; }
+.mine-custom { display: flex; flex-wrap: wrap; align-items: end; gap: .55rem .7rem; }
+.mine-custom label { display: grid; gap: .2rem; color: var(--muted-text); font-size: .75rem; font-weight: 700; }
+.mine-custom input { width: 5.2rem; min-height: 2.2rem; padding: 0 .5rem; border: 1px solid var(--line); border-radius: .55rem; background: var(--btn-bg); color: var(--deep-text); }
 .game-pad { display: grid; justify-items: center; gap: .35rem; }
 .game-pad div { display: flex; gap: .35rem; }
 .game-pad button { width: 3rem; height: 2.5rem; border-radius: .65rem; background: var(--btn-bg); font-weight: 800; }
@@ -55,14 +72,20 @@
 .game-button.is-selected { outline: 2px solid color-mix(in srgb, var(--primary) 65%, transparent); color: var(--primary); }
 .game-card:focus-visible, .game-button:focus-visible, .mine-cell:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .game-rank .game-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mine-cell.is-flag { color: #c2410c; }
 .game-stage { width: 100%; }
+.game-rank-fallback { display: none; margin-top: 1rem; }
+.game-sidebar-rank h3 { margin-top: 0; }
 @container game (max-width: 36rem) {
-	.game-layout, .game-grid { grid-template-columns: 1fr; }
+	.game-grid { grid-template-columns: 1fr; }
 }
 .game-shell { container-type: inline-size; container-name: game; }
+@media (min-width: 768px) and (max-width: 1279px) {
+	.game-rank-fallback { display: block; }
+}
 @media (max-width: 720px) {
-	.game-grid, .game-layout { grid-template-columns: 1fr; }
+	.game-grid { grid-template-columns: 1fr; }
 	.game-heading { align-items: stretch; flex-direction: column; }
-	.mine-cell { width: 1.55rem; height: 1.55rem; }
+	.mine-board { --mine-cell: 1.55rem; }
+	.number-board { --tile-gap: .35rem; padding: .4rem; }
+	.number-tile { top: .4rem; left: .4rem; width: calc((100% - .8rem - 1.05rem) / 4); height: calc((100% - .8rem - 1.05rem) / 4); }
 }

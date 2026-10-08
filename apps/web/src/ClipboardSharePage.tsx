@@ -1,7 +1,7 @@
-import { Check, Copy, Eye, FileCode2, FileText, Link as LinkIcon } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { Check, Copy, Eye, FileCode2, FileText, KeyRound, Link as LinkIcon } from "lucide-react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "./api";
+import { api, type PublicResourcePayload } from "./api";
 import { clipboardLanguage, highlightedCode } from "./codeHighlight";
 import type { ClipboardContentType } from "./types";
 
@@ -45,37 +45,115 @@ export function ClipboardRenderedBody({ content, contentType, language }: { cont
 	return <pre className="clipboard-plain">{content}</pre>;
 }
 
+function clipboardFromPayload(payload: PublicResourcePayload): PublicClipboard {
+	return {
+		title: String(payload.title || "未命名剪贴板"),
+		content: String(payload.content ?? ""),
+		contentType: payload.contentType === "markdown" || payload.contentType === "code" ? payload.contentType : "text",
+		language: String(payload.language ?? ""),
+		byteSize: Number(payload.byteSize ?? 0),
+		viewCount: Number(payload.viewCount ?? 0),
+		updatedAt: String(payload.updatedAt ?? ""),
+	};
+}
+
 export default function ClipboardSharePage() {
 	const { token = "" } = useParams();
 	const [item, setItem] = useState<PublicClipboard | null>(null);
+	const [imageUrl, setImageUrl] = useState("");
+	const [imageName, setImageName] = useState("图片");
+	const [locked, setLocked] = useState(false);
+	const [password, setPassword] = useState("");
 	const [error, setError] = useState("");
 	const [loading, setLoading] = useState(true);
+	const [unlocking, setUnlocking] = useState(false);
 	const [copied, setCopied] = useState<"content" | "link" | "">("");
+	const [passwordProtected, setPasswordProtected] = useState(false);
+	const objectUrl = useRef("");
 	const shareUrl = useMemo(() => token ? api.clipboardShareUrl(token) : "", [token]);
+
+	const releaseImage = () => {
+		if (!objectUrl.current) return;
+		URL.revokeObjectURL(objectUrl.current);
+		objectUrl.current = "";
+	};
+
+	const showImage = (blob: Blob, name?: string, protectedImage = false) => {
+		releaseImage();
+		const url = URL.createObjectURL(blob);
+		objectUrl.current = url;
+		setImageUrl(url);
+		setImageName(name || "图片");
+		setItem(null);
+		setLocked(false);
+		setPasswordProtected(protectedImage);
+	};
+
+	useEffect(() => () => releaseImage(), []);
 
 	useEffect(() => {
 		let active = true;
 		setLoading(true);
 		setError("");
 		setItem(null);
+		setLocked(false);
+		setPassword("");
+		setImageUrl("");
+		setPasswordProtected(false);
+		releaseImage();
 		if (!token) { setLoading(false); setError("分享链接无效"); return () => { active = false; }; }
-		api.publicClipboard(token).then((payload) => {
+		api.inspectPublicResource(token).then(async (result) => {
 			if (!active) return;
-			if (payload?.type && payload.type !== "clipboard") { setError("这个链接不是公开剪贴板"); return; }
-			setItem({
-				title: String(payload.title || "未命名剪贴板"),
-				content: String(payload.content ?? ""),
-				contentType: payload.contentType === "markdown" || payload.contentType === "code" ? payload.contentType : "text",
-				language: String(payload.language ?? ""),
-				byteSize: Number(payload.byteSize ?? 0),
-				viewCount: Number(payload.viewCount ?? 0),
-				updatedAt: String(payload.updatedAt ?? ""),
-			});
+			if (result.payload?.locked) { setLocked(true); return; }
+			if (result.blob) { showImage(result.blob, result.payload?.name); return; }
+			if (!result.payload || result.status < 200 || result.status >= 300) {
+				setError(result.payload?.error || "公开内容不存在或已关闭");
+				return;
+			}
+			if (result.payload.type === "image") {
+				const file = await api.publicResourceFile(token, result.payload.accessGrant || "");
+				if (active) showImage(file, result.payload.name, Boolean(result.payload.hasAccessPassword));
+				return;
+			}
+			if (result.payload.type && result.payload.type !== "clipboard") { setError("这个链接不是公开内容"); return; }
+			setItem(clipboardFromPayload(result.payload));
 		}).catch((caught) => {
-			if (active) setError(caught instanceof Error ? caught.message : "公开剪贴板不存在或已关闭");
+			if (active) setError(caught instanceof Error ? caught.message : "公开内容不存在或已关闭");
 		}).finally(() => { if (active) setLoading(false); });
 		return () => { active = false; };
 	}, [token]);
+
+	const unlock = async (event: FormEvent) => {
+		event.preventDefault();
+		if (!token) return;
+		setUnlocking(true);
+		setError("");
+		try {
+			const payload = await api.unlockPublicResource(token, password);
+			if (payload.locked || payload.content === undefined && payload.type !== "image") {
+				setLocked(true);
+				setItem(null);
+				setError(payload.error || "需要访问密码");
+				return;
+			}
+			if (payload.type === "image") {
+				const file = await api.publicResourceFile(token, payload.accessGrant || "");
+				showImage(file, payload.name, true);
+				return;
+			}
+			setItem(clipboardFromPayload(payload));
+			setLocked(false);
+			setPasswordProtected(Boolean(payload.hasAccessPassword));
+		} catch (caught) {
+			setLocked(true);
+			setItem(null);
+			setImageUrl("");
+			releaseImage();
+			setError(caught instanceof Error ? caught.message : "访问密码不正确");
+		} finally {
+			setUnlocking(false);
+		}
+	};
 
 	const copy = async (kind: "content" | "link") => {
 		const value = kind === "link" ? shareUrl : item?.content ?? "";
@@ -89,8 +167,10 @@ export default function ClipboardSharePage() {
 		}
 	};
 
-	if (loading) return <section className="card content-card clipboard-share"><p className="page-lead">正在打开公开剪贴板...</p></section>;
-	if (error || !item) return <section className="card empty-state clipboard-share"><FileText size={29} /><h2>无法打开这份剪贴板</h2><p>{error || "公开剪贴板不存在或已关闭。"}</p><Link to="/">返回首页</Link></section>;
+	if (loading) return <section className="card content-card clipboard-share"><p className="page-lead">正在打开分享内容...</p></section>;
+	if (locked && !item && !imageUrl) return <section className="card content-card clipboard-share"><form className="access-gate" onSubmit={(event) => void unlock(event)}><KeyRound size={28} /><h2>需要访问密码</h2><p>只有输入正确的密码才能看到内容。</p><input type="password" value={password} maxLength={64} autoComplete="off" placeholder="访问密码" onChange={(event) => setPassword(event.target.value)} /><button className="user-tool-button primary" type="submit" disabled={unlocking || !password}>{unlocking ? "正在验证..." : "查看内容"}</button>{error ? <p className="user-tool-error">{error}</p> : null}</form></section>;
+	if (imageUrl) return <article className="card content-card clipboard-share"><header className="clipboard-share-header"><div><span className="tool-eyebrow">SHARED IMAGE</span><h2>{imageName}</h2></div><div className="clipboard-share-actions"><button type="button" className="user-tool-button primary" onClick={() => void copy("link")}>{copied === "link" ? <Check size={15} /> : <LinkIcon size={15} />}{copied === "link" ? "链接已复制" : "复制链接"}</button></div></header><img className="clipboard-share-image" src={imageUrl} alt={imageName} /><footer className="clipboard-share-footer">{passwordProtected ? "由站内图床分享 · 刷新后需要重新输入访问密码" : "由站内图床分享"}</footer></article>;
+	if (error || !item) return <section className="card empty-state clipboard-share"><FileText size={29} /><h2>无法打开分享内容</h2><p>{error || "公开内容不存在或已关闭。"}</p><Link to="/">返回首页</Link></section>;
 
 	const updated = item.updatedAt.replace("T", " ").slice(0, 16);
 

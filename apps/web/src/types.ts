@@ -57,6 +57,7 @@ export type UserStorageItem = {
  sizeBytes?: number;
  isPublic?: boolean;
  publicToken?: string | null;
+ hasAccessPassword?: boolean;
  accessCount?: number;
  createdAt?: string;
  updatedAt?: string;
@@ -74,6 +75,7 @@ export type UserClipboard = {
  isPublic?: boolean;
  publicToken?: string | null;
  publicUrl?: string | null;
+ hasAccessPassword?: boolean;
  accessCount?: number;
  createdAt?: string;
  updatedAt?: string;

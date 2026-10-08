@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, HardDrive, RefreshCw, Search, Trash2, Upload } from "lucide-react";
+import { Check, Copy, HardDrive, KeyRound, RefreshCw, Search, Trash2, Upload } from "lucide-react";
 
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN ?? "").trim().replace(/\/+$/u, "");
 const AUTH_EXPIRED_EVENT = "firefly-admin-auth-expired";
@@ -13,6 +13,7 @@ type DriveFile = {
   downloadCount: number;
   downloadUrl: string;
   createdAt: string;
+  hasAccessPassword?: boolean;
 };
 
 type DriveList = {
@@ -105,6 +106,9 @@ export default function AdminDrive() {
   const [message, setMessage] = useState("");
   const [latestUrl, setLatestUrl] = useState("");
   const [copiedKey, setCopiedKey] = useState("");
+  const [uploadPassword, setUploadPassword] = useState("");
+  const [passwordFor, setPasswordFor] = useState<number | null>(null);
+  const [passwordDraft, setPasswordDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const uploadingRef = useRef(false);
 
@@ -209,6 +213,11 @@ export default function AdminDrive() {
       setMessage("单个文件不能超过 2GB。");
       return;
     }
+    const password = uploadPassword;
+    if (password && (password.length < 4 || password.length > 64)) {
+      setMessage("访问密码需要 4 到 64 位。");
+      return;
+    }
     uploadingRef.current = true;
     setUploading(true);
     setPhase("uploading");
@@ -236,8 +245,13 @@ export default function AdminDrive() {
         }
         setPhase("saving");
         setProgress(99);
-        const saved = await driveRequest<DriveFile>("/api/admin/drive/sessions/" + uploadId + "/complete", { method: "POST" });
+        const saved = await driveRequest<DriveFile>("/api/admin/drive/sessions/" + uploadId + "/complete", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(password ? { accessPassword: password } : {}),
+        });
         uploadId = "";
+        setUploadPassword("");
         setLatestUrl(saved.downloadUrl);
         setMessage("");
         setItems((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
@@ -255,6 +269,26 @@ export default function AdminDrive() {
         setPhase("uploading");
       }
     })();
+  };
+
+  const savePassword = async (item: DriveFile, clear: boolean) => {
+    if (!clear && (passwordDraft.length < 4 || passwordDraft.length > 64)) {
+      setMessage("访问密码需要 4 到 64 位。");
+      return;
+    }
+    try {
+      const saved = await driveRequest<DriveFile>("/api/admin/drive/" + item.id, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(clear ? { clearAccessPassword: true } : { accessPassword: passwordDraft }),
+      });
+      setItems((current) => current.map((entry) => entry.id === saved.id ? saved : entry));
+      setPasswordDraft("");
+      setPasswordFor(null);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "访问密码更新失败。");
+    }
   };
 
   const remove = async (item: DriveFile) => {
@@ -275,7 +309,7 @@ export default function AdminDrive() {
         <div>
           <span className="fa-kicker">SHARED FILES</span>
           <h1>文件网盘</h1>
-          <p>上传任意文件后获得公开下载链接。拿到链接的人都可以下载，单个文件不超过 2GB，下载不限速。</p>
+          <p>上传任意文件后获得下载链接。可以给文件设置访问密码，未设置时拿到链接即可下载；设置后必须输入正确密码才能下载。单个文件不超过 2GB，下载不限速。</p>
         </div>
       </div>
       {message ? <div className="fa-error fa-page-error">{message}</div> : null}
@@ -315,6 +349,10 @@ export default function AdminDrive() {
           <span className="fa-drive-drop-icon">{uploading ? <RefreshCw size={22} className="fa-spin" /> : <Upload size={22} />}</span>
           <strong>{uploading ? (phase === "saving" ? "正在保存" : "正在上传") : "选择文件或拖到这里"}</strong>
           <small>任意格式，最大 {bytesText(maxBytes)}</small>
+        </label>
+        <label className="fa-drive-password">
+          访问密码（可选）
+          <input type="password" value={uploadPassword} maxLength={64} autoComplete="new-password" disabled={uploading} placeholder="留空则链接可直接下载，至少 4 位" onChange={(event) => setUploadPassword(event.target.value)} />
         </label>
         {uploading ? (
           <div className="fa-drive-progress-wrap">
@@ -374,7 +412,7 @@ export default function AdminDrive() {
                 <tr key={item.id}>
                   <td>
                     <div className="fa-drive-name">
-                      <strong title={item.name}>{item.name}</strong>
+                      <strong title={item.name}><span>{item.name}</span>{item.hasAccessPassword ? <em>需密码</em> : null}</strong>
                       <a href={item.downloadUrl} target="_blank" rel="noreferrer" title={item.downloadUrl}>{item.downloadUrl}</a>
                     </div>
                   </td>
@@ -383,6 +421,9 @@ export default function AdminDrive() {
                   <td>{dateText(item.createdAt)}</td>
                   <td>
                     <div className="fa-inline-actions">
+                      <button type="button" title="访问密码" onClick={() => { setPasswordFor(passwordFor === item.id ? null : item.id); setPasswordDraft(""); }}>
+                        <KeyRound size={15} />
+                      </button>
                       <button type="button" title="复制链接" onClick={() => void copyLink(String(item.id), item.downloadUrl)}>
                         {copiedKey === String(item.id) ? <Check size={15} /> : <Copy size={15} />}
                       </button>
@@ -392,7 +433,19 @@ export default function AdminDrive() {
                     </div>
                   </td>
                 </tr>
-              )) : (
+              )).flatMap((row, index) => {
+                const item = visible[index];
+                if (!item || passwordFor !== item.id) return [row];
+                return [row, <tr key={`password-${item.id}`}>
+                  <td colSpan={5}>
+                    <form className="fa-drive-password-row" onSubmit={(event) => { event.preventDefault(); void savePassword(item, false); }}>
+                      <input type="password" value={passwordDraft} maxLength={64} autoComplete="new-password" placeholder={item.hasAccessPassword ? "输入新的访问密码" : "设置访问密码"} onChange={(event) => setPasswordDraft(event.target.value)} />
+                      <button type="submit">保存密码</button>
+                      {item.hasAccessPassword ? <button type="button" onClick={() => void savePassword(item, true)}>清除密码</button> : null}
+                    </form>
+                  </td>
+                </tr>];
+              }) : (
                 <tr><td colSpan={5}><div className="fa-empty"><HardDrive size={22} /><span>{keyword ? "没有匹配的文件" : "还没有上传文件"}</span></div></td></tr>
               )}
             </tbody>

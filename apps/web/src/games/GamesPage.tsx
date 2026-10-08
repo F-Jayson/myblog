@@ -1,5 +1,5 @@
-import { ArrowLeft, Gamepad2, RotateCcw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { ArrowLeft, Bomb, CircleHelp, Flag, Gamepad2, RotateCcw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ensureGameGuestToken } from "../api";
 import { useAuth } from "../auth";
@@ -8,30 +8,36 @@ import type { GameLeaderboard, GamePlayer } from "../types";
 import {
 	classicCombine,
 	classicSpawn,
-	createBoard,
-	createMines,
+	createMineField,
 	createSnake,
+	createTiles,
+	customMineSetup,
+	cycleMineMark,
 	fibonacciCombine,
 	fibonacciSpawn,
-	hasMoves,
 	mineFlagCount,
 	MINE_PRESETS,
-	moveBoard,
+	moveTiles,
 	openMine,
 	queueSnakeDirection,
+	SNAKE_PRESETS,
 	stepSnake,
-	toggleMineFlag,
+	tilesHaveMoves,
 	type Combine,
 	type GameDirection,
 	type MineDifficulty,
+	type MineSetup,
 	type MineState,
+	type NumberTile,
+	type SnakeDifficulty,
 	type SnakeState,
 } from "./engine";
+import { useGameSidebar } from "./sidebarSlot";
 import "./games.css";
 
 const GAMES = [
-	{ id: "snake", title: "贪吃蛇", summary: "吃到食物得 10 分，撞墙或咬到自己就结束。", rules: "方向键、WASD、滑动或下方按键改变方向。不能直接掉头。" },
-	{ id: "minesweeper", title: "扫雷", summary: "翻开所有安全格。用时越短，排名越靠前。", rules: "第一次点击必定安全。右键或打开插旗模式标记地雷。初级 9×9、中级 16×16、高级 16×30。" },
+	{ id: "snake", title: "贪吃蛇", summary: "吃到食物得 10 分，撞墙或咬到自己就结束。", rules: "方向键、WASD、滑动或下方按键改变方向。不能直接掉头。简单棋盘更小、移动更慢，困难则相反。" },
+	{ id: "minesweeper", title: "扫雷", summary: "翻开所有安全格。用时越短，排名越靠前。", rules: "第一次点击必定安全。右键或插旗模式会在旗子、问号和空白之间切换。初级、中级、高级之外可以自定义行列和雷数，自定义成绩不计入排行榜。" },
 	{ id: "2048", title: "2048", summary: "相同数字合并成它们的和，尽量拿到更高分。", rules: "相同数字撞在一起会合成它们的和。每次滑动后会出现一个新的 2 或 4，同一次滑动里不会连锁合并。" },
 	{ id: "fibonacci", title: "斐波那契 2048", summary: "相邻斐波那契数可以合并，两个 1 合并为 2。", rules: "例如 1+2=3，2+3=5。2 不能和 2 合并。新出现的数字是 1 或 2。" },
 ] as const;
@@ -68,12 +74,30 @@ function formatRanked(lowerIsBetter: boolean, score: number) {
 	return lowerIsBetter ? formatClock(score) : formatPoints(score);
 }
 
+const CLASSIC_TILES: Record<number, { background: string; color: string }> = {
+	1: { background: "#eee4da", color: "#776e65" },
+	2: { background: "#eee4da", color: "#776e65" },
+	4: { background: "#ede0c8", color: "#776e65" },
+	8: { background: "#f2b179", color: "#f9f6f2" },
+	16: { background: "#f59563", color: "#f9f6f2" },
+	32: { background: "#f67c5f", color: "#f9f6f2" },
+	64: { background: "#f65e3b", color: "#f9f6f2" },
+	128: { background: "#edcf72", color: "#f9f6f2" },
+	256: { background: "#edcc61", color: "#f9f6f2" },
+	512: { background: "#edc850", color: "#f9f6f2" },
+	1024: { background: "#edc53f", color: "#f9f6f2" },
+	2048: { background: "#edc22e", color: "#f9f6f2" },
+};
+
+const CLASSIC_RAMP = [CLASSIC_TILES[2], CLASSIC_TILES[4], CLASSIC_TILES[8], CLASSIC_TILES[16], CLASSIC_TILES[32], CLASSIC_TILES[64], CLASSIC_TILES[128], CLASSIC_TILES[256], CLASSIC_TILES[512], CLASSIC_TILES[1024], CLASSIC_TILES[2048], { background: "#3c3a32", color: "#f9f6f2" }];
+
 function tileStyle(value: number): CSSProperties {
 	const text = String(value);
-	const level = Math.min(16, Math.max(0, Math.round(Math.log2(Math.max(1, value)))));
-	const light = Math.max(16, 90 - level * 4.5);
-	const fontSize = text.length >= 8 ? ".68rem" : text.length >= 6 ? ".82rem" : text.length >= 4 ? "1.05rem" : text.length >= 3 ? "1.3rem" : "1.6rem";
-	return { background: `hsl(152 46% ${light}%)`, color: light > 58 ? "#073126" : "#f4fff9", fontSize };
+	const known = CLASSIC_TILES[value];
+	const level = Math.min(CLASSIC_RAMP.length - 1, Math.max(0, Math.round(Math.log2(Math.max(2, value))) - 1));
+	const palette = known ?? CLASSIC_RAMP[level] ?? CLASSIC_TILES[2];
+	const fontSize = text.length >= 8 ? ".68rem" : text.length >= 6 ? ".82rem" : text.length >= 4 ? "1.05rem" : text.length >= 3 ? "1.35rem" : "1.7rem";
+	return { background: palette.background, color: palette.color, fontSize };
 }
 
 function PlayerFace({ name, avatar }: { name: string; avatar: string }) {
@@ -173,8 +197,8 @@ function useLeaveScore(read: () => { score: number; durationMs: number } | null,
 	return publish;
 }
 
-function SnakeGame({ onReport, onRestart, message, messageError, best }: GamePanelProps) {
-	const [state, setState] = useState<SnakeState>(() => createSnake());
+function SnakeGame({ onReport, onRestart, message, messageError, best, width, height, intervalMs }: GamePanelProps & { width: number; height: number; intervalMs: number }) {
+	const [state, setState] = useState<SnakeState>(() => createSnake(width, height));
 	const [paused, setPaused] = useState(false);
 	const [clock, setClock] = useState(0);
 	const hidden = usePageHidden();
@@ -203,13 +227,13 @@ function SnakeGame({ onReport, onRestart, message, messageError, best }: GamePan
 
 	useEffect(() => {
 		if (frozen) return;
-		const id = window.setInterval(() => setState((current) => stepSnake(current)), 140);
+		const id = window.setInterval(() => setState((current) => stepSnake(current)), intervalMs);
 		const clockId = window.setInterval(() => setClock((value) => value + 1), 200);
 		return () => {
 			window.clearInterval(id);
 			window.clearInterval(clockId);
 		};
-	}, [frozen]);
+	}, [frozen, intervalMs]);
 
 	const publish = useLeaveScore(() => {
 		const current = stateRef.current;
@@ -261,37 +285,54 @@ function SnakeGame({ onReport, onRestart, message, messageError, best }: GamePan
 }
 
 function NumberGame({ combine, spawn, onReport, onRestart, message, messageError, best }: GamePanelProps & { combine: Combine; spawn: (random: () => number) => number }) {
-	const [snapshot, setSnapshot] = useState(() => ({ board: createBoard(spawn), score: 0, over: false }));
+	const [tiles, setTiles] = useState<NumberTile[]>(() => createTiles(spawn));
+	const [score, setScore] = useState(0);
+	const [over, setOver] = useState(false);
 	const [clock, setClock] = useState(0);
 	const started = useRef(performance.now());
-	const snapshotRef = useRef(snapshot);
-	snapshotRef.current = snapshot;
+	const tilesRef = useRef(tiles);
+	const scoreRef = useRef(score);
+	const overRef = useRef(over);
+	tilesRef.current = tiles;
+	scoreRef.current = score;
+	overRef.current = over;
 	const elapsed = useCallback(() => Math.max(1, Math.round(performance.now() - started.current)), []);
 
 	useEffect(() => {
-		if (snapshot.over) return;
+		if (over) return;
 		const id = window.setInterval(() => setClock((value) => value + 1), 200);
 		return () => window.clearInterval(id);
-	}, [snapshot.over]);
+	}, [over]);
+
+	useEffect(() => {
+		if (!tiles.some((tile) => tile.ghost)) return;
+		const id = window.setTimeout(() => setTiles((current) => current.filter((tile) => !tile.ghost)), 180);
+		return () => window.clearTimeout(id);
+	}, [tiles]);
 
 	const publish = useLeaveScore(() => {
-		const current = snapshotRef.current;
-		if (current.score <= 0) return null;
-		return { score: current.score, durationMs: elapsed() };
+		if (scoreRef.current <= 0) return null;
+		return { score: scoreRef.current, durationMs: elapsed() };
 	}, onReport);
 
 	useEffect(() => {
-		if (snapshot.over) publish();
-	}, [snapshot.over, publish]);
+		if (over) publish();
+	}, [over, publish]);
 
 	const move = useCallback((direction: GameDirection) => {
-		setSnapshot((current) => {
-			if (current.over) return current;
-			const moved = moveBoard(current.board, direction, combine, spawn);
-			if (!moved.moved) return current;
-			const score = current.score + moved.scoreGained;
-			return { board: moved.board, score, over: !hasMoves(moved.board, combine) };
+		if (overRef.current) return;
+		const moved = moveTiles(tilesRef.current, direction, combine, spawn);
+		if (!moved.moved) return;
+		tilesRef.current = moved.tiles;
+		setTiles(moved.tiles);
+		setScore((current) => {
+			const next = current + moved.scoreGained;
+			scoreRef.current = next;
+			return next;
 		});
+		const ended = !tilesHaveMoves(moved.tiles, combine);
+		overRef.current = ended;
+		if (ended) setOver(true);
 	}, [combine, spawn]);
 	useDirectionKeys(move);
 	const swipe = useSwipe(move);
@@ -299,22 +340,25 @@ function NumberGame({ combine, spawn, onReport, onRestart, message, messageError
 
 	return <div className="game-stage">
 		<div className="game-status">
-			<span>得分 <b>{formatPoints(snapshot.score)}</b></span>
+			<span>得分 <b>{formatPoints(score)}</b></span>
 			<span>用时 <b>{formatClock(elapsed())}</b></span>
 			{best ? <span>最好 <b>{best}</b></span> : null}
 			<button className="game-button" type="button" onClick={onRestart}><RotateCcw size={15} />再来一局</button>
 		</div>
 		<div className="number-board" role="application" aria-label="数字棋盘" {...swipe}>
-			{snapshot.board.flat().map((value, index) => <div key={index} className="number-tile" style={value ? tileStyle(value) : undefined}>{value || ""}</div>)}
+			<div className="number-grid" aria-hidden="true">{Array.from({ length: 16 }, (_, index) => <span className="number-slot" key={index} />)}</div>
+			{tiles.map((tile) => <div key={tile.id} className={`number-tile${tile.ghost ? " is-ghost" : ""}${tile.pop ? " is-pop" : ""}`} style={{ transform: `translate(calc(${tile.col} * (100% + var(--tile-gap))), calc(${tile.row} * (100% + var(--tile-gap))))` }}>
+				<div key={`${tile.value}-${tile.pop ? "pop" : "still"}`} className={`number-face${tile.pop ? " is-pop" : ""}${tile.fresh ? " is-fresh" : ""}`} style={tileStyle(tile.value)}>{tile.value}</div>
+			</div>)}
 		</div>
-		{snapshot.over ? <div className="game-overlay"><strong>无法继续移动</strong><span>本局 {formatPoints(snapshot.score)}</span><button className="game-button primary" type="button" onClick={onRestart}>再来一局</button></div> : null}
+		{over ? <div className="game-overlay"><strong>无法继续移动</strong><span>本局 {formatPoints(score)}</span><button className="game-button primary" type="button" onClick={onRestart}>再来一局</button></div> : null}
 		<ControlPad onDirection={move} />
 		<GameMessage text={message} error={messageError} />
 	</div>;
 }
 
-function MineGame({ difficulty, onReport, onRestart, message, messageError, best }: GamePanelProps & { difficulty: MineDifficulty }) {
-	const [state, setState] = useState<MineState>(() => createMines(difficulty));
+function MineGame({ setup, ranked, onReport, onRestart, message, messageError, best }: GamePanelProps & { setup: MineSetup; ranked: boolean }) {
+	const [state, setState] = useState<MineState>(() => createMineField(setup));
 	const [flagMode, setFlagMode] = useState(false);
 	const [clock, setClock] = useState(0);
 	const startAt = useRef<number | null>(null);
@@ -338,7 +382,7 @@ function MineGame({ difficulty, onReport, onRestart, message, messageError, best
 
 	const publish = useLeaveScore(() => {
 		const current = stateRef.current;
-		if (!current.won) return null;
+		if (!ranked || !current.won) return null;
 		const durationMs = elapsed();
 		if (durationMs <= 0) return null;
 		return { score: 0, durationMs };
@@ -351,7 +395,7 @@ function MineGame({ difficulty, onReport, onRestart, message, messageError, best
 	function reveal(index: number, flag: boolean) {
 		const cell = state.cells[index];
 		if (!state.started && !flag && cell && !cell.open && !cell.flag && startAt.current == null) startAt.current = performance.now();
-		setState((current) => flag ? toggleMineFlag(current, index) : openMine(current, index));
+		setState((current) => flag ? cycleMineMark(current, index) : openMine(current, index));
 	}
 
 	const flags = mineFlagCount(state);
@@ -363,19 +407,21 @@ function MineGame({ difficulty, onReport, onRestart, message, messageError, best
 			<span>剩余 <b>{state.mines - flags}</b></span>
 			<span>用时 <b>{formatClock(elapsed())}</b></span>
 			{best ? <span>最好 <b>{best}</b></span> : null}
-			<button className={`game-button${flagMode ? " is-selected" : ""}`} type="button" aria-pressed={flagMode} onClick={() => setFlagMode((value) => !value)}>插旗</button>
+			<button className={`game-button${flagMode ? " is-selected" : ""}`} type="button" aria-pressed={flagMode} onClick={() => setFlagMode((value) => !value)}><Flag size={14} />插旗 / 问号</button>
 			<button className="game-button" type="button" onClick={onRestart}><RotateCcw size={15} />再来一局</button>
 		</div>
 		<div className="mine-scroll">
-			<div className="mine-board" role="grid" aria-label={`${MINE_PRESETS[difficulty].label}扫雷`} style={{ gridTemplateColumns: `repeat(${state.cols}, 1.7rem)` }}>
+			<div className="mine-board" role="grid" aria-label={`${setup.label}扫雷`} style={{ gridTemplateColumns: `repeat(${state.cols}, var(--mine-cell))` }}>
 				{state.cells.map((cell, index) => {
-					const className = ["mine-cell", cell.open ? "is-open" : "", cell.mine && cell.open ? "is-mine" : "", cell.flag ? "is-flag" : "", cell.open && cell.near ? `n${cell.near}` : ""].filter(Boolean).join(" ");
-					const label = cell.flag ? "旗" : cell.open && cell.mine ? "雷" : cell.open && cell.near ? String(cell.near) : "";
-					return <button key={index} type="button" className={className} disabled={ended && !cell.open && !cell.flag} onClick={() => reveal(index, flagMode)} onContextMenu={(event) => { event.preventDefault(); if (!ended) reveal(index, true); }}>{label}</button>;
+					const shade = (index % state.cols + Math.floor(index / state.cols)) % 2 === 0 ? "is-a" : "is-b";
+					const className = ["mine-cell", shade, cell.open ? "is-open" : "", cell.mine && cell.open ? "is-mine" : "", cell.flag ? "is-flag" : "", cell.question && !cell.open ? "is-question" : "", cell.open && cell.near ? `n${cell.near}` : ""].filter(Boolean).join(" ");
+					const mark = cell.flag ? <Flag size={14} aria-label="旗子" /> : cell.question && !cell.open ? <CircleHelp size={14} aria-label="问号" /> : cell.open && cell.mine ? <Bomb size={14} aria-label="地雷" /> : cell.open && cell.near ? String(cell.near) : "";
+					return <button key={index} type="button" className={className} disabled={ended && !cell.open && !cell.flag && !cell.question} onClick={() => reveal(index, flagMode)} onContextMenu={(event) => { event.preventDefault(); if (!ended) reveal(index, true); }}>{mark}</button>;
 				})}
 			</div>
 		</div>
-		{ended ? <div className="game-overlay"><strong>{state.won ? "排雷成功" : "踩到地雷了"}</strong>{state.won ? null : <span>这次不记入排行榜</span>}<button className="game-button primary" type="button" onClick={onRestart}>再来一局</button></div> : null}
+		{ended ? <div className="game-overlay"><strong>{state.won ? "排雷成功" : "踩到地雷了"}</strong>{state.won && ranked ? null : <span>{ranked ? "这次不记入排行榜" : "自定义难度不计入排行榜"}</span>}<button className="game-button primary" type="button" onClick={onRestart}>再来一局</button></div> : null}
+		{ranked ? null : <p className="game-note">当前是自定义棋盘，成绩只留在这一局。</p>}
 		<GameMessage text={message} error={messageError} />
 	</div>;
 }
@@ -415,22 +461,51 @@ function LeaderList({ board }: { board: GameLeaderboard }) {
 	</ol>;
 }
 
+function LeaderboardBody({ loading, error, board, note }: { loading: boolean; error: string; board: GameLeaderboard | null; note: string }) {
+	return <>
+		{note ? <p className="game-note">{note}</p> : null}
+		{loading && !board ? <p className="game-note">正在加载排行榜...</p> : null}
+		{error ? <p className="game-message is-error">{error}</p> : null}
+		{board ? <LeaderList board={board} /> : null}
+	</>;
+}
+
+export function GameSidebarRank() {
+	const slot = useGameSidebar();
+	const data = slot?.data;
+	return <section className="card widget game-rank game-sidebar-rank">
+		<h3>{data?.title || "排行榜"}</h3>
+		{data ? <LeaderboardBody loading={data.loading} error={data.error} board={data.board} note={data.note} /> : <p className="game-note">选择一款游戏后，排行榜会显示在这里。</p>}
+	</section>;
+}
+
 export default function GamesPage() {
 	const params = useParams();
 	const gameId = isGameId(params.gameId) ? params.gameId : undefined;
 	const unknownGame = Boolean(params.gameId) && !gameId;
 	const { user, loading: authLoading, features, openAuth } = useAuth();
+	const sidebar = useGameSidebar();
+	const setSidebar = sidebar?.setData;
 	const [player, setPlayer] = useState<GamePlayer | null>(null);
 	const [board, setBoard] = useState<GameLeaderboard | null>(null);
-	const [difficulty, setDifficulty] = useState<MineDifficulty>("beginner");
+	const [mineLevel, setMineLevel] = useState<MineDifficulty | "custom">("beginner");
+	const [mineSetup, setMineSetup] = useState<MineSetup>(MINE_PRESETS.beginner);
+	const [customRows, setCustomRows] = useState(12);
+	const [customCols, setCustomCols] = useState(12);
+	const [customMines, setCustomMines] = useState(20);
+	const [customOpen, setCustomOpen] = useState(false);
+	const [customError, setCustomError] = useState("");
+	const [snakeLevel, setSnakeLevel] = useState<SnakeDifficulty>("normal");
 	const [round, setRound] = useState(0);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
 	const [notice, setNotice] = useState("");
 	const [noticeError, setNoticeError] = useState(false);
 	const meta = GAMES.find((game) => game.id === gameId);
-	const viewRef = useRef({ gameId, difficulty });
-	viewRef.current = { gameId, difficulty };
+	const rankedMine = mineLevel !== "custom";
+	const rankKey = gameId === "minesweeper" ? (rankedMine ? mineLevel : "custom") : gameId === "snake" ? snakeLevel : "";
+	const viewRef = useRef({ gameId, rankKey });
+	viewRef.current = { gameId, rankKey };
 
 	useEffect(() => {
 		if (authLoading || !features.gamesEnabled) return;
@@ -438,13 +513,16 @@ export default function GamesPage() {
 		const controller = new AbortController();
 		setLoading(true);
 		setError("");
+		const skipBoard = gameId === "minesweeper" && !rankedMine;
 		const task = !gameId || unknownGame
 			? api.gamesHome().then((result) => { if (!controller.signal.aborted) setPlayer(result.player); })
-			: api.gameLeaderboard(gameId, gameId === "minesweeper" ? difficulty : undefined).then((result) => {
-				if (controller.signal.aborted) return;
-				setBoard(result);
-				setPlayer(result.player);
-			});
+			: skipBoard
+				? Promise.resolve().then(() => { if (!controller.signal.aborted) setBoard(null); })
+				: api.gameLeaderboard(gameId, gameId === "minesweeper" ? mineLevel : gameId === "snake" ? snakeLevel : undefined).then((result) => {
+					if (controller.signal.aborted) return;
+					setBoard(result);
+					setPlayer(result.player);
+				});
 		task.catch((reason: unknown) => {
 			if (controller.signal.aborted) return;
 			const message = reason instanceof Error ? reason.message : "排行榜加载失败";
@@ -453,24 +531,24 @@ export default function GamesPage() {
 			if (!controller.signal.aborted) setLoading(false);
 		});
 		return () => controller.abort();
-	}, [authLoading, user, features.gamesEnabled, gameId, unknownGame, difficulty]);
+	}, [authLoading, user, features.gamesEnabled, gameId, unknownGame, mineLevel, snakeLevel, rankedMine]);
 
 	const report = useCallback((score: number, durationMs: number) => {
-		if (!gameId) return;
+		if (!gameId || (gameId === "minesweeper" && !rankedMine)) return;
 		const ranked = gameId === "minesweeper" ? durationMs : score;
 		if (ranked <= 0) return;
 		setNotice("正在记录成绩...");
 		setNoticeError(false);
 		const submittedGame = gameId;
-		const submittedDifficulty = difficulty;
+		const submittedKey = rankKey;
 		void api.recordGameScore(gameId, {
 			score: gameId === "minesweeper" ? 0 : Math.round(score),
 			durationMs: Math.max(0, Math.round(durationMs)),
-			difficulty: gameId === "minesweeper" ? difficulty : undefined,
+			difficulty: gameId === "minesweeper" && mineLevel !== "custom" ? mineLevel : gameId === "snake" ? snakeLevel : undefined,
 		}).then((result) => {
 			const view = viewRef.current;
 			const sameGame = view.gameId === submittedGame;
-			const sameDifficulty = submittedGame !== "minesweeper" || view.difficulty === submittedDifficulty;
+			const sameDifficulty = view.rankKey === submittedKey;
 			if (!sameGame || !sameDifficulty) return;
 			setBoard(result.leaderboard);
 			setPlayer(result.leaderboard.player);
@@ -478,16 +556,55 @@ export default function GamesPage() {
 			setNotice(result.improved ? `已记入排行榜，当前第 ${rank ?? "—"} 名` : "没有超过最好成绩");
 			setNoticeError(false);
 		}).catch((reason: unknown) => {
-			setNotice(reason instanceof Error ? reason.message : "成绩记录失败");
+			const message = reason instanceof Error ? reason.message : "成绩记录失败";
+			setNotice(/internal server error|failed to fetch|network|econnrefused|^500\b/iu.test(message) ? "网络错误，成绩没有上传成功" : message);
 			setNoticeError(true);
 		});
-	}, [gameId, difficulty]);
+	}, [gameId, rankedMine, rankKey, mineLevel, snakeLevel]);
 
 	const restart = useCallback(() => {
 		setNotice("");
 		setNoticeError(false);
 		setRound((value) => value + 1);
 	}, []);
+
+	useEffect(() => {
+		if (!setSidebar) return;
+		if (!features.gamesEnabled || unknownGame) {
+			setSidebar(null);
+			return;
+		}
+		if (!gameId || !meta) {
+			setSidebar({ title: "排行榜", loading: false, error: "", board: null, note: "选择一款游戏后，排行榜会显示在这里。" });
+			return;
+		}
+		const levelLabel = gameId === "snake" ? SNAKE_PRESETS[snakeLevel].label : gameId === "minesweeper" ? mineSetup.label : "";
+		const unranked = gameId === "minesweeper" && !rankedMine;
+		setSidebar({
+			title: levelLabel ? `${meta.title} · ${levelLabel}` : `${meta.title}排行榜`,
+			loading: unranked ? false : loading,
+			error: unranked ? "" : error,
+			board: unranked ? null : board,
+			note: unranked ? "自定义难度不计入排行榜。" : "",
+		});
+	}, [setSidebar, features.gamesEnabled, unknownGame, gameId, meta, snakeLevel, mineSetup, rankedMine, loading, error, board]);
+
+	useEffect(() => () => setSidebar?.(null), [setSidebar]);
+
+	const applyCustomMine = (event: FormEvent) => {
+		event.preventDefault();
+		const result = customMineSetup(customRows, customCols, customMines);
+		if ("error" in result) {
+			setCustomError(result.error);
+			return;
+		}
+		setCustomError("");
+		setMineLevel("custom");
+		setMineSetup(result.setup);
+		setNotice("");
+		setNoticeError(false);
+		setRound((value) => value + 1);
+	};
 
 	if (!features.gamesEnabled) {
 		return <section className="card content-card user-tool-page auth-required"><Gamepad2 size={30} /><h2>小游戏暂未开放</h2><p>管理员暂时关闭了这项功能，请稍后再试。</p></section>;
@@ -528,6 +645,8 @@ export default function GamesPage() {
 		messageError: noticeError,
 		best,
 	};
+	const snakePreset = SNAKE_PRESETS[snakeLevel];
+	const rankNote = gameId === "minesweeper" && !rankedMine ? "自定义难度不计入排行榜。" : "";
 
 	return <section className="card content-card user-tool-page game-shell">
 		<header className="game-heading">
@@ -539,19 +658,28 @@ export default function GamesPage() {
 			<Link className="game-link-button" to="/tools/games"><ArrowLeft size={16} />全部小游戏</Link>
 		</header>
 		<Identity player={player} pending={loading && !error} onLogin={() => openAuth("login")} />
-		{gameId === "minesweeper" ? <div className="game-toolbar">
-			{(["beginner", "intermediate", "expert"] as const).map((level) => <button key={level} className={`game-button${difficulty === level ? " is-selected" : ""}`} type="button" onClick={() => { setDifficulty(level); setNotice(""); setRound((value) => value + 1); }}>{MINE_PRESETS[level].label}</button>)}
+		{gameId === "snake" ? <div className="game-toolbar" role="group" aria-label="贪吃蛇难度">
+			{(Object.keys(SNAKE_PRESETS) as SnakeDifficulty[]).map((level) => <button key={level} className={`game-button${snakeLevel === level ? " is-selected" : ""}`} type="button" onClick={() => { setSnakeLevel(level); setNotice(""); setNoticeError(false); setRound((value) => value + 1); }}>{SNAKE_PRESETS[level].label}</button>)}
 		</div> : null}
+		{gameId === "minesweeper" ? <div className="game-toolbar" role="group" aria-label="扫雷难度">
+			{(["beginner", "intermediate", "expert"] as const).map((level) => <button key={level} className={`game-button${mineLevel === level ? " is-selected" : ""}`} type="button" onClick={() => { setCustomOpen(false); setMineLevel(level); setMineSetup(MINE_PRESETS[level]); setCustomError(""); setNotice(""); setNoticeError(false); setRound((value) => value + 1); }}>{MINE_PRESETS[level].label}</button>)}
+			<button className={`game-button${mineLevel === "custom" || customOpen ? " is-selected" : ""}`} type="button" onClick={() => setCustomOpen(true)}>自定义</button>
+		</div> : null}
+		{gameId === "minesweeper" && (customOpen || mineLevel === "custom") ? <form className="mine-custom" onSubmit={applyCustomMine}>
+			<label>行<input type="number" min={5} max={30} value={customRows} onChange={(event) => setCustomRows(Number(event.target.value))} /></label>
+			<label>列<input type="number" min={5} max={40} value={customCols} onChange={(event) => setCustomCols(Number(event.target.value))} /></label>
+			<label>雷<input type="number" min={1} max={Math.max(1, customRows * customCols - 1)} value={customMines} onChange={(event) => setCustomMines(Number(event.target.value))} /></label>
+			<button className="game-button primary" type="submit">开始</button>
+			{customError ? <p className="game-message is-error">{customError}</p> : <p className="game-note">行 5–30，列 5–40，雷数至少 1，并且要比格子总数少 1。</p>}
+		</form> : null}
 		<div className="game-layout">
-			{gameId === "snake" ? <SnakeGame key={round} {...panel} /> : null}
+			{gameId === "snake" ? <SnakeGame key={`${snakeLevel}-${round}`} {...panel} width={snakePreset.width} height={snakePreset.height} intervalMs={snakePreset.intervalMs} /> : null}
 			{gameId === "2048" ? <NumberGame key={round} {...panel} combine={classicCombine} spawn={classicSpawn} /> : null}
 			{gameId === "fibonacci" ? <NumberGame key={round} {...panel} combine={fibonacciCombine} spawn={fibonacciSpawn} /> : null}
-			{gameId === "minesweeper" ? <MineGame key={`${difficulty}-${round}`} {...panel} difficulty={difficulty} /> : null}
-			<aside className="game-rank">
-				<h3>排行榜</h3>
-				{loading && !board ? <p className="game-note">正在加载排行榜...</p> : null}
-				{error ? <p className="game-message is-error">{error}</p> : null}
-				{board ? <LeaderList board={board} /> : null}
+			{gameId === "minesweeper" ? <MineGame key={`${mineSetup.label}-${mineSetup.rows}-${mineSetup.cols}-${mineSetup.mines}-${round}`} {...panel} setup={mineSetup} ranked={rankedMine} /> : null}
+			<aside className="game-rank game-rank-fallback">
+				<h3>{meta.title}排行榜</h3>
+				<LeaderboardBody loading={rankedMine || gameId !== "minesweeper" ? loading : false} error={rankNote ? "" : error} board={rankNote ? null : board} note={rankNote} />
 			</aside>
 		</div>
 	</section>;

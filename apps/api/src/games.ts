@@ -15,10 +15,17 @@ type GameSpec = {
 };
 
 const MINE_DIFFICULTIES = ["beginner", "intermediate", "expert"] as const;
+const SNAKE_DIFFICULTIES = ["easy", "normal", "hard"] as const;
 type MineDifficulty = typeof MINE_DIFFICULTIES[number];
+type SnakeDifficulty = typeof SNAKE_DIFFICULTIES[number];
+const SCORE_DIFFICULTIES = [...MINE_DIFFICULTIES, ...SNAKE_DIFFICULTIES] as const;
+
+const snakeSpec: GameSpec = { lowerIsBetter: false, minScore: 10, maxScore: 5_000, minDurationMs: 80, maxDurationMs: 3_600_000, maxScorePerMs: 0.25 };
 
 const GAME_SPECS: Record<string, GameSpec> = {
-	snake: { lowerIsBetter: false, minScore: 10, maxScore: 5_000, minDurationMs: 80, maxDurationMs: 3_600_000, maxScorePerMs: 0.2 },
+	snake: snakeSpec,
+	"snake:easy": snakeSpec,
+	"snake:hard": snakeSpec,
 	"2048": { lowerIsBetter: false, minScore: 4, maxScore: 2_000_000_000, minDurationMs: 50, maxDurationMs: 7_200_000, maxScorePerMs: 5_000 },
 	fibonacci: { lowerIsBetter: false, minScore: 2, maxScore: 1_000_000_000_000_000, minDurationMs: 50, maxDurationMs: 7_200_000, maxScorePerMs: 50_000 },
 	"minesweeper:beginner": { lowerIsBetter: true, minScore: 200, maxScore: 3_600_000, minDurationMs: 200, maxDurationMs: 3_600_000, maxScorePerMs: 0 },
@@ -27,7 +34,7 @@ const GAME_SPECS: Record<string, GameSpec> = {
 };
 
 const PUBLIC_GAMES = [
-	{ id: "snake", title: "贪吃蛇", lowerIsBetter: false },
+	{ id: "snake", title: "贪吃蛇", lowerIsBetter: false, difficulties: SNAKE_DIFFICULTIES },
 	{ id: "minesweeper", title: "扫雷", lowerIsBetter: true, difficulties: MINE_DIFFICULTIES },
 	{ id: "2048", title: "2048", lowerIsBetter: false },
 	{ id: "fibonacci", title: "斐波那契 2048", lowerIsBetter: false },
@@ -36,7 +43,7 @@ const PUBLIC_GAMES = [
 const scoreInput = z.object({
 	score: z.number().int().nonnegative().max(1_000_000_000_000_000),
 	durationMs: z.number().int().nonnegative().max(7_200_000),
-	difficulty: z.enum(MINE_DIFFICULTIES).optional(),
+	difficulty: z.enum(SCORE_DIFFICULTIES).optional(),
 });
 
 type PlayerIdentity =
@@ -108,10 +115,23 @@ function duplicateEntry(error: unknown) {
 
 function gameKey(game: string, difficulty?: string) {
 	if (game === "minesweeper") {
-		const level = MINE_DIFFICULTIES.includes(difficulty as MineDifficulty) ? difficulty : "beginner";
-		return `minesweeper:${level}`;
+		const level = MINE_DIFFICULTIES.includes(difficulty as MineDifficulty) ? difficulty : "";
+		return level ? `minesweeper:${level}` : "";
+	}
+	if (game === "snake") {
+		if (!difficulty || difficulty === "normal") return "snake";
+		if (SNAKE_DIFFICULTIES.includes(difficulty as SnakeDifficulty)) return difficulty === "easy" || difficulty === "hard" ? `snake:${difficulty}` : "snake";
+		return "";
 	}
 	return GAME_SPECS[game] ? game : "";
+}
+
+function publicDifficulty(key: string) {
+	if (key.startsWith("minesweeper:")) return key.slice("minesweeper:".length);
+	if (key === "snake:easy") return "easy";
+	if (key === "snake:hard") return "hard";
+	if (key === "snake") return "normal";
+	return null;
 }
 
 function publicGame(game: string) {
@@ -250,7 +270,7 @@ async function leaderboard(key: string, player: PlayerIdentity | null) {
 	}
 	return {
 		game: publicGame(key),
-		difficulty: key.startsWith("minesweeper:") ? key.slice("minesweeper:".length) : null,
+		difficulty: publicDifficulty(key),
 		lowerIsBetter: spec.lowerIsBetter,
 		entries,
 		me,
@@ -265,7 +285,10 @@ function validateScore(key: string, score: number, durationMs: number) {
 	if (!Number.isSafeInteger(ranked) || ranked < spec.minScore || ranked > spec.maxScore) return "成绩超出可记录范围";
 	if (durationMs < spec.minDurationMs || durationMs > spec.maxDurationMs) return "游戏时长超出可记录范围";
 	if (!spec.lowerIsBetter && durationMs > 0 && score / durationMs > spec.maxScorePerMs) return "成绩与游戏时长不匹配";
-	if (key === "snake" && durationMs < score * 8) return "成绩与游戏时长不匹配";
+	if (key === "snake" || key.startsWith("snake:")) {
+		const factor = key === "snake:hard" ? 6 : 8;
+		if (durationMs < score * factor) return "成绩与游戏时长不匹配";
+	}
 	return "";
 }
 
@@ -274,22 +297,24 @@ async function saveScore(key: string, player: PlayerIdentity, score: number, dur
 	const before = await readOwnRecord(key, player);
 	const userId = player.kind === "user" ? player.id : null;
 	const guestId = player.kind === "guest" ? player.id : null;
+	// MariaDB 10.11 rejects MySQL's `VALUES (...) AS alias` row syntax, which
+	// turned every score upload into a 500. VALUES() is valid on both servers.
 	await pool.execute(
 		`INSERT INTO game_records (game_key, user_id, guest_id, score, lower_is_better, duration_ms)
-		 VALUES (?, ?, ?, ?, ?, ?) AS incoming
+		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON DUPLICATE KEY UPDATE
 		   duration_ms = IF(
-		     (game_records.lower_is_better = 0 AND (incoming.score > game_records.score OR (incoming.score = game_records.score AND incoming.duration_ms < game_records.duration_ms)))
-		     OR (game_records.lower_is_better = 1 AND (incoming.score < game_records.score OR (incoming.score = game_records.score AND incoming.duration_ms < game_records.duration_ms))),
-		     incoming.duration_ms, game_records.duration_ms),
+		     (lower_is_better = 0 AND (VALUES(score) > score OR (VALUES(score) = score AND VALUES(duration_ms) < duration_ms)))
+		     OR (lower_is_better = 1 AND (VALUES(score) < score OR (VALUES(score) = score AND VALUES(duration_ms) < duration_ms))),
+		     VALUES(duration_ms), duration_ms),
 		   achieved_at = IF(
-		     (game_records.lower_is_better = 0 AND (incoming.score > game_records.score OR (incoming.score = game_records.score AND incoming.duration_ms < game_records.duration_ms)))
-		     OR (game_records.lower_is_better = 1 AND (incoming.score < game_records.score OR (incoming.score = game_records.score AND incoming.duration_ms < game_records.duration_ms))),
-		     CURRENT_TIMESTAMP, game_records.achieved_at),
+		     (lower_is_better = 0 AND (VALUES(score) > score OR (VALUES(score) = score AND VALUES(duration_ms) < duration_ms)))
+		     OR (lower_is_better = 1 AND (VALUES(score) < score OR (VALUES(score) = score AND VALUES(duration_ms) < duration_ms))),
+		     CURRENT_TIMESTAMP, achieved_at),
 		   score = IF(
-		     (game_records.lower_is_better = 0 AND incoming.score > game_records.score)
-		     OR (game_records.lower_is_better = 1 AND incoming.score < game_records.score),
-		     incoming.score, game_records.score)`,
+		     (lower_is_better = 0 AND VALUES(score) > score)
+		     OR (lower_is_better = 1 AND VALUES(score) < score),
+		     VALUES(score), score)`,
 		[key, userId, guestId, score, spec.lowerIsBetter ? 1 : 0, durationMs],
 	);
 	const board = await leaderboard(key, player);
@@ -328,7 +353,7 @@ gameRouter.get("/:game/leaderboard", async (req, res, next) => {
 	try {
 		const game = String(req.params.game ?? "");
 		const difficulty = typeof req.query.difficulty === "string" ? req.query.difficulty : undefined;
-		const key = gameKey(game, difficulty);
+		const key = gameKey(game, game === "minesweeper" && !difficulty ? "beginner" : game === "snake" && !difficulty ? "normal" : difficulty);
 		if (!key || !GAME_SPECS[key]) {
 			res.status(404).json({ error: "没有这个小游戏" });
 			return;
@@ -348,8 +373,12 @@ gameRouter.post("/:game/scores", async (req, res, next) => {
 			res.status(404).json({ error: "没有这个小游戏" });
 			return;
 		}
-		if (game === "minesweeper" && !input.difficulty) {
+		if (game === "minesweeper" && !MINE_DIFFICULTIES.includes(input.difficulty as MineDifficulty)) {
 			res.status(400).json({ error: "请选择扫雷难度" });
+			return;
+		}
+		if (game === "snake" && input.difficulty && !SNAKE_DIFFICULTIES.includes(input.difficulty as SnakeDifficulty)) {
+			res.status(400).json({ error: "请选择贪吃蛇难度" });
 			return;
 		}
 		const player = await resolvePlayer(req);

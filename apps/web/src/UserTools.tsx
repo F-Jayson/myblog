@@ -34,12 +34,27 @@ function spaceCategoryEntries(categories: Record<string, number> = {}) {
 	return keys.map((key) => [key, Number(categories[key] ?? 0)] as const);
 }
 
+function passwordProblem(value: string) {
+	if (!value) return "";
+	if (value.length < 4) return "访问密码至少 4 位";
+	if (value.length > 64) return "访问密码不能超过 64 位";
+	return "";
+}
+
+function imageShareLink(item: UserStorageItem, canPublish: boolean) {
+	if (!item.isPublic || !item.publicToken || !canPublish) return "";
+	return item.hasAccessPassword ? api.clipboardShareUrl(item.publicToken) : publicUrl(item.publicToken);
+}
+
 export function ImageHostPage() {
 	const { user, loading: authLoading, features } = useAuth();
 	const [items, setItems] = useState<UserStorageItem[]>([]);
 	const [space, setSpace] = useState<UserSpaceStats | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState("");
+	const [uploadPassword, setUploadPassword] = useState("");
+	const [passwordFor, setPasswordFor] = useState("");
+	const [passwordDraft, setPasswordDraft] = useState("");
 	const fileRef = useRef<HTMLInputElement>(null);
 	const allowed = Boolean(user && !authLoading && features.userCenterEnabled && features.imageHostingEnabled);
 	const canPublish = features.publicResourcesEnabled;
@@ -65,10 +80,13 @@ export function ImageHostPage() {
 	const upload = async (file?: File) => {
 		if (!file) return;
 		if (!file.type.startsWith("image/")) { setError("请选择图片文件"); return; }
+		const invalidPassword = passwordProblem(uploadPassword);
+		if (invalidPassword) { setError(invalidPassword); return; }
 		setBusy(true);
 		setError("");
 		try {
-			await api.uploadUserStorage(file, file.name, true);
+			await api.uploadUserStorage(file, file.name, true, uploadPassword || undefined);
+			setUploadPassword("");
 			await load();
 		} catch (e) {
 			setError(e instanceof Error ? e.message : "上传失败");
@@ -94,7 +112,20 @@ export function ImageHostPage() {
 			setError(e instanceof Error ? e.message : "删除失败");
 		}
 	};
-	return <RequireLogin requires={["userCenterEnabled", "imageHostingEnabled"]} featureLabel="图床"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">USER TOOLS</span><h2><FileImage size={22}/> 图床</h2><p>图片与头像等数据共享 30MB 用户空间。新上传默认公开，可在列表中改为私有。</p></div><Link to="/user/space" className="user-tool-link">空间管理</Link></header>{space ? <SpaceBar stats={space}/> : null}<div className="tool-upload"><input ref={fileRef} hidden type="file" accept="image/*" onChange={e => { void upload(e.target.files?.[0]); e.currentTarget.value=""; }}/><button type="button" className="user-tool-button primary" disabled={busy} onClick={() => fileRef.current?.click()}><Upload size={16}/> {busy ? "上传中..." : "选择图片上传"}</button></div>{error ? <p className="user-tool-error">{error}</p> : null}<div className="tool-list">{items.length ? items.map(item => { const link = item.isPublic && item.publicToken && canPublish ? publicUrl(item.publicToken) : ""; const preview = storagePreviewUrl(item); return <article className="tool-item" key={item.id}><div className="tool-item-preview">{preview ? <AuthImage src={preview} alt={item.name || "图片"} fallback={<FileImage/>} /> : <FileImage/>}</div><div className="tool-item-main"><strong>{item.name || "未命名图片"}</strong><small>{formatBytes(item.sizeBytes)} · <Eye size={13}/> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}</small>{link ? <div className="tool-public-link"><input readOnly value={link} /></div> : null}</div><div className="tool-item-actions"><button type="button" title={link ? "复制公开链接" : "公开后可复制链接"} disabled={!link} onClick={() => { if (link) void navigator.clipboard?.writeText(link); }}><Copy size={15}/></button><button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : item.isPublic ? "设为私有" : "公开访问"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15}/></button><button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15}/></button></div></article>; }) : <p className="tool-empty">还没有上传图片。</p>}</div></section></RequireLogin>;
+	const saveImagePassword = async (item: UserStorageItem, clear: boolean) => {
+		const invalidPassword = clear ? "" : passwordProblem(passwordDraft);
+		if (!clear && (!passwordDraft || invalidPassword)) { setError(invalidPassword || "请输入访问密码"); return; }
+		setError("");
+		try {
+			await api.updateUserStorage(item.id, clear ? { clearAccessPassword: true } : { accessPassword: passwordDraft });
+			setPasswordDraft("");
+			setPasswordFor("");
+			await load();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "访问密码更新失败");
+		}
+	};
+	return <RequireLogin requires={["userCenterEnabled", "imageHostingEnabled"]} featureLabel="图床"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">USER TOOLS</span><h2><FileImage size={22}/> 图床</h2><p>图片与头像等数据共享 30MB 用户空间。新上传默认公开。设置访问密码后，别人必须输入正确密码才能看到图片。</p></div><Link to="/user/space" className="user-tool-link">空间管理</Link></header>{space ? <SpaceBar stats={space}/> : null}<div className="tool-upload"><input ref={fileRef} hidden type="file" accept="image/*" onChange={e => { void upload(e.target.files?.[0]); e.currentTarget.value=""; }}/><label className="tool-password-field">访问密码<input type="password" value={uploadPassword} maxLength={64} autoComplete="new-password" placeholder="可选，至少 4 位" onChange={(event) => setUploadPassword(event.target.value)} /></label><button type="button" className="user-tool-button primary" disabled={busy} onClick={() => fileRef.current?.click()}><Upload size={16}/> {busy ? "上传中..." : "选择图片上传"}</button></div>{error ? <p className="user-tool-error">{error}</p> : null}<div className="tool-list">{items.length ? items.map(item => { const link = imageShareLink(item, canPublish); const preview = storagePreviewUrl(item); const editingPassword = passwordFor === String(item.id); return <article className="tool-item" key={item.id}><div className="tool-item-preview">{preview ? <AuthImage src={preview} alt={item.name || "图片"} fallback={<FileImage/>} /> : <FileImage/>}</div><div className="tool-item-main"><strong>{item.name || "未命名图片"}</strong><small>{formatBytes(item.sizeBytes)} · <Eye size={13}/> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}{item.hasAccessPassword ? <em className="tool-lock-mark">已设置访问密码</em> : null}</small>{link ? <div className="tool-public-link"><input readOnly value={link} /></div> : null}{editingPassword ? <div className="tool-password-row"><input type="password" value={passwordDraft} maxLength={64} autoComplete="new-password" placeholder={item.hasAccessPassword ? "输入新的访问密码" : "设置访问密码"} onChange={(event) => setPasswordDraft(event.target.value)} /><button type="button" className="user-tool-button" onClick={() => void saveImagePassword(item, false)}>保存</button>{item.hasAccessPassword ? <button type="button" className="user-tool-button" onClick={() => void saveImagePassword(item, true)}>清除</button> : null}</div> : null}</div><div className="tool-item-actions"><button type="button" title={link ? "复制公开链接" : "公开后可复制链接"} disabled={!link} onClick={() => { if (link) void navigator.clipboard?.writeText(link); }}><Copy size={15}/></button><button type="button" title="访问密码" onClick={() => { setPasswordFor(editingPassword ? "" : String(item.id)); setPasswordDraft(""); }}><KeyRound size={15}/></button><button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : item.isPublic ? "设为私有" : "公开访问"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15}/></button><button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15}/></button></div></article>; }) : <p className="tool-empty">还没有上传图片。</p>}</div></section></RequireLogin>;
 }
 
 function SpaceBar({ stats }: { stats: UserSpaceStats }) { const percent = Math.min(100, stats.limitBytes ? stats.usedBytes / stats.limitBytes * 100 : 0); return <div className="space-summary"><div><strong>{formatBytes(stats.usedBytes)}</strong><span> / {formatBytes(stats.limitBytes)} 已使用</span></div><div className="space-progress"><i style={{ width: `${percent}%` }}/></div><small>剩余 {formatBytes(stats.remainingBytes)}</small></div>; }
@@ -120,6 +151,8 @@ export function ClipboardPage() {
 	const [contentType, setContentType] = useState<ClipboardContentType>("text");
 	const [language, setLanguage] = useState("javascript");
 	const [preview, setPreview] = useState(false);
+	const [accessPassword, setAccessPassword] = useState("");
+	const [clearAccessPassword, setClearAccessPassword] = useState(false);
 	const [error, setError] = useState("");
 	const allowed = Boolean(user && !authLoading && features.userCenterEnabled && features.clipboardEnabled);
 	const canPublish = features.publicResourcesEnabled;
@@ -143,14 +176,22 @@ export function ClipboardPage() {
 		setContentType("text");
 		setLanguage("javascript");
 		setPreview(false);
+		setAccessPassword("");
+		setClearAccessPassword(false);
 	};
 	const submit = async (e: FormEvent) => {
 		e.preventDefault();
 		if (!title.trim() || !content.trim()) return;
+		const invalidPassword = passwordProblem(accessPassword);
+		if (invalidPassword) { setError(invalidPassword); return; }
 		try {
 			const payload = { title, content, contentType, language: contentType === "code" ? language : "" };
-			if (editing) await api.updateClipboard(editing.id, payload);
-			else await api.createClipboard({ ...payload, isPublic: true });
+			if (editing) {
+				const update: { title: string; content: string; contentType: ClipboardContentType; language: string; accessPassword?: string; clearAccessPassword?: boolean } = payload;
+				if (clearAccessPassword && !accessPassword) update.clearAccessPassword = true;
+				else if (accessPassword) update.accessPassword = accessPassword;
+				await api.updateClipboard(editing.id, update);
+			} else await api.createClipboard({ ...payload, isPublic: true, ...(accessPassword ? { accessPassword } : {}) });
 			resetForm();
 			await load();
 		} catch (caught) {
@@ -182,7 +223,7 @@ export function ClipboardPage() {
 				<div>
 					<span className="tool-eyebrow">USER TOOLS</span>
 					<h2>在线剪贴板</h2>
-					<p>可选择纯文本、Markdown 或代码。新建默认公开，分享链接会打开预览页。</p>
+					<p>可选择纯文本、Markdown 或代码。新建默认公开。设置访问密码后，分享页必须输入正确密码才能看到内容。</p>
 				</div>
 				<Link to="/user/space" className="user-tool-link">空间管理</Link>
 			</header>
@@ -204,6 +245,11 @@ export function ClipboardPage() {
 				</label> : null}
 				{contentType !== "text" ? <div className="clipboard-preview-toggle"><button type="button" className={!preview ? "selected" : ""} onClick={() => setPreview(false)}>编辑</button><button type="button" className={preview ? "selected" : ""} onClick={() => setPreview(true)}>预览</button></div> : null}
 				{preview && contentType !== "text" ? <div className="clipboard-live-preview"><ClipboardRenderedBody content={content || "暂无内容"} contentType={contentType} language={language} /></div> : <textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder={placeholder} rows={10} />}
+				<label className="tool-password-field">访问密码
+					<input type="password" value={accessPassword} maxLength={64} autoComplete="new-password" placeholder={editing?.hasAccessPassword ? "留空表示保持当前密码" : "可选，至少 4 位"} onChange={(event) => { setAccessPassword(event.target.value); if (event.target.value) setClearAccessPassword(false); }} />
+				</label>
+				{editing?.hasAccessPassword ? <label className="tool-check"><input type="checkbox" checked={clearAccessPassword} onChange={(event) => { setClearAccessPassword(event.target.checked); if (event.target.checked) setAccessPassword(""); }} />清除访问密码</label> : null}
+				<p className="clipboard-type-hint">{editing?.hasAccessPassword && !clearAccessPassword ? "当前已设置访问密码。留空表示保持不变。" : "设置后，没有正确密码就看不到正文。"}</p>
 				<div className="tool-form-row">
 					<button className="user-tool-button primary" type="submit"><Save size={16} /> {editing ? "更新剪贴板" : "保存剪贴板"}</button>
 					{editing ? <button className="user-tool-button" type="button" onClick={resetForm}>取消</button> : null}
@@ -216,13 +262,13 @@ export function ClipboardPage() {
 				return <article className="tool-item clipboard-item" key={item.id}>
 					<div className="tool-item-main">
 						<strong>{item.title}</strong>
-						<small><em>{clipboardTypeLabel(item)}</em> · {formatBytes(item.sizeBytes)} · <Eye size={13} /> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}</small>
+						<small><em>{clipboardTypeLabel(item)}</em> · {formatBytes(item.sizeBytes)} · <Eye size={13} /> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}{item.hasAccessPassword ? <em className="tool-lock-mark">已设置访问密码</em> : null}</small>
 						<pre>{snippet.slice(0, 220)}{snippet.length > 220 ? "…" : ""}</pre>
 						{link ? <div className="tool-public-link"><input readOnly value={link} /><Link to={`/share/${encodeURIComponent(item.publicToken ?? "")}`} className="user-tool-link" target="_blank" rel="noreferrer">预览</Link></div> : null}
 					</div>
 					<div className="tool-item-actions">
 						<button type="button" title={link ? "复制公开链接" : "公开后可复制链接"} disabled={!link} onClick={() => { if (link) void navigator.clipboard?.writeText(link); }}><Copy size={15} /></button>
-						<button type="button" title="编辑" onClick={() => { setEditing(item); setTitle(item.title); setContent(item.content ?? ""); setContentType(item.contentType === "markdown" || item.contentType === "code" ? item.contentType : "text"); setLanguage(item.language || "javascript"); setPreview(false); }}><Pencil size={15} /></button>
+						<button type="button" title="编辑" onClick={() => { setEditing(item); setTitle(item.title); setContent(item.content ?? ""); setContentType(item.contentType === "markdown" || item.contentType === "code" ? item.contentType : "text"); setLanguage(item.language || "javascript"); setPreview(false); setAccessPassword(""); setClearAccessPassword(false); }}><Pencil size={15} /></button>
 						<button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : item.isPublic ? "设为私有" : "公开访问"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15} /></button>
 						<button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15} /></button>
 					</div>

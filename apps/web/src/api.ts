@@ -2,6 +2,24 @@ import { fallbackPosts, fallbackPostsFor, fallbackSite } from "./data";
 import { absoluteMediaUrl } from "./media";
 import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, ClipboardContentType, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, GameLeaderboard, GameScoreResult, GamesHome, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
 
+export type PublicResourcePayload = {
+	locked?: boolean;
+	type?: string;
+	error?: string;
+	hasAccessPassword?: boolean;
+	accessGrant?: string;
+	id?: number;
+	title?: string;
+	name?: string;
+	content?: string;
+	contentType?: ClipboardContentType;
+	language?: string;
+	mimeType?: string;
+	byteSize?: number;
+	viewCount?: number;
+	updatedAt?: string;
+};
+
 const REQUEST_TIMEOUT_MS = 15_000;
 const UPLOAD_TIMEOUT_MS = 120_000;
 const REQUEST_RETRY_DELAY_MS = 10_000;
@@ -143,6 +161,7 @@ function mapClipboard(item: Record<string, unknown>): UserClipboard {
 		isPublic: Boolean(item.isPublic ?? item.is_public),
 		publicToken: typeof item.publicToken === "string" ? item.publicToken : typeof item.public_token === "string" ? item.public_token : null,
 		publicUrl: typeof item.publicUrl === "string" ? item.publicUrl : null,
+		hasAccessPassword: Boolean(item.hasAccessPassword ?? item.has_access_password),
 		accessCount: Number(item.accessCount ?? item.viewCount ?? 0),
 		createdAt: typeof item.createdAt === "string" ? item.createdAt : typeof item.created_at === "string" ? item.created_at : undefined,
 		updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : typeof item.updated_at === "string" ? item.updated_at : undefined,
@@ -435,13 +454,13 @@ export const api = {
 	async userStorage(): Promise<UserStorageItem[]> {
 		const payload = await request<unknown>("/api/user/storage"); const value = unwrapPayload(payload);
 		const list = Array.isArray(value) ? value : (value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).items) ? (value as Record<string, unknown>).items : []);
-		return (list as Record<string, unknown>[]).map((item) => ({ ...item, storageKey: typeof item.storageKey === "string" ? item.storageKey : undefined, url: String(item.url ?? item.publicUrl ?? "") || null, sizeBytes: Number(item.sizeBytes ?? item.byteSize ?? 0), accessCount: Number(item.accessCount ?? item.viewCount ?? 0) })) as UserStorageItem[];
+		return (list as Record<string, unknown>[]).map((item) => ({ ...item, storageKey: typeof item.storageKey === "string" ? item.storageKey : undefined, url: String(item.url ?? item.publicUrl ?? "") || null, sizeBytes: Number(item.sizeBytes ?? item.byteSize ?? 0), accessCount: Number(item.accessCount ?? item.viewCount ?? 0), hasAccessPassword: Boolean(item.hasAccessPassword ?? item.has_access_password) })) as UserStorageItem[];
 	},
-	async uploadUserStorage(file: File, name?: string, isPublic = true): Promise<UserStorageItem> {
-		const form = new FormData(); form.append("file", file); if (name?.trim()) form.append("name", name.trim()); form.append("isPublic", String(isPublic));
+	async uploadUserStorage(file: File, name?: string, isPublic = true, accessPassword?: string): Promise<UserStorageItem> {
+		const form = new FormData(); form.append("file", file); if (name?.trim()) form.append("name", name.trim()); form.append("isPublic", String(isPublic)); if (accessPassword) form.append("accessPassword", accessPassword);
 		return request<UserStorageItem>("/api/user/storage", { method: "POST", body: form });
 	},
-	async updateUserStorage(id: number | string, input: { isPublic?: boolean; name?: string }) { return request<UserStorageItem>(`/api/user/storage/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
+	async updateUserStorage(id: number | string, input: { isPublic?: boolean; name?: string; accessPassword?: string; clearAccessPassword?: boolean }) { return request<UserStorageItem>(`/api/user/storage/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
 	async deleteUserStorage(id: number | string) { return request<void>(`/api/user/storage/${encodeURIComponent(String(id))}`, { method: "DELETE" }); },
 	async userStorageFile(id: number | string) { return request<{ url?: string }>(`/api/user/storage/${encodeURIComponent(String(id))}/file`); },
 	async userClipboards(): Promise<UserClipboard[]> {
@@ -449,10 +468,30 @@ export const api = {
 		const list = Array.isArray(value) ? value : (value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).items) ? (value as Record<string, unknown>).items : []);
 		return (list as Record<string, unknown>[]).map(mapClipboard);
 	},
-	async createClipboard(input: { title: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean }) { return request<UserClipboard>("/api/user/clipboards", { method: "POST", body: JSON.stringify({ isPublic: true, ...input }), headers: { "content-type": "application/json" } }); },
-	async updateClipboard(id: number | string, input: Partial<{ title: string; content: string; contentType: ClipboardContentType; language: string; isPublic: boolean }>) { return request<UserClipboard>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
+	async createClipboard(input: { title: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string }) { return request<UserClipboard>("/api/user/clipboards", { method: "POST", body: JSON.stringify({ isPublic: true, ...input }), headers: { "content-type": "application/json" } }); },
+	async updateClipboard(id: number | string, input: Partial<{ title: string; content: string; contentType: ClipboardContentType; language: string; isPublic: boolean; accessPassword: string; clearAccessPassword: boolean }>) { return request<UserClipboard>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
 	async deleteClipboard(id: number | string) { return request<void>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "DELETE" }); },
 	async publicClipboard(token: string) { return request<{ type?: string; id?: number; title?: string; content?: string; contentType?: ClipboardContentType; language?: string; byteSize?: number; viewCount?: number; updatedAt?: string }>(`/api/public/resources/${encodeURIComponent(token)}`); },
+	async inspectPublicResource(token: string) {
+		const response = await fetch(`${API_ORIGIN}/api/public/resources/${encodeURIComponent(token)}`, { headers: authHeaders() });
+		const contentType = response.headers.get("content-type") ?? "";
+		if (contentType.startsWith("image/")) {
+			const blob = response.ok ? await response.blob() : null;
+			return { status: response.status, contentType, payload: { locked: false, type: "image" } as PublicResourcePayload, blob };
+		}
+		const text = await response.text();
+		let payload: PublicResourcePayload | null = null;
+		if (text) { try { payload = JSON.parse(text) as PublicResourcePayload; } catch { payload = null; } }
+		return { status: response.status, contentType, payload, blob: null as Blob | null };
+	},
+	async unlockPublicResource(token: string, password: string) {
+		return request<PublicResourcePayload>(`/api/public/resources/${encodeURIComponent(token)}/unlock`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) });
+	},
+	async publicResourceFile(token: string, accessGrant: string) {
+		const response = await fetch(`${API_ORIGIN}/api/public/resources/${encodeURIComponent(token)}`, { headers: authHeaders({ "x-access-grant": accessGrant }) });
+		if (!response.ok || !(response.headers.get("content-type") ?? "").startsWith("image/")) throw new Error("无法打开图片");
+		return response.blob();
+	},
 	clipboardShareUrl(token: string) {
 		const path = `/share/${encodeURIComponent(token)}`;
 		if (typeof window !== "undefined" && window.location?.origin) return `${window.location.origin}${path}`;
@@ -479,7 +518,7 @@ export const api = {
 		const query = difficulty ? `?difficulty=${encodeURIComponent(difficulty)}` : "";
 		return request<GameLeaderboard>(`/api/games/${encodeURIComponent(game)}/leaderboard${query}`, { headers: gameGuestHeader() });
 	},
-	async recordGameScore(game: string, input: { score: number; durationMs: number; difficulty?: "beginner" | "intermediate" | "expert" }) {
+	async recordGameScore(game: string, input: { score: number; durationMs: number; difficulty?: "beginner" | "intermediate" | "expert" | "easy" | "normal" | "hard" }) {
 		return request<GameScoreResult>(`/api/games/${encodeURIComponent(game)}/scores`, {
 			method: "POST",
 			headers: { ...gameGuestHeader(), "content-type": "application/json" },

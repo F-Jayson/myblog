@@ -167,6 +167,105 @@ export function moveBoard(board: Board, direction: GameDirection, combine: Combi
 	return { board: spawnTile(slid.board, spawnValue(random), random), scoreGained: slid.gained, moved: true };
 }
 
+export type NumberTile = {
+	id: number;
+	value: number;
+	row: number;
+	col: number;
+	fresh: boolean;
+	pop: boolean;
+	ghost: boolean;
+};
+
+let tileSerial = 1;
+
+function nextTileId() {
+	tileSerial += 1;
+	return tileSerial;
+}
+
+export function createTiles(spawnValue: (random: () => number) => number, random: () => number = Math.random): NumberTile[] {
+	const board = createBoard(spawnValue, random);
+	const tiles: NumberTile[] = [];
+	board.forEach((row, y) => row.forEach((value, x) => {
+		if (value) tiles.push({ id: nextTileId(), value, row: y, col: x, fresh: true, pop: false, ghost: false });
+	}));
+	return tiles;
+}
+
+function axisOf(direction: GameDirection, row: number, col: number, size: number) {
+	if (direction === "left") return { line: row, pos: col };
+	if (direction === "right") return { line: row, pos: size - 1 - col };
+	if (direction === "up") return { line: col, pos: row };
+	return { line: col, pos: size - 1 - row };
+}
+
+function placeOnAxis(direction: GameDirection, line: number, pos: number, size: number) {
+	if (direction === "left") return { row: line, col: pos };
+	if (direction === "right") return { row: line, col: size - 1 - pos };
+	if (direction === "up") return { row: pos, col: line };
+	return { row: size - 1 - pos, col: line };
+}
+
+export function moveTiles(tiles: NumberTile[], direction: GameDirection, combine: Combine, spawnValue: (random: () => number) => number, random: () => number = Math.random) {
+	const size = 4;
+	const active = tiles.filter((tile) => !tile.ghost);
+	const lines: Array<Array<NumberTile & { line: number; pos: number }>> = Array.from({ length: size }, () => []);
+	for (const tile of active) {
+		const axis = axisOf(direction, tile.row, tile.col, size);
+		lines[axis.line]?.push({ ...tile, line: axis.line, pos: axis.pos, fresh: false, pop: false, ghost: false });
+	}
+	const next: NumberTile[] = [];
+	let gained = 0;
+	let moved = false;
+	for (const lineTiles of lines) {
+		lineTiles.sort((left, right) => left.pos - right.pos);
+		let pos = 0;
+		for (let index = 0; index < lineTiles.length; index += 1) {
+			const current = lineTiles[index];
+			if (!current) continue;
+			const following = lineTiles[index + 1];
+			const merged = following ? combine(current.value, following.value) : null;
+			if (following && merged) {
+				const spot = placeOnAxis(direction, current.line, pos, size);
+				if (current.row !== spot.row || current.col !== spot.col || following.row !== spot.row || following.col !== spot.col) moved = true;
+				next.push({ ...current, ...spot, value: merged, pop: true, fresh: false, ghost: false });
+				next.push({ ...following, ...spot, fresh: false, pop: false, ghost: true });
+				gained += merged;
+				index += 1;
+			} else {
+				const spot = placeOnAxis(direction, current.line, pos, size);
+				if (current.row !== spot.row || current.col !== spot.col) moved = true;
+				next.push({ ...current, ...spot, fresh: false, pop: false, ghost: false });
+			}
+			pos += 1;
+		}
+	}
+	if (!moved) return { tiles: active.map((tile) => ({ ...tile, fresh: false, pop: false, ghost: false })), scoreGained: 0, moved: false };
+	const occupied = new Set(next.filter((tile) => !tile.ghost).map((tile) => `${tile.row},${tile.col}`));
+	const empty: Point[] = [];
+	for (let row = 0; row < size; row += 1) {
+		for (let col = 0; col < size; col += 1) {
+			if (!occupied.has(`${row},${col}`)) empty.push({ x: col, y: row });
+		}
+	}
+	if (empty.length) {
+		const spot = empty[Math.floor(random() * empty.length)] ?? empty[0];
+		next.push({ id: nextTileId(), value: spawnValue(random), row: spot.y, col: spot.x, fresh: true, pop: false, ghost: false });
+	}
+	return { tiles: next, scoreGained: gained, moved: true };
+}
+
+export function tilesHaveMoves(tiles: NumberTile[], combine: Combine) {
+	const board = emptyBoard();
+	for (const tile of tiles) {
+		if (tile.ghost) continue;
+		const row = board[tile.row];
+		if (row) row[tile.col] = tile.value;
+	}
+	return hasMoves(board, combine);
+}
+
 export function classicSpawn(random: () => number) {
 	return random() < 0.9 ? 2 : 4;
 }
@@ -203,15 +302,36 @@ export function fibonacciCombine(left: number, right: number) {
 	return null;
 }
 
+export type SnakeDifficulty = "easy" | "normal" | "hard";
+
+export const SNAKE_PRESETS: Record<SnakeDifficulty, { width: number; height: number; intervalMs: number; label: string }> = {
+	easy: { width: 12, height: 12, intervalMs: 180, label: "简单" },
+	normal: { width: 16, height: 16, intervalMs: 140, label: "普通" },
+	hard: { width: 22, height: 22, intervalMs: 90, label: "困难" },
+};
+
 export type MineDifficulty = "beginner" | "intermediate" | "expert";
 
-export const MINE_PRESETS: Record<MineDifficulty, { rows: number; cols: number; mines: number; label: string }> = {
+export type MineSetup = { rows: number; cols: number; mines: number; label: string };
+
+export const MINE_PRESETS: Record<MineDifficulty, MineSetup> = {
 	beginner: { rows: 9, cols: 9, mines: 10, label: "初级" },
 	intermediate: { rows: 16, cols: 16, mines: 40, label: "中级" },
 	expert: { rows: 16, cols: 30, mines: 99, label: "高级" },
 };
 
-export type MineCell = { mine: boolean; open: boolean; flag: boolean; near: number };
+export function customMineSetup(rows: number, cols: number, mines: number): { setup: MineSetup } | { error: string } {
+	const nextRows = Math.floor(rows);
+	const nextCols = Math.floor(cols);
+	const nextMines = Math.floor(mines);
+	if (!Number.isInteger(nextRows) || nextRows < 5 || nextRows > 30) return { error: "行数需要在 5 到 30 之间" };
+	if (!Number.isInteger(nextCols) || nextCols < 5 || nextCols > 40) return { error: "列数需要在 5 到 40 之间" };
+	const maxMines = nextRows * nextCols - 1;
+	if (!Number.isInteger(nextMines) || nextMines < 1 || nextMines > maxMines) return { error: `雷数需要在 1 到 ${maxMines} 之间` };
+	return { setup: { rows: nextRows, cols: nextCols, mines: nextMines, label: "自定义" } };
+}
+
+export type MineCell = { mine: boolean; open: boolean; flag: boolean; question: boolean; near: number };
 
 export type MineState = {
 	rows: number;
@@ -268,22 +388,26 @@ function floodOpen(cells: MineCell[], index: number, cols: number, rows: number)
 		const cell = cells[current];
 		if (!cell || cell.open || cell.flag || cell.mine) continue;
 		cell.open = true;
+		cell.question = false;
 		if (cell.near !== 0) continue;
 		stack.push(...mineNeighbors(current, cols, rows));
 	}
 }
 
-export function createMines(difficulty: MineDifficulty): MineState {
-	const preset = MINE_PRESETS[difficulty];
+export function createMineField(setup: MineSetup): MineState {
 	return {
-		rows: preset.rows,
-		cols: preset.cols,
-		mines: preset.mines,
-		cells: Array.from({ length: preset.rows * preset.cols }, () => ({ mine: false, open: false, flag: false, near: 0 })),
+		rows: setup.rows,
+		cols: setup.cols,
+		mines: setup.mines,
+		cells: Array.from({ length: setup.rows * setup.cols }, () => ({ mine: false, open: false, flag: false, question: false, near: 0 })),
 		alive: true,
 		won: false,
 		started: false,
 	};
+}
+
+export function createMines(difficulty: MineDifficulty): MineState {
+	return createMineField(MINE_PRESETS[difficulty]);
 }
 
 function settled(state: MineState, cells: MineCell[]): MineState {
@@ -306,9 +430,14 @@ export function openMine(state: MineState, index: number, random: () => number =
 	return settled({ ...state, alive: true }, cells);
 }
 
-export function toggleMineFlag(state: MineState, index: number): MineState {
+export function cycleMineMark(state: MineState, index: number): MineState {
 	if (!state.alive || state.won || index < 0 || index >= state.cells.length) return state;
-	const cells = state.cells.map((cell, cellIndex) => cellIndex === index && !cell.open ? { ...cell, flag: !cell.flag } : cell);
+	const cells = state.cells.map((cell, cellIndex) => {
+		if (cellIndex !== index || cell.open) return cell;
+		if (cell.flag) return { ...cell, flag: false, question: true };
+		if (cell.question) return { ...cell, flag: false, question: false };
+		return { ...cell, flag: true, question: false };
+	});
 	return { ...state, cells };
 }
 
