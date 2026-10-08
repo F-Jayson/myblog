@@ -100,6 +100,7 @@ export type UserStorageItem = {
 	publicToken?: string | null;
 	publicUrl?: string | null;
 	hasAccessPassword: boolean;
+	accessPasswordHint: string;
 	viewCount: number;
 	createdAt: string;
 	updatedAt: string;
@@ -119,6 +120,7 @@ export type UserClipboard = {
 	publicToken?: string | null;
 	publicUrl?: string | null;
 	hasAccessPassword: boolean;
+	accessPasswordHint: string;
 	viewCount: number;
 	createdAt: string;
 	updatedAt: string;

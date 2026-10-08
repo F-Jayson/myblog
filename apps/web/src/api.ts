@@ -7,6 +7,7 @@ export type PublicResourcePayload = {
 	type?: string;
 	error?: string;
 	hasAccessPassword?: boolean;
+	passwordHint?: string;
 	accessGrant?: string;
 	id?: number;
 	title?: string;
@@ -162,6 +163,7 @@ function mapClipboard(item: Record<string, unknown>): UserClipboard {
 		publicToken: typeof item.publicToken === "string" ? item.publicToken : typeof item.public_token === "string" ? item.public_token : null,
 		publicUrl: typeof item.publicUrl === "string" ? item.publicUrl : null,
 		hasAccessPassword: Boolean(item.hasAccessPassword ?? item.has_access_password),
+		accessPasswordHint: typeof item.accessPasswordHint === "string" ? item.accessPasswordHint : typeof item.access_password_hint === "string" ? item.access_password_hint : "",
 		accessCount: Number(item.accessCount ?? item.viewCount ?? 0),
 		createdAt: typeof item.createdAt === "string" ? item.createdAt : typeof item.created_at === "string" ? item.created_at : undefined,
 		updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : typeof item.updated_at === "string" ? item.updated_at : undefined,
@@ -454,13 +456,13 @@ export const api = {
 	async userStorage(): Promise<UserStorageItem[]> {
 		const payload = await request<unknown>("/api/user/storage"); const value = unwrapPayload(payload);
 		const list = Array.isArray(value) ? value : (value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).items) ? (value as Record<string, unknown>).items : []);
-		return (list as Record<string, unknown>[]).map((item) => ({ ...item, storageKey: typeof item.storageKey === "string" ? item.storageKey : undefined, url: String(item.url ?? item.publicUrl ?? "") || null, sizeBytes: Number(item.sizeBytes ?? item.byteSize ?? 0), accessCount: Number(item.accessCount ?? item.viewCount ?? 0), hasAccessPassword: Boolean(item.hasAccessPassword ?? item.has_access_password) })) as UserStorageItem[];
+		return (list as Record<string, unknown>[]).map((item) => ({ ...item, storageKey: typeof item.storageKey === "string" ? item.storageKey : undefined, url: String(item.url ?? item.publicUrl ?? "") || null, sizeBytes: Number(item.sizeBytes ?? item.byteSize ?? 0), accessCount: Number(item.accessCount ?? item.viewCount ?? 0), hasAccessPassword: Boolean(item.hasAccessPassword ?? item.has_access_password), accessPasswordHint: typeof item.accessPasswordHint === "string" ? item.accessPasswordHint : typeof item.access_password_hint === "string" ? item.access_password_hint : "" })) as UserStorageItem[];
 	},
-	async uploadUserStorage(file: File, name?: string, isPublic = true, accessPassword?: string): Promise<UserStorageItem> {
-		const form = new FormData(); form.append("file", file); if (name?.trim()) form.append("name", name.trim()); form.append("isPublic", String(isPublic)); if (accessPassword) form.append("accessPassword", accessPassword);
+	async uploadUserStorage(file: File, name?: string, isPublic = true, accessPassword?: string, accessPasswordHint?: string): Promise<UserStorageItem> {
+		const form = new FormData(); form.append("file", file); if (name?.trim()) form.append("name", name.trim()); form.append("isPublic", String(isPublic)); if (accessPassword) form.append("accessPassword", accessPassword); if (accessPasswordHint) form.append("accessPasswordHint", accessPasswordHint);
 		return request<UserStorageItem>("/api/user/storage", { method: "POST", body: form });
 	},
-	async updateUserStorage(id: number | string, input: { isPublic?: boolean; name?: string; accessPassword?: string; clearAccessPassword?: boolean }) { return request<UserStorageItem>(`/api/user/storage/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
+	async updateUserStorage(id: number | string, input: { isPublic?: boolean; name?: string; accessPassword?: string; accessPasswordHint?: string | null; clearAccessPassword?: boolean }) { return request<UserStorageItem>(`/api/user/storage/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
 	async deleteUserStorage(id: number | string) { return request<void>(`/api/user/storage/${encodeURIComponent(String(id))}`, { method: "DELETE" }); },
 	async userStorageFile(id: number | string) { return request<{ url?: string }>(`/api/user/storage/${encodeURIComponent(String(id))}/file`); },
 	async userClipboards(): Promise<UserClipboard[]> {
@@ -468,8 +470,8 @@ export const api = {
 		const list = Array.isArray(value) ? value : (value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).items) ? (value as Record<string, unknown>).items : []);
 		return (list as Record<string, unknown>[]).map(mapClipboard);
 	},
-	async createClipboard(input: { title: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string }) { return request<UserClipboard>("/api/user/clipboards", { method: "POST", body: JSON.stringify({ isPublic: true, ...input }), headers: { "content-type": "application/json" } }); },
-	async updateClipboard(id: number | string, input: Partial<{ title: string; content: string; contentType: ClipboardContentType; language: string; isPublic: boolean; accessPassword: string; clearAccessPassword: boolean }>) { return request<UserClipboard>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
+	async createClipboard(input: { title: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string; accessPasswordHint?: string }) { return request<UserClipboard>("/api/user/clipboards", { method: "POST", body: JSON.stringify({ isPublic: true, ...input }), headers: { "content-type": "application/json" } }); },
+	async updateClipboard(id: number | string, input: Partial<{ title: string; content: string; contentType: ClipboardContentType; language: string; isPublic: boolean; accessPassword: string; accessPasswordHint: string | null; clearAccessPassword: boolean }>) { return request<UserClipboard>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
 	async deleteClipboard(id: number | string) { return request<void>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "DELETE" }); },
 	async publicClipboard(token: string) { return request<{ type?: string; id?: number; title?: string; content?: string; contentType?: ClipboardContentType; language?: string; byteSize?: number; viewCount?: number; updatedAt?: string }>(`/api/public/resources/${encodeURIComponent(token)}`); },
 	async inspectPublicResource(token: string) {

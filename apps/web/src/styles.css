@@ -164,6 +164,7 @@ img { display: block; max-width: 100%; }
 .tool-check { display:inline-flex; align-items:center; gap:.35rem; color:var(--muted-text); font-size:.8rem; }
 .tool-password-field { display:grid; gap:.28rem; min-width:min(16rem, 100%); color:var(--muted-text); font-size:.76rem; font-weight:700; }
 .tool-password-field input, .tool-password-row input, .access-gate input { width:100%; min-height:2.25rem; padding:0 .65rem; border:1px solid var(--line); border-radius:.5rem; outline:0; background:transparent; color:var(--deep-text); font-size:.82rem; }
+.tool-password-field input::placeholder, .tool-password-row input::placeholder, .access-gate input::placeholder { color:var(--faint-text); opacity:1; }
 .tool-password-row { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; margin-top:.5rem; }
 .tool-password-row input { flex:1 1 10rem; width:auto; }
 .tool-lock-mark { margin-left:.35rem; padding:.08rem .32rem; border-radius:.3rem; background:color-mix(in srgb, #c2410c 14%, transparent); color:#c2410c; font-style:normal; font-weight:750; }

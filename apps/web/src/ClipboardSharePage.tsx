@@ -64,6 +64,7 @@ export default function ClipboardSharePage() {
 	const [imageName, setImageName] = useState("图片");
 	const [locked, setLocked] = useState(false);
 	const [password, setPassword] = useState("");
+	const [passwordHint, setPasswordHint] = useState("");
 	const [error, setError] = useState("");
 	const [loading, setLoading] = useState(true);
 	const [unlocking, setUnlocking] = useState(false);
@@ -98,13 +99,14 @@ export default function ClipboardSharePage() {
 		setItem(null);
 		setLocked(false);
 		setPassword("");
+		setPasswordHint("");
 		setImageUrl("");
 		setPasswordProtected(false);
 		releaseImage();
 		if (!token) { setLoading(false); setError("分享链接无效"); return () => { active = false; }; }
 		api.inspectPublicResource(token).then(async (result) => {
 			if (!active) return;
-			if (result.payload?.locked) { setLocked(true); return; }
+			if (result.payload?.locked) { setLocked(true); setPasswordHint(typeof result.payload.passwordHint === "string" ? result.payload.passwordHint : ""); return; }
 			if (result.blob) { showImage(result.blob, result.payload?.name); return; }
 			if (!result.payload || result.status < 200 || result.status >= 300) {
 				setError(result.payload?.error || "公开内容不存在或已关闭");
@@ -168,7 +170,7 @@ export default function ClipboardSharePage() {
 	};
 
 	if (loading) return <section className="card content-card clipboard-share"><p className="page-lead">正在打开分享内容...</p></section>;
-	if (locked && !item && !imageUrl) return <section className="card content-card clipboard-share"><form className="access-gate" onSubmit={(event) => void unlock(event)}><KeyRound size={28} /><h2>需要访问密码</h2><p>只有输入正确的密码才能看到内容。</p><input type="password" value={password} maxLength={64} autoComplete="off" placeholder="访问密码" onChange={(event) => setPassword(event.target.value)} /><button className="user-tool-button primary" type="submit" disabled={unlocking || !password}>{unlocking ? "正在验证..." : "查看内容"}</button>{error ? <p className="user-tool-error">{error}</p> : null}</form></section>;
+	if (locked && !item && !imageUrl) return <section className="card content-card clipboard-share"><form className="access-gate" onSubmit={(event) => void unlock(event)}><KeyRound size={28} /><h2>需要访问密码</h2><p>只有输入正确的密码才能看到内容。</p><input type="password" value={password} maxLength={64} autoComplete="off" placeholder={passwordHint || "访问密码"} title={passwordHint || undefined} onChange={(event) => setPassword(event.target.value)} /><button className="user-tool-button primary" type="submit" disabled={unlocking || !password}>{unlocking ? "正在验证..." : "查看内容"}</button>{error ? <p className="user-tool-error">{error}</p> : null}</form></section>;
 	if (imageUrl) return <article className="card content-card clipboard-share"><header className="clipboard-share-header"><div><span className="tool-eyebrow">SHARED IMAGE</span><h2>{imageName}</h2></div><div className="clipboard-share-actions"><button type="button" className="user-tool-button primary" onClick={() => void copy("link")}>{copied === "link" ? <Check size={15} /> : <LinkIcon size={15} />}{copied === "link" ? "链接已复制" : "复制链接"}</button></div></header><img className="clipboard-share-image" src={imageUrl} alt={imageName} /><footer className="clipboard-share-footer">{passwordProtected ? "由站内图床分享 · 刷新后需要重新输入访问密码" : "由站内图床分享"}</footer></article>;
 	if (error || !item) return <section className="card empty-state clipboard-share"><FileText size={29} /><h2>无法打开分享内容</h2><p>{error || "公开内容不存在或已关闭。"}</p><Link to="/">返回首页</Link></section>;
 

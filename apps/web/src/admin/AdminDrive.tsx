@@ -14,6 +14,7 @@ type DriveFile = {
   downloadUrl: string;
   createdAt: string;
   hasAccessPassword?: boolean;
+  accessPasswordHint?: string;
 };
 
 type DriveList = {
@@ -107,8 +108,10 @@ export default function AdminDrive() {
   const [latestUrl, setLatestUrl] = useState("");
   const [copiedKey, setCopiedKey] = useState("");
   const [uploadPassword, setUploadPassword] = useState("");
+  const [uploadHint, setUploadHint] = useState("");
   const [passwordFor, setPasswordFor] = useState<number | null>(null);
   const [passwordDraft, setPasswordDraft] = useState("");
+  const [hintDraft, setHintDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const uploadingRef = useRef(false);
 
@@ -214,8 +217,21 @@ export default function AdminDrive() {
       return;
     }
     const password = uploadPassword;
+    const hint = uploadHint.trim();
     if (password && (password.length < 4 || password.length > 64)) {
       setMessage("访问密码需要 4 到 64 位。");
+      return;
+    }
+    if (hint.length > 40) {
+      setMessage("密码提示不能超过 40 字。");
+      return;
+    }
+    if (hint && !password) {
+      setMessage("请先设置访问密码。");
+      return;
+    }
+    if (password && hint.includes(password)) {
+      setMessage("密码提示不能包含密码。");
       return;
     }
     uploadingRef.current = true;
@@ -248,10 +264,11 @@ export default function AdminDrive() {
         const saved = await driveRequest<DriveFile>("/api/admin/drive/sessions/" + uploadId + "/complete", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(password ? { accessPassword: password } : {}),
+          body: JSON.stringify(password ? { accessPassword: password, ...(hint ? { accessPasswordHint: hint } : {}) } : {}),
         });
         uploadId = "";
         setUploadPassword("");
+        setUploadHint("");
         setLatestUrl(saved.downloadUrl);
         setMessage("");
         setItems((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
@@ -272,18 +289,32 @@ export default function AdminDrive() {
   };
 
   const savePassword = async (item: DriveFile, clear: boolean) => {
-    if (!clear && (passwordDraft.length < 4 || passwordDraft.length > 64)) {
+    const hint = hintDraft.trim();
+    if (!clear && passwordDraft && (passwordDraft.length < 4 || passwordDraft.length > 64)) {
       setMessage("访问密码需要 4 到 64 位。");
+      return;
+    }
+    if (!clear && hint.length > 40) {
+      setMessage("密码提示不能超过 40 字。");
+      return;
+    }
+    if (!clear && passwordDraft && hint.includes(passwordDraft)) {
+      setMessage("密码提示不能包含密码。");
+      return;
+    }
+    if (!clear && !passwordDraft && !item.hasAccessPassword) {
+      setMessage(hint ? "请先设置访问密码。" : "访问密码需要 4 到 64 位。");
       return;
     }
     try {
       const saved = await driveRequest<DriveFile>("/api/admin/drive/" + item.id, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(clear ? { clearAccessPassword: true } : { accessPassword: passwordDraft }),
+        body: JSON.stringify(clear ? { clearAccessPassword: true } : passwordDraft ? { accessPassword: passwordDraft, accessPasswordHint: hint } : { accessPasswordHint: hint }),
       });
       setItems((current) => current.map((entry) => entry.id === saved.id ? saved : entry));
       setPasswordDraft("");
+      setHintDraft("");
       setPasswordFor(null);
       setMessage("");
     } catch (error) {
@@ -352,7 +383,11 @@ export default function AdminDrive() {
         </label>
         <label className="fa-drive-password">
           访问密码（可选）
-          <input type="password" value={uploadPassword} maxLength={64} autoComplete="new-password" disabled={uploading} placeholder="留空则链接可直接下载，至少 4 位" onChange={(event) => setUploadPassword(event.target.value)} />
+          <input type="password" value={uploadPassword} maxLength={64} autoComplete="new-password" disabled={uploading} placeholder={uploadHint.trim() || "留空则链接可直接下载，至少 4 位"} title={uploadHint.trim() || undefined} onChange={(event) => setUploadPassword(event.target.value)} />
+        </label>
+        <label className="fa-drive-password">
+          密码提示（可选）
+          <input type="text" value={uploadHint} maxLength={40} autoComplete="off" disabled={uploading} placeholder="显示在密码框中，不要写入真实密码" onChange={(event) => setUploadHint(event.target.value)} />
         </label>
         {uploading ? (
           <div className="fa-drive-progress-wrap">
@@ -421,7 +456,7 @@ export default function AdminDrive() {
                   <td>{dateText(item.createdAt)}</td>
                   <td>
                     <div className="fa-inline-actions">
-                      <button type="button" title="访问密码" onClick={() => { setPasswordFor(passwordFor === item.id ? null : item.id); setPasswordDraft(""); }}>
+                      <button type="button" title="访问密码" onClick={() => { if (passwordFor === item.id) { setPasswordFor(null); setPasswordDraft(""); setHintDraft(""); } else { setPasswordFor(item.id); setPasswordDraft(""); setHintDraft(item.accessPasswordHint ?? ""); } }}>
                         <KeyRound size={15} />
                       </button>
                       <button type="button" title="复制链接" onClick={() => void copyLink(String(item.id), item.downloadUrl)}>
@@ -439,8 +474,9 @@ export default function AdminDrive() {
                 return [row, <tr key={`password-${item.id}`}>
                   <td colSpan={5}>
                     <form className="fa-drive-password-row" onSubmit={(event) => { event.preventDefault(); void savePassword(item, false); }}>
-                      <input type="password" value={passwordDraft} maxLength={64} autoComplete="new-password" placeholder={item.hasAccessPassword ? "输入新的访问密码" : "设置访问密码"} onChange={(event) => setPasswordDraft(event.target.value)} />
-                      <button type="submit">保存密码</button>
+                      <input type="password" value={passwordDraft} maxLength={64} autoComplete="new-password" placeholder={hintDraft.trim() || (item.hasAccessPassword ? "输入新的访问密码" : "设置访问密码")} title={hintDraft.trim() || undefined} onChange={(event) => setPasswordDraft(event.target.value)} />
+                      <input type="text" value={hintDraft} maxLength={40} autoComplete="off" placeholder="密码提示，可选" aria-label="密码提示" onChange={(event) => setHintDraft(event.target.value)} />
+                      <button type="submit">保存</button>
                       {item.hasAccessPassword ? <button type="button" onClick={() => void savePassword(item, true)}>清除密码</button> : null}
                     </form>
                   </td>

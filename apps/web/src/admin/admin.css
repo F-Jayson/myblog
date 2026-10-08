@@ -3759,6 +3759,7 @@
 .fa-drive-count { color: var(--fa-ink); font-variant-numeric: tabular-nums; }
 .fa-drive-password { display: grid; gap: var(--fa-space-2); margin-top: var(--fa-space-4); color: var(--fa-soft); font-size: var(--fa-text-sm); font-weight: 700; }
 .fa-drive-password input { width: min(24rem, 100%); min-height: var(--fa-control-h); padding: 0 var(--fa-space-3); border: 1px solid var(--fa-line-strong); border-radius: var(--fa-radius-md); background: var(--fa-surface); color: var(--fa-ink); font: inherit; }
+.fa-drive-password input::placeholder, .fa-drive-password-row input::placeholder { color: var(--fa-soft); opacity: 1; }
 .fa-drive-password-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--fa-space-2); }
 .fa-drive-password-row input { flex: 1 1 12rem; min-height: var(--fa-control-h-sm); padding: 0 var(--fa-space-3); border: 1px solid var(--fa-line-strong); border-radius: var(--fa-radius-md); background: var(--fa-surface); color: var(--fa-ink); font: inherit; }
 .fa-drive-password-row button { min-height: var(--fa-control-h-sm); padding: 0 var(--fa-space-3); border: 1px solid var(--fa-line-strong); border-radius: var(--fa-radius-md); background: var(--fa-surface); color: var(--fa-ink); cursor: pointer; font-size: var(--fa-text-sm); font-weight: 700; }

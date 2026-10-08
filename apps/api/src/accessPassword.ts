@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from
 
 export const ACCESS_PASSWORD_MIN = 4;
 export const ACCESS_PASSWORD_MAX = 64;
+export const ACCESS_PASSWORD_HINT_MAX = 40;
 const ACCESS_PASSWORD_KEYLEN = 64;
 const GRANT_TTL_MS = 30 * 60 * 1000;
 
@@ -26,6 +27,40 @@ export function parseAccessPassword(value: unknown): string | null | undefined {
 	if (value.length < ACCESS_PASSWORD_MIN) throw new AccessPasswordError("访问密码至少 4 位");
 	if (/[\u0000-\u001f\u007f]/u.test(value)) throw new AccessPasswordError("访问密码包含无效字符");
 	return value;
+}
+
+export function parseAccessPasswordHint(value: unknown): string | null | undefined {
+	if (value === undefined) return undefined;
+	if (value === null) return null;
+	if (typeof value !== "string") throw new AccessPasswordError("密码提示无效");
+	const hint = value.trim();
+	if (!hint) return null;
+	if (hint.length > ACCESS_PASSWORD_HINT_MAX) throw new AccessPasswordError("密码提示不能超过 40 字");
+	if (/[\u0000-\u001f\u007f]/u.test(hint)) throw new AccessPasswordError("密码提示包含无效字符");
+	return hint;
+}
+
+export function assertHintOmitsPassword(hint: string | null | undefined, password: string | null | undefined) {
+	if (hint && password && hint.includes(password)) throw new AccessPasswordError("密码提示不能包含密码");
+}
+
+export function resolveAccessSecret(input: {
+	accessPassword?: string | null;
+	accessPasswordHint?: string | null;
+	existingHash?: string | null;
+	existingHint?: string | null;
+}) {
+	const existingHash = input.existingHash ? String(input.existingHash) : null;
+	const existingHint = input.existingHint?.trim() || null;
+	if (input.accessPassword === null || input.accessPassword === "") {
+		if (input.accessPasswordHint) throw new AccessPasswordError("请先设置访问密码");
+		return { passwordHash: null as string | null, hint: null as string | null };
+	}
+	const passwordHash = input.accessPassword === undefined ? existingHash : hashAccessPassword(input.accessPassword);
+	const hint = input.accessPasswordHint === undefined ? existingHint : (input.accessPasswordHint?.trim() || null);
+	if (hint && !passwordHash) throw new AccessPasswordError("请先设置访问密码");
+	if (input.accessPassword) assertHintOmitsPassword(hint, input.accessPassword);
+	return { passwordHash, hint: passwordHash ? hint : null };
 }
 
 export function readSubmittedAccessPassword(value: unknown) {
@@ -135,7 +170,19 @@ export function accessGrantsFromRequest(cookieHeader: string | undefined, header
 	return grants;
 }
 
-export const DRIVE_PASSWORD_PAGE = `<!doctype html>
+function escapeHtmlText(value: string) {
+	return value.replace(/[&<>"']/g, (char) => {
+		if (char === "&") return "&amp;";
+		if (char === "<") return "&lt;";
+		if (char === ">") return "&gt;";
+		if (char === "\"") return "&quot;";
+		return "&#39;";
+	});
+}
+
+export function drivePasswordPage(hint = "") {
+	const placeholder = escapeHtmlText(hint.trim() || "访问密码");
+	return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -149,6 +196,7 @@ export const DRIVE_PASSWORD_PAGE = `<!doctype html>
   p { margin: 0; color: #5d726a; }
   input, button { font: inherit; padding: .7rem .8rem; border-radius: .6rem; }
   input { border: 1px solid #c9d8d1; }
+  input::placeholder { color: #5d726a; opacity: 1; }
   button { border: 0; background: #1f8a70; color: #fff; font-weight: 700; cursor: pointer; }
   .error { min-height: 1.2em; color: #a33b32; }
 </style>
@@ -157,7 +205,7 @@ export const DRIVE_PASSWORD_PAGE = `<!doctype html>
   <form id="gate">
     <h1>此文件需要访问密码</h1>
     <p>只有输入正确的密码才能下载。密码错误时不会提供文件内容。</p>
-    <input type="password" name="password" autocomplete="off" required maxlength="64" placeholder="访问密码">
+    <input type="password" name="password" autocomplete="off" required maxlength="64" placeholder="${placeholder}" title="${placeholder}">
     <p class="error" id="error"></p>
     <button type="submit">打开文件</button>
   </form>
@@ -190,3 +238,4 @@ export const DRIVE_PASSWORD_PAGE = `<!doctype html>
   </script>
 </body>
 </html>`;
+}

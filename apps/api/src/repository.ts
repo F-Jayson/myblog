@@ -1,7 +1,7 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import nodemailer from "nodemailer";
-import { hashAccessPassword } from "./accessPassword.js";
+import { resolveAccessSecret } from "./accessPassword.js";
 import { pool } from "./db.js";
 import { displayIpLocation, locateIp } from "./ipLocation.js";
 import type { AuthorActivityDay, AuthorLearningProgress, AuthorProfile, AuthorProfileDetails, AuthorSkill, Category, Changelog, ClipboardContentType, FeedbackEntry, FriendLink, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, Tag, UserClipboard, UserStorageItem } from "./types.js";
@@ -792,7 +792,7 @@ function mapUserStorageItem(row: RowDataPacket): UserStorageItem {
 	const publicUrl = !token ? null : hasAccessPassword ? `/share/${encodeURIComponent(token)}` : `/api/public/resources/${encodeURIComponent(token)}`;
 	const storageKey = String(row.storage_key ?? "");
 	const ownerUrl = storageKey ? `/api/user/storage/${Number(row.id)}/file` : String(row.storage_url);
-	return { id: Number(row.id), userId: row.user_id === undefined ? undefined : Number(row.user_id), kind: String(row.kind), name: String(row.name ?? ""), url: Boolean(Number(row.is_public)) && publicUrl ? publicUrl : ownerUrl, storageKey, mimeType: String(row.mime_type ?? "application/octet-stream"), byteSize: Number(row.byte_size ?? 0), isPublic: Boolean(Number(row.is_public)), publicToken: token, publicUrl, hasAccessPassword, viewCount: Number(row.view_count ?? 0), createdAt: String(row.created_at), updatedAt: String(row.updated_at) };
+	return { id: Number(row.id), userId: row.user_id === undefined ? undefined : Number(row.user_id), kind: String(row.kind), name: String(row.name ?? ""), url: Boolean(Number(row.is_public)) && publicUrl ? publicUrl : ownerUrl, storageKey, mimeType: String(row.mime_type ?? "application/octet-stream"), byteSize: Number(row.byte_size ?? 0), isPublic: Boolean(Number(row.is_public)), publicToken: token, publicUrl, hasAccessPassword, accessPasswordHint: hasAccessPassword ? String(row.access_password_hint ?? "").trim() : "", viewCount: Number(row.view_count ?? 0), createdAt: String(row.created_at), updatedAt: String(row.updated_at) };
 }
 
 export const CLIPBOARD_CONTENT_TYPES = ["text", "markdown", "code"] as const;
@@ -826,6 +826,7 @@ function mapUserClipboard(row: RowDataPacket): UserClipboard {
 		publicToken: token,
 		publicUrl: token ? `/share/${encodeURIComponent(token)}` : null,
 		hasAccessPassword: Boolean(row.access_password_hash),
+		accessPasswordHint: row.access_password_hash ? String(row.access_password_hint ?? "").trim() : "",
 		viewCount: Number(row.view_count ?? 0),
 		createdAt: String(row.created_at),
 		updatedAt: String(row.updated_at),
@@ -861,7 +862,7 @@ export async function getUserSpace(userId: number) {
 	return { limitBytes: USER_SPACE_LIMIT_BYTES, usedBytes, remainingBytes: Math.max(0, USER_SPACE_LIMIT_BYTES - usedBytes), categories };
 }
 
-export async function createUserStorageItem(input: { userId: number; kind?: string; name?: string; url: string; storageKey?: string; mimeType?: string; byteSize: number; isPublic?: boolean; accessPassword?: string | null }) {
+export async function createUserStorageItem(input: { userId: number; kind?: string; name?: string; url: string; storageKey?: string; mimeType?: string; byteSize: number; isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null }) {
 	if (!Number.isFinite(input.byteSize) || input.byteSize < 0 || input.byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("文件大小无效");
 	const byteSize = Math.floor(input.byteSize);
 	const connection = await pool.getConnection();
@@ -870,8 +871,8 @@ export async function createUserStorageItem(input: { userId: number; kind?: stri
 		const usage = await lockedUserUsage(connection, input.userId);
 		if (usage.total + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
 		const token = input.isPublic ? randomBytes(32).toString("base64url") : null;
-		const passwordHash = input.accessPassword ? hashAccessPassword(input.accessPassword) : null;
-		const [result] = await connection.execute<ResultSetHeader>("INSERT INTO user_storage_items (user_id, kind, name, storage_url, storage_key, mime_type, byte_size, is_public, public_token, access_password_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [input.userId, input.kind ?? "image_host", (input.name ?? "").slice(0, 255), input.url, input.storageKey ?? "", input.mimeType ?? "application/octet-stream", byteSize, Boolean(input.isPublic), token, passwordHash]);
+		const secret = resolveAccessSecret({ accessPassword: input.accessPassword ?? null, accessPasswordHint: input.accessPasswordHint ?? null });
+		const [result] = await connection.execute<ResultSetHeader>("INSERT INTO user_storage_items (user_id, kind, name, storage_url, storage_key, mime_type, byte_size, is_public, public_token, access_password_hash, access_password_hint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [input.userId, input.kind ?? "image_host", (input.name ?? "").slice(0, 255), input.url, input.storageKey ?? "", input.mimeType ?? "application/octet-stream", byteSize, Boolean(input.isPublic), token, secret.passwordHash, secret.hint]);
 		await connection.commit();
 		const [[row]] = await pool.query<RowDataPacket[]>("SELECT * FROM user_storage_items WHERE id = ?", [result.insertId]);
 		return row ? mapUserStorageItem(row) : null;
@@ -888,7 +889,7 @@ export async function getUserStorageItem(userId: number, id: number) {
 	return row ? mapUserStorageItem(row) : null;
 }
 
-export async function updateUserStorageSettings(userId: number, id: number, input: { isPublic?: boolean; accessPassword?: string | null }) {
+export async function updateUserStorageSettings(userId: number, id: number, input: { isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null }) {
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
@@ -896,10 +897,10 @@ export async function updateUserStorageSettings(userId: number, id: number, inpu
 		if (!row) { await connection.rollback(); return null; }
 		const isPublic = input.isPublic === undefined ? Boolean(Number(row.is_public)) : input.isPublic;
 		const token = isPublic ? (row.public_token ? String(row.public_token) : randomBytes(32).toString("base64url")) : null;
-		const passwordHash = input.accessPassword === undefined ? (row.access_password_hash ? String(row.access_password_hash) : null) : input.accessPassword === null ? null : hashAccessPassword(input.accessPassword);
-		await connection.execute("UPDATE user_storage_items SET is_public = ?, public_token = ?, access_password_hash = ? WHERE id = ? AND user_id = ?", [isPublic, token, passwordHash, id, userId]);
+		const secret = resolveAccessSecret({ accessPassword: input.accessPassword, accessPasswordHint: input.accessPasswordHint, existingHash: row.access_password_hash ? String(row.access_password_hash) : null, existingHint: row.access_password_hint ? String(row.access_password_hint) : null });
+		await connection.execute("UPDATE user_storage_items SET is_public = ?, public_token = ?, access_password_hash = ?, access_password_hint = ? WHERE id = ? AND user_id = ?", [isPublic, token, secret.passwordHash, secret.hint, id, userId]);
 		await connection.commit();
-		return mapUserStorageItem({ ...row, is_public: isPublic ? 1 : 0, public_token: token, access_password_hash: passwordHash });
+		return mapUserStorageItem({ ...row, is_public: isPublic ? 1 : 0, public_token: token, access_password_hash: secret.passwordHash, access_password_hint: secret.hint });
 	} catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }
 
@@ -910,7 +911,7 @@ export async function deleteUserStorageItem(userId: number, id: number) {
 	return result.affectedRows ? { url: String(row.storage_url), storageKey: String(row.storage_key ?? "") } : null;
 }
 
-export async function createUserClipboard(input: { userId: number; title?: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string | null }) {
+export async function createUserClipboard(input: { userId: number; title?: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null }) {
 	const byteSize = Buffer.byteLength(input.content, "utf8");
 	const contentType = normalizeClipboardContentType(input.contentType);
 	const language = normalizeClipboardLanguage(contentType, input.language);
@@ -920,8 +921,8 @@ export async function createUserClipboard(input: { userId: number; title?: strin
 		const usage = await lockedUserUsage(connection, input.userId);
 		if (usage.total + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
 		const token = input.isPublic ? randomBytes(32).toString("base64url") : null;
-		const passwordHash = input.accessPassword ? hashAccessPassword(input.accessPassword) : null;
-		const [result] = await connection.execute<ResultSetHeader>("INSERT INTO user_clipboards (user_id, title, content, content_type, language, byte_size, is_public, public_token, access_password_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [input.userId, (input.title ?? "未命名剪贴板").slice(0, 255), input.content, contentType, language, byteSize, Boolean(input.isPublic), token, passwordHash]);
+		const secret = resolveAccessSecret({ accessPassword: input.accessPassword ?? null, accessPasswordHint: input.accessPasswordHint ?? null });
+		const [result] = await connection.execute<ResultSetHeader>("INSERT INTO user_clipboards (user_id, title, content, content_type, language, byte_size, is_public, public_token, access_password_hash, access_password_hint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [input.userId, (input.title ?? "未命名剪贴板").slice(0, 255), input.content, contentType, language, byteSize, Boolean(input.isPublic), token, secret.passwordHash, secret.hint]);
 		await connection.commit();
 		const [[row]] = await pool.query<RowDataPacket[]>("SELECT * FROM user_clipboards WHERE id = ?", [result.insertId]);
 		return row ? mapUserClipboard(row) : null;
@@ -938,7 +939,7 @@ export async function getUserClipboard(userId: number, id: number) {
 	return row ? mapUserClipboard(row) : null;
 }
 
-export async function updateUserClipboard(userId: number, id: number, input: { title?: string; content?: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string | null }) {
+export async function updateUserClipboard(userId: number, id: number, input: { title?: string; content?: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null }) {
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
@@ -952,8 +953,8 @@ export async function updateUserClipboard(userId: number, id: number, input: { t
 		const byteSize = Buffer.byteLength(content, "utf8");
 		if (usage.total - existing.byteSize + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
 		const token = input.isPublic === undefined ? existing.publicToken ?? null : input.isPublic ? existing.publicToken ?? randomBytes(32).toString("base64url") : null;
-		const passwordHash = input.accessPassword === undefined ? (row.access_password_hash ? String(row.access_password_hash) : null) : input.accessPassword === null ? null : hashAccessPassword(input.accessPassword);
-		await connection.execute("UPDATE user_clipboards SET title = ?, content = ?, content_type = ?, language = ?, byte_size = ?, is_public = ?, public_token = ?, access_password_hash = ? WHERE id = ? AND user_id = ?", [input.title === undefined ? existing.title : input.title.slice(0, 255), content, contentType, language, byteSize, input.isPublic === undefined ? existing.isPublic : input.isPublic, token, passwordHash, id, userId]);
+		const secret = resolveAccessSecret({ accessPassword: input.accessPassword, accessPasswordHint: input.accessPasswordHint, existingHash: row.access_password_hash ? String(row.access_password_hash) : null, existingHint: row.access_password_hint ? String(row.access_password_hint) : null });
+		await connection.execute("UPDATE user_clipboards SET title = ?, content = ?, content_type = ?, language = ?, byte_size = ?, is_public = ?, public_token = ?, access_password_hash = ?, access_password_hint = ? WHERE id = ? AND user_id = ?", [input.title === undefined ? existing.title : input.title.slice(0, 255), content, contentType, language, byteSize, input.isPublic === undefined ? existing.isPublic : input.isPublic, token, secret.passwordHash, secret.hint, id, userId]);
 		await connection.commit();
 		return getUserClipboard(userId, id);
 	} catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
@@ -1631,6 +1632,7 @@ export type AdminDriveRecord = {
 	byteSize: number;
 	publicToken: string;
 	accessPasswordHash: string | null;
+	accessPasswordHint: string | null;
 	downloadCount: number;
 	createdAt: string;
 };
@@ -1646,12 +1648,13 @@ function mapAdminDrive(row: RowDataPacket): AdminDriveRecord {
 		byteSize: Number(row.byteSize),
 		publicToken: String(row.publicToken),
 		accessPasswordHash: row.accessPasswordHash ? String(row.accessPasswordHash) : null,
+		accessPasswordHint: row.accessPasswordHash && row.accessPasswordHint ? String(row.accessPasswordHint).trim() : null,
 		downloadCount: Number(row.downloadCount),
 		createdAt: String(row.createdAt),
 	};
 }
 
-const adminDriveProjection = "id, original_name AS originalName, storage_name AS storageName, mime_type AS mimeType, byte_size AS byteSize, public_token AS publicToken, access_password_hash AS accessPasswordHash, download_count AS downloadCount, created_at AS createdAt";
+const adminDriveProjection = "id, original_name AS originalName, storage_name AS storageName, mime_type AS mimeType, byte_size AS byteSize, public_token AS publicToken, access_password_hash AS accessPasswordHash, access_password_hint AS accessPasswordHint, download_count AS downloadCount, created_at AS createdAt";
 
 function driveOwnerClause(owner: DriveOwner, alias = "") {
 	const column = (name: string) => alias ? `${alias}.${name}` : name;
@@ -1667,11 +1670,13 @@ export async function createAdminDriveFile(input: {
 	mimeType: string;
 	byteSize: number;
 	publicToken: string;
-	accessPasswordHash?: string | null;
+	accessPassword?: string | null;
+	accessPasswordHint?: string | null;
 }) {
+	const secret = resolveAccessSecret({ accessPassword: input.accessPassword ?? null, accessPasswordHint: input.accessPasswordHint ?? null });
 	const [result] = await pool.execute<ResultSetHeader>(
-		"INSERT INTO admin_drive_files (owner_admin_id, owner_username, original_name, storage_name, mime_type, byte_size, public_token, access_password_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		[input.ownerAdminId, input.ownerUsername, input.originalName, input.storageName, input.mimeType, input.byteSize, input.publicToken, input.accessPasswordHash ?? null],
+		"INSERT INTO admin_drive_files (owner_admin_id, owner_username, original_name, storage_name, mime_type, byte_size, public_token, access_password_hash, access_password_hint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		[input.ownerAdminId, input.ownerUsername, input.originalName, input.storageName, input.mimeType, input.byteSize, input.publicToken, secret.passwordHash, secret.hint],
 	);
 	const [[row]] = await pool.query<RowDataPacket[]>(`SELECT ${adminDriveProjection} FROM admin_drive_files WHERE id = ? LIMIT 1`, [result.insertId]);
 	if (!row) throw new Error("Drive file was not stored");
@@ -1693,15 +1698,17 @@ export async function getAdminDriveFileByToken(token: string) {
 	return row ? mapAdminDrive(row) : null;
 }
 
-export async function updateAdminDriveAccessPassword(id: number, owner: DriveOwner, accessPasswordHash: string | null) {
+export async function updateAdminDriveAccessPassword(id: number, owner: DriveOwner, input: { accessPassword?: string | null; accessPasswordHint?: string | null }) {
 	const clause = driveOwnerClause(owner);
-	const [result] = await pool.execute<ResultSetHeader>(
-		`UPDATE admin_drive_files SET access_password_hash = ? WHERE id = ? AND ${clause.sql}`,
-		[accessPasswordHash, id, ...clause.params],
+	const [[existing]] = await pool.query<RowDataPacket[]>(`SELECT ${adminDriveProjection} FROM admin_drive_files WHERE id = ? AND ${clause.sql} LIMIT 1`, [id, ...clause.params]);
+	if (!existing) return null;
+	const current = mapAdminDrive(existing);
+	const secret = resolveAccessSecret({ accessPassword: input.accessPassword, accessPasswordHint: input.accessPasswordHint, existingHash: current.accessPasswordHash, existingHint: current.accessPasswordHint });
+	await pool.execute(
+		`UPDATE admin_drive_files SET access_password_hash = ?, access_password_hint = ? WHERE id = ? AND ${clause.sql}`,
+		[secret.passwordHash, secret.hint, id, ...clause.params],
 	);
-	if (!result.affectedRows) return null;
-	const [[row]] = await pool.query<RowDataPacket[]>(`SELECT ${adminDriveProjection} FROM admin_drive_files WHERE id = ? LIMIT 1`, [id]);
-	return row ? mapAdminDrive(row) : null;
+	return mapAdminDrive({ ...existing, accessPasswordHash: secret.passwordHash, accessPasswordHint: secret.hint });
 }
 
 export async function incrementAdminDriveDownload(id: number) {

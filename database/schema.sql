@@ -265,6 +265,7 @@ CREATE TABLE IF NOT EXISTS user_storage_items (
   is_public BOOLEAN NOT NULL DEFAULT FALSE,
   public_token CHAR(43) NULL UNIQUE,
   access_password_hash VARCHAR(255) NULL,
+  access_password_hint VARCHAR(40) NULL,
   view_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -285,6 +286,7 @@ CREATE TABLE IF NOT EXISTS user_clipboards (
   is_public BOOLEAN NOT NULL DEFAULT FALSE,
   public_token CHAR(43) NULL UNIQUE,
   access_password_hash VARCHAR(255) NULL,
+  access_password_hint VARCHAR(40) NULL,
   view_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -328,6 +330,24 @@ SET @firefly_clipboard_access_password_sql = IF(
 PREPARE firefly_clipboard_access_password_statement FROM @firefly_clipboard_access_password_sql;
 EXECUTE firefly_clipboard_access_password_statement;
 DEALLOCATE PREPARE firefly_clipboard_access_password_statement;
+
+SET @firefly_storage_access_hint_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_storage_items' AND COLUMN_NAME = 'access_password_hint') = 0,
+  'ALTER TABLE user_storage_items ADD COLUMN access_password_hint VARCHAR(40) NULL AFTER access_password_hash',
+  'SELECT 1'
+);
+PREPARE firefly_storage_access_hint_statement FROM @firefly_storage_access_hint_sql;
+EXECUTE firefly_storage_access_hint_statement;
+DEALLOCATE PREPARE firefly_storage_access_hint_statement;
+
+SET @firefly_clipboard_access_hint_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_clipboards' AND COLUMN_NAME = 'access_password_hint') = 0,
+  'ALTER TABLE user_clipboards ADD COLUMN access_password_hint VARCHAR(40) NULL AFTER access_password_hash',
+  'SELECT 1'
+);
+PREPARE firefly_clipboard_access_hint_statement FROM @firefly_clipboard_access_hint_sql;
+EXECUTE firefly_clipboard_access_hint_statement;
+DEALLOCATE PREPARE firefly_clipboard_access_hint_statement;
 
 -- The original comments table predates user sessions and threaded replies.
 -- Add the new columns only when they are missing so this file remains safe to
@@ -534,6 +554,7 @@ CREATE TABLE IF NOT EXISTS admin_drive_files (
   byte_size BIGINT UNSIGNED NOT NULL,
   public_token CHAR(43) NOT NULL,
   access_password_hash VARCHAR(255) NULL,
+  access_password_hint VARCHAR(40) NULL,
   download_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -552,6 +573,15 @@ SET @firefly_drive_access_password_sql = IF(
 PREPARE firefly_drive_access_password_statement FROM @firefly_drive_access_password_sql;
 EXECUTE firefly_drive_access_password_statement;
 DEALLOCATE PREPARE firefly_drive_access_password_statement;
+
+SET @firefly_drive_access_hint_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_drive_files' AND COLUMN_NAME = 'access_password_hint') = 0,
+  'ALTER TABLE admin_drive_files ADD COLUMN access_password_hint VARCHAR(40) NULL AFTER access_password_hash',
+  'SELECT 1'
+);
+PREPARE firefly_drive_access_hint_statement FROM @firefly_drive_access_hint_sql;
+EXECUTE firefly_drive_access_hint_statement;
+DEALLOCATE PREPARE firefly_drive_access_hint_statement;
 
 -- An in-progress upload. The file is appended in chunks so the browser can
 -- advance progress only after this server has stored those bytes.

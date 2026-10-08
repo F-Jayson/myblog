@@ -10,7 +10,7 @@ import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
-import { AccessPasswordError, DRIVE_PASSWORD_PAGE, accessGrantsFromRequest, allowAccessAttempt, driveAccessCookie, hashAccessPassword, issueAccessGrant, parseAccessPassword, readAccessGrant, readSubmittedAccessPassword, verifyAccessPassword } from "./accessPassword.js";
+import { AccessPasswordError, accessGrantsFromRequest, allowAccessAttempt, driveAccessCookie, drivePasswordPage, issueAccessGrant, parseAccessPassword, parseAccessPasswordHint, readAccessGrant, readSubmittedAccessPassword, verifyAccessPassword } from "./accessPassword.js";
 import { ADMIN_DRIVE_CHUNK_BYTES, ADMIN_DRIVE_MAX_BYTES, adminDriveFilePath, contentDispositionAttachment, countsAsDriveDownload, driveDownloadUrl, isDriveToken, normalizeDriveFileName, parseSingleByteRange, safeDriveMimeType } from "./adminDrive.js";
 import { config } from "./config.js";
 import { pool } from "./db.js";
@@ -375,7 +375,8 @@ function userImageUploadRoute(kind: UserStorageKind, defaultPublic: boolean) {
 			const name = typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim().slice(0, 255) : req.file.originalname.slice(0, 255);
 			try {
 				const accessPassword = parseAccessPassword(req.body?.accessPassword);
-				const item = await createUserStorageItem({ userId: req.commentUser.id, kind, name, url: "", storageKey: req.file.filename, mimeType: req.file.mimetype, byteSize: req.file.size, isPublic, accessPassword: accessPassword ?? null });
+				const accessPasswordHint = parseAccessPasswordHint(req.body?.accessPasswordHint);
+				const item = await createUserStorageItem({ userId: req.commentUser.id, kind, name, url: "", storageKey: req.file.filename, mimeType: req.file.mimetype, byteSize: req.file.size, isPublic, accessPassword: accessPassword ?? null, accessPasswordHint: accessPasswordHint ?? null });
 				if (!item) throw new Error("图片记录创建失败");
 				res.status(201).json(item);
 			} catch (error) {
@@ -670,12 +671,15 @@ app.patch("/api/user/storage/:id", requireFeature("userCenterEnabled", "用户�
 	try {
 		const id = parseCommentUserId(String(req.params.id));
 		if (!id) { res.status(400).json({ error: "资源编号无效" }); return; }
-		const hasVisibility = typeof req.body?.isPublic === "boolean";
-		const hasPassword = req.body?.accessPassword !== undefined || req.body?.clearAccessPassword === true;
-		if (!hasVisibility && !hasPassword) { res.status(400).json({ error: "公开状态无效" }); return; }
-		if (req.body?.isPublic !== undefined && !hasVisibility) { res.status(400).json({ error: "公开状态无效" }); return; }
-		const accessPassword = req.body?.clearAccessPassword === true && !req.body?.accessPassword ? null : parseAccessPassword(req.body?.accessPassword);
-		const item = await updateUserStorageSettings(req.commentUser!.id, id, { isPublic: hasVisibility ? req.body.isPublic : undefined, accessPassword });
+		const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+		const isPublic = typeof body.isPublic === "boolean" ? body.isPublic : undefined;
+		const hasPassword = body.accessPassword !== undefined || body.clearAccessPassword === true;
+		const hasHint = Object.hasOwn(body, "accessPasswordHint");
+		if (isPublic === undefined && !hasPassword && !hasHint) { res.status(400).json({ error: "公开状态无效" }); return; }
+		if (body.isPublic !== undefined && isPublic === undefined) { res.status(400).json({ error: "公开状态无效" }); return; }
+		const accessPassword = body.clearAccessPassword === true && !body.accessPassword ? null : parseAccessPassword(body.accessPassword);
+		const accessPasswordHint = hasHint ? parseAccessPasswordHint(body.accessPasswordHint) : undefined;
+		const item = await updateUserStorageSettings(req.commentUser!.id, id, { isPublic, accessPassword, accessPasswordHint });
 		if (!item) { res.status(404).json({ error: "资源不存在" }); return; }
 		res.json(item);
 	} catch (error) { next(error); }
@@ -696,10 +700,11 @@ app.get("/api/user/clipboards", requireFeature("userCenterEnabled", "用户中�
 });
 app.post("/api/user/clipboards", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("clipboardEnabled", "在线剪贴板功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try {
-		const input = z.object({ title: z.string().trim().max(255).optional(), content: z.string().max(USER_SPACE_QUOTA_BYTES).default(""), contentType: z.string().trim().max(16).optional(), language: z.string().trim().max(32).optional(), isPublic: z.boolean().optional(), accessPassword: z.string().max(64).optional(), clearAccessPassword: z.boolean().optional() }).parse(req.body);
+		const input = z.object({ title: z.string().trim().max(255).optional(), content: z.string().max(USER_SPACE_QUOTA_BYTES).default(""), contentType: z.string().trim().max(16).optional(), language: z.string().trim().max(32).optional(), isPublic: z.boolean().optional(), accessPassword: z.string().max(64).optional(), accessPasswordHint: z.string().max(80).nullable().optional(), clearAccessPassword: z.boolean().optional() }).parse(req.body);
 		const contentType = normalizeClipboardContentType(input.contentType);
 		const accessPassword = input.clearAccessPassword && !input.accessPassword ? null : parseAccessPassword(input.accessPassword);
-		res.status(201).json(await createUserClipboard({ userId: req.commentUser!.id, title: input.title, content: input.content, contentType, language: normalizeClipboardLanguage(contentType, input.language), isPublic: input.isPublic ?? true, accessPassword: accessPassword ?? null }));
+		const accessPasswordHint = parseAccessPasswordHint(input.accessPasswordHint);
+		res.status(201).json(await createUserClipboard({ userId: req.commentUser!.id, title: input.title, content: input.content, contentType, language: normalizeClipboardLanguage(contentType, input.language), isPublic: input.isPublic ?? true, accessPassword: accessPassword ?? null, accessPasswordHint: accessPasswordHint ?? null }));
 	} catch (error) { next(error); }
 });
 app.get("/api/user/clipboards/:id", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("clipboardEnabled", "在线剪贴板功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
@@ -715,10 +720,11 @@ app.patch("/api/user/clipboards/:id", requireFeature("userCenterEnabled", "用�
 	try {
 		const id = parseCommentUserId(String(req.params.id));
 		if (!id) { res.status(400).json({ error: "剪贴板编号无效" }); return; }
-		const input = z.object({ title: z.string().trim().max(255).optional(), content: z.string().max(USER_SPACE_QUOTA_BYTES).optional(), contentType: z.string().trim().max(16).optional(), language: z.string().trim().max(32).optional(), isPublic: z.boolean().optional(), accessPassword: z.string().max(64).optional(), clearAccessPassword: z.boolean().optional() }).parse(req.body);
+		const input = z.object({ title: z.string().trim().max(255).optional(), content: z.string().max(USER_SPACE_QUOTA_BYTES).optional(), contentType: z.string().trim().max(16).optional(), language: z.string().trim().max(32).optional(), isPublic: z.boolean().optional(), accessPassword: z.string().max(64).optional(), accessPasswordHint: z.string().max(80).nullable().optional(), clearAccessPassword: z.boolean().optional() }).parse(req.body);
 		const contentType = input.contentType === undefined ? undefined : normalizeClipboardContentType(input.contentType);
 		const accessPassword = input.clearAccessPassword && !input.accessPassword ? null : parseAccessPassword(input.accessPassword);
-		const item = await updateUserClipboard(req.commentUser!.id, id, { title: input.title, content: input.content, contentType, language: contentType ? normalizeClipboardLanguage(contentType, input.language) : input.language, isPublic: input.isPublic, accessPassword });
+		const accessPasswordHint = input.accessPasswordHint === undefined ? undefined : parseAccessPasswordHint(input.accessPasswordHint);
+		const item = await updateUserClipboard(req.commentUser!.id, id, { title: input.title, content: input.content, contentType, language: contentType ? normalizeClipboardLanguage(contentType, input.language) : input.language, isPublic: input.isPublic, accessPassword, accessPasswordHint });
 		if (!item) { res.status(404).json({ error: "剪贴板不存在" }); return; }
 		res.json(item);
 	} catch (error) { next(error); }
@@ -754,7 +760,11 @@ async function revealPublicResource(req: Request, token: string, password: strin
 async function deliverPublicResource(req: Request, res: Response, next: NextFunction, token: string, password: string | undefined) {
 	const opened = await revealPublicResource(req, token, password);
 	if (!opened) { res.status(404).json({ error: "公开资源不存在或已关闭" }); return; }
-	if (opened.locked) { res.status(401).json({ locked: true, type: opened.found.type, error: "需要访问密码" }); return; }
+	if (opened.locked) {
+		const passwordHint = opened.found.item.accessPasswordHint.trim();
+		res.status(401).json({ locked: true, type: opened.found.type, error: "需要访问密码", ...(passwordHint ? { passwordHint } : {}) });
+		return;
+	}
 	const protectedResource = Boolean(opened.found.accessPasswordHash);
 	if (opened.found.type === "image") {
 		if (password !== undefined) {
@@ -2265,14 +2275,14 @@ const adminDriveUpload = multer({
 		destination: adminDriveRoot,
 		filename: (_req, _file, callback) => callback(null, randomBytes(32).toString("hex")),
 	}),
-	limits: { files: 1, fileSize: ADMIN_DRIVE_MAX_BYTES, fields: 1, fieldSize: 1024 },
+	limits: { files: 1, fileSize: ADMIN_DRIVE_MAX_BYTES, fields: 4, fieldSize: 1024 },
 });
 
 function driveOwner(admin: NonNullable<RequestWithAdmin["adminUser"]>) {
 	return { id: admin.id, username: admin.username.slice(0, 60) };
 }
 
-function presentDriveFile(file: { id: number; originalName: string; mimeType: string; byteSize: number; publicToken: string; downloadCount: number; createdAt: string; accessPasswordHash?: string | null }) {
+function presentDriveFile(file: { id: number; originalName: string; mimeType: string; byteSize: number; publicToken: string; downloadCount: number; createdAt: string; accessPasswordHash?: string | null; accessPasswordHint?: string | null }) {
 	return {
 		id: file.id,
 		name: file.originalName,
@@ -2282,6 +2292,7 @@ function presentDriveFile(file: { id: number; originalName: string; mimeType: st
 		downloadUrl: driveDownloadUrl(config.filesPublicOrigin, file.publicToken, file.originalName),
 		createdAt: file.createdAt,
 		hasAccessPassword: Boolean(file.accessPasswordHash),
+		accessPasswordHint: file.accessPasswordHash ? (file.accessPasswordHint?.trim() ?? "") : "",
 	};
 }
 
@@ -2326,6 +2337,7 @@ app.post("/api/admin/drive", requireAdmin, (req: RequestWithAdmin, res, next) =>
 				const publicToken = randomBytes(32).toString("base64url");
 				try {
 					const accessPassword = parseAccessPassword(req.body?.accessPassword);
+					const accessPasswordHint = parseAccessPasswordHint(req.body?.accessPasswordHint);
 					saved = await createAdminDriveFile({
 						ownerAdminId: req.adminUser.id,
 						ownerUsername: req.adminUser.username.slice(0, 60),
@@ -2334,7 +2346,8 @@ app.post("/api/admin/drive", requireAdmin, (req: RequestWithAdmin, res, next) =>
 						mimeType: safeDriveMimeType(req.file.mimetype),
 						byteSize: req.file.size,
 						publicToken,
-						accessPasswordHash: accessPassword ? hashAccessPassword(accessPassword) : null,
+						accessPassword: accessPassword ?? null,
+						accessPasswordHint: accessPasswordHint ?? null,
 					});
 				} catch (error) {
 					if (attempt === 0 && databaseErrorCode(error) === "ER_DUP_ENTRY") continue;
@@ -2504,6 +2517,7 @@ app.post("/api/admin/drive/sessions/:id/complete", requireAdmin, async (req: Req
 			return;
 		}
 		const accessPassword = parseAccessPassword(req.body?.accessPassword);
+		const accessPasswordHint = parseAccessPasswordHint(req.body?.accessPasswordHint);
 		let saved = null;
 		for (let attempt = 0; attempt < 2 && !saved; attempt += 1) {
 			try {
@@ -2515,7 +2529,8 @@ app.post("/api/admin/drive/sessions/:id/complete", requireAdmin, async (req: Req
 					mimeType: upload.mimeType,
 					byteSize: upload.byteSize,
 					publicToken: randomBytes(32).toString("base64url"),
-					accessPasswordHash: accessPassword ? hashAccessPassword(accessPassword) : null,
+					accessPassword: accessPassword ?? null,
+					accessPasswordHint: accessPasswordHint ?? null,
 				});
 			} catch (error) {
 				if (attempt === 0 && databaseErrorCode(error) === "ER_DUP_ENTRY") continue;
@@ -2545,9 +2560,13 @@ app.patch("/api/admin/drive/:id", requireAdmin, async (req: RequestWithAdmin, re
 		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
 		const id = Number(req.params.id);
 		if (!Number.isSafeInteger(id) || id < 1) { res.status(400).json({ error: "文件编号无效" }); return; }
-		if (req.body?.accessPassword === undefined && req.body?.clearAccessPassword !== true) { res.status(400).json({ error: "请填写访问密码" }); return; }
-		const accessPassword = req.body?.clearAccessPassword === true && !req.body?.accessPassword ? null : parseAccessPassword(req.body?.accessPassword);
-		const saved = await updateAdminDriveAccessPassword(id, driveOwner(req.adminUser), accessPassword ? hashAccessPassword(accessPassword) : null);
+		const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+		const hasPassword = body.accessPassword !== undefined || body.clearAccessPassword === true;
+		const hasHint = Object.hasOwn(body, "accessPasswordHint");
+		if (!hasPassword && !hasHint) { res.status(400).json({ error: "请填写访问密码" }); return; }
+		const accessPassword = body.clearAccessPassword === true && !body.accessPassword ? null : parseAccessPassword(body.accessPassword);
+		const accessPasswordHint = hasHint ? parseAccessPasswordHint(body.accessPasswordHint) : undefined;
+		const saved = await updateAdminDriveAccessPassword(id, driveOwner(req.adminUser), { accessPassword, accessPasswordHint });
 		if (!saved) { res.status(404).json({ error: "文件不存在" }); return; }
 		res.json(presentDriveFile(saved));
 	} catch (error) { next(error); }
@@ -2587,11 +2606,12 @@ async function sendPublicDriveFile(req: Request, res: Response, next: NextFuncti
 				res.setHeader("Referrer-Policy", "no-referrer");
 				res.setHeader("X-Frame-Options", "DENY");
 				if (req.method === "HEAD") { res.status(401).end(); return; }
+				const passwordHint = file.accessPasswordHint?.trim() ?? "";
 				if ((req.header("accept") ?? "").includes("text/html")) {
-					res.status(200).type("html").setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'").send(DRIVE_PASSWORD_PAGE);
+					res.status(200).type("html").setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'").send(drivePasswordPage(passwordHint));
 					return;
 				}
-				res.status(401).json({ locked: true, error: "需要访问密码" });
+				res.status(401).json({ locked: true, error: "需要访问密码", ...(passwordHint ? { passwordHint } : {}) });
 				return;
 			}
 		}
@@ -2657,7 +2677,11 @@ app.post("/api/files/:token/unlock", async (req, res, next) => {
 		if (!file.accessPasswordHash) { res.json({ ok: true, locked: false }); return; }
 		if (!allowAccessAttempt(`drive:${requestClientIp(req)}:${token}`)) { res.status(429).json({ error: "尝试过于频繁，请稍后再试" }); return; }
 		const password = readSubmittedAccessPassword(req.body?.password);
-		if (!password || !verifyAccessPassword(password, file.accessPasswordHash)) { res.status(401).json({ locked: true, error: "访问密码不正确" }); return; }
+		if (!password || !verifyAccessPassword(password, file.accessPasswordHash)) {
+			const passwordHint = file.accessPasswordHint?.trim() ?? "";
+			res.status(401).json({ locked: true, error: "访问密码不正确", ...(passwordHint ? { passwordHint } : {}) });
+			return;
+		}
 		const grant = issueAccessGrant(`drive:${file.id}`, file.accessPasswordHash);
 		const secure = req.header("x-forwarded-proto") === "https" || req.secure;
 		res.setHeader("Cache-Control", "no-store");
