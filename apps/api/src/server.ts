@@ -92,6 +92,7 @@ import {
 	getAuthorProfileActivity,
 	getManagedPage,
 	getSiteSetting,
+	deleteSiteSetting,
 	listAdminComments,
 	listAdminCommentUsers,
 	listAdminFeedback,
@@ -2694,6 +2695,111 @@ app.get("/api/files/:token", sendPublicDriveFile);
 app.get("/api/files/:token/:fileName", sendPublicDriveFile);
 app.head("/api/files/:token", sendPublicDriveFile);
 app.head("/api/files/:token/:fileName", sendPublicDriveFile);
+
+const appScheduleReleaseInput = z.object({
+	versionName: z.string().trim().min(1, "版本名称不能为空").max(50),
+	versionCode: z.number().int().min(1, "版本号必须为正整数"),
+	releaseNotes: z.string().max(10000).default(""),
+	driveFileId: z.number().int().positive().nullable().optional(),
+	downloadUrl: z.string().trim().min(1, "下载链接不能为空"),
+	fileName: z.string().trim().min(1, "文件名不能为空").max(255),
+	byteSize: z.number().int().nonnegative().default(0),
+});
+
+type AppScheduleRelease = {
+	versionName: string;
+	versionCode: number;
+	releaseNotes: string;
+	driveFileId: number | null;
+	downloadUrl: string;
+	fileName: string;
+	byteSize: number;
+	publishedAt: string;
+};
+
+// 公开接口：获取福建师大课表最新发布版本信息
+app.get("/api/app/schedule/latest", async (_req, res, next) => {
+	try {
+		const release = (await getSiteSetting("app_release_schedule")) as AppScheduleRelease | null;
+		if (!release || !release.versionName || !release.downloadUrl) {
+			res.status(404).json({ error: "尚未发布课表安装包" });
+			return;
+		}
+		res.setHeader("Cache-Control", "no-cache");
+		res.json({
+			versionName: release.versionName,
+			versionCode: release.versionCode,
+			releaseNotes: release.releaseNotes || "",
+			downloadUrl: release.downloadUrl,
+			apkFileName: release.fileName,
+			apkSize: release.byteSize,
+			publishedAt: release.publishedAt || new Date().toISOString(),
+		});
+	} catch (error) { next(error); }
+});
+
+// 公开接口：直接重定向到最新版课表 APK 下载链接
+app.get("/api/app/schedule/download", async (_req, res, next) => {
+	try {
+		const release = (await getSiteSetting("app_release_schedule")) as AppScheduleRelease | null;
+		if (!release || !release.downloadUrl) {
+			res.status(404).type("text/plain; charset=utf-8").send("尚未发布课表安装包。");
+			return;
+		}
+		res.redirect(302, release.downloadUrl);
+	} catch (error) { next(error); }
+});
+
+// 管理接口：获取当前发布的课表版本及网盘中的 APK 文件列表
+app.get("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWithAdmin, res, next) => {
+	try {
+		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		const [release, listed] = await Promise.all([
+			getSiteSetting("app_release_schedule") as Promise<AppScheduleRelease | null>,
+			listAdminDriveFiles(driveOwner(req.adminUser)),
+		]);
+		const apkFiles = listed.items
+			.filter((file) => file.originalName.toLowerCase().endsWith(".apk"))
+			.map(presentDriveFile);
+		const allDriveFiles = listed.items.map(presentDriveFile);
+		res.json({
+			release: release || null,
+			apkFiles,
+			allDriveFiles,
+			publicOrigin: config.filesPublicOrigin,
+		});
+	} catch (error) { next(error); }
+});
+
+// 管理接口：保存并发布课表版本下载源
+app.post("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWithAdmin, res, next) => {
+	try {
+		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		const input = appScheduleReleaseInput.parse(req.body);
+		const release: AppScheduleRelease = {
+			versionName: input.versionName,
+			versionCode: input.versionCode,
+			releaseNotes: input.releaseNotes,
+			driveFileId: input.driveFileId ?? null,
+			downloadUrl: input.downloadUrl,
+			fileName: input.fileName,
+			byteSize: input.byteSize,
+			publishedAt: new Date().toISOString(),
+		};
+		await saveSiteSetting("app_release_schedule", release);
+		res.status(201).json(release);
+	} catch (error) { next(error); }
+});
+
+// 管理接口：下架/清除课表版本下载源
+app.delete("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWithAdmin, res, next) => {
+	try {
+		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		await deleteSiteSetting("app_release_schedule");
+		res.json({ success: true });
+	} catch (error) { next(error); }
+});
+
 
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 	if (error instanceof CompilerError) {

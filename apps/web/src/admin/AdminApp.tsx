@@ -55,6 +55,7 @@ import {
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  Smartphone,
   Sparkles,
   Trash2,
   Type,
@@ -72,6 +73,7 @@ import { AuthImage } from "../AuthImage";
 import { markdownToPlainText, parseDynamicBody, parseDynamicImageSize, withDynamicImageSize, type DynamicImageSize } from "../markdown";
 import { absoluteMediaUrl } from "../media";
 import AdminDrive from "./AdminDrive";
+import AdminAppRelease from "./AdminAppRelease";
 import MdEditorBridge from "./MdEditorBridge";
 import type { Post, SiteData } from "../types";
 import "./admin.css";
@@ -820,6 +822,12 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
         icon: HardDrive,
       },
       {
+        href: "/admin/app-release",
+        label: "应用发布",
+        hint: "课表安装包与下载源",
+        icon: Smartphone,
+      },
+      {
         href: "/admin/storage",
         label: "媒体与空间",
         hint: "用户空间与资源管理",
@@ -916,6 +924,7 @@ function AdminShell() {
   else if (location.pathname === "/admin/users") page = <AdminUsers />;
   else if (location.pathname === "/admin/storage") page = <AdminUserSpace />;
   else if (location.pathname === "/admin/drive") page = <AdminDrive />;
+  else if (location.pathname === "/admin/app-release") page = <AdminAppRelease />;
   else if (location.pathname === "/admin/site") page = <AdminSiteSettings />;
   else if (location.pathname === "/admin/accounts") page = <AdminAccounts />;
   else if (location.pathname !== "/admin")
@@ -1260,6 +1269,11 @@ function AdminDashboard() {
             <HardDrive size={22} />
             <strong>传文件</strong>
             <span>生成公开下载链接</span>
+          </Link>
+          <Link to="/admin/app-release">
+            <Smartphone size={22} />
+            <strong>发应用</strong>
+            <span>课表安装包下载源</span>
           </Link>
         </div>
       </section>

@@ -2084,6 +2084,11 @@ export async function saveSiteSetting(key: string, value: unknown) {
 	await pool.execute("INSERT INTO site_settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)", [key, JSON.stringify(value)]);
 }
 
+export async function deleteSiteSetting(key: string) {
+	await pool.execute("DELETE FROM site_settings WHERE setting_key = ?", [key]);
+}
+
+
 export async function getAuthorProfile() {
 	const [[row]] = await pool.query<RowDataPacket[]>("SELECT * FROM authors ORDER BY id LIMIT 1");
 	return mapAuthor(row);
