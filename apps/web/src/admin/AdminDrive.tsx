@@ -103,6 +103,9 @@ export default function AdminDrive() {
   const [progress, setProgress] = useState(0);
   const [uploadedBytes, setUploadedBytes] = useState(0);
   const [uploadTotal, setUploadTotal] = useState(0);
+  const [batchTotal, setBatchTotal] = useState(0);
+  const [batchCurrent, setBatchCurrent] = useState(0);
+  const [batchCurrentName, setBatchCurrentName] = useState("");
   const [dragging, setDragging] = useState(false);
   const [message, setMessage] = useState("");
   const [latestUrl, setLatestUrl] = useState("");
@@ -210,12 +213,17 @@ export default function AdminDrive() {
     xhr.send(body);
   });
 
-  const uploadFile = (file: File | undefined) => {
-    if (!file || uploadingRef.current) return;
-    if (file.size > maxBytes) {
-      setMessage("单个文件不能超过 2GB。");
-      return;
+  const uploadFiles = async (filesToUpload: FileList | File[] | (File | undefined)[]) => {
+    const list = Array.from(filesToUpload).filter((f): f is File => Boolean(f));
+    if (list.length === 0 || uploadingRef.current) return;
+
+    for (const file of list) {
+      if (file.size > maxBytes) {
+        setMessage(`文件“${file.name}”大小超过单个文件限制 (${bytesText(maxBytes)})。`);
+        return;
+      }
     }
+
     const password = uploadPassword;
     const hint = uploadHint.trim();
     if (password && (password.length < 4 || password.length > 64)) {
@@ -234,14 +242,24 @@ export default function AdminDrive() {
       setMessage("密码提示不能包含密码。");
       return;
     }
+
     uploadingRef.current = true;
     setUploading(true);
-    setPhase("uploading");
-    setProgress(0);
-    setUploadedBytes(0);
-    setUploadTotal(file.size);
     setMessage("");
-    void (async () => {
+
+    let successCount = 0;
+    const newItems: DriveFile[] = [];
+
+    for (let i = 0; i < list.length; i++) {
+      const file = list[i];
+      setBatchCurrent(i + 1);
+      setBatchTotal(list.length);
+      setBatchCurrentName(file.name);
+      setPhase("uploading");
+      setProgress(0);
+      setUploadedBytes(0);
+      setUploadTotal(file.size);
+
       let uploadId = "";
       try {
         const session = await driveRequest<DriveSession>("/api/admin/drive/sessions", {
@@ -267,25 +285,40 @@ export default function AdminDrive() {
           body: JSON.stringify(password ? { accessPassword: password, ...(hint ? { accessPasswordHint: hint } : {}) } : {}),
         });
         uploadId = "";
-        setUploadPassword("");
-        setUploadHint("");
+        successCount++;
+        newItems.push(saved);
         setLatestUrl(saved.downloadUrl);
-        setMessage("");
-        setItems((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
-        void load(true);
       } catch (error) {
         if (uploadId) {
           await driveRequest("/api/admin/drive/sessions/" + uploadId, { method: "DELETE" }).catch(() => undefined);
         }
         if (!(error instanceof Error) || error.message !== "登录状态已失效") {
-          setMessage(error instanceof Error ? error.message : "上传失败，请稍后重试。");
+          setMessage(`文件“${file.name}”上传失败: ${error instanceof Error ? error.message : "上传失败，请重试。"}`);
         }
-      } finally {
-        uploadingRef.current = false;
-        setUploading(false);
-        setPhase("uploading");
+        break;
       }
-    })();
+    }
+
+    if (newItems.length > 0) {
+      setItems((current) => [...newItems, ...current.filter((item) => !newItems.some((n) => n.id === item.id))]);
+      setUploadPassword("");
+      setUploadHint("");
+      if (successCount === list.length && list.length > 1) {
+        setMessage(`已成功批量上传 ${successCount} 个文件！`);
+      }
+      void load(true);
+    }
+
+    uploadingRef.current = false;
+    setUploading(false);
+    setPhase("uploading");
+    setBatchTotal(0);
+    setBatchCurrent(0);
+    setBatchCurrentName("");
+  };
+
+  const uploadFile = (file: File | undefined) => {
+    if (file) void uploadFiles([file]);
   };
 
   const savePassword = async (item: DriveFile, clear: boolean) => {
@@ -360,26 +393,33 @@ export default function AdminDrive() {
             event.preventDefault();
             setDragging(false);
             const files = event.dataTransfer.files;
-            if (files.length > 1) {
-              setMessage("一次只能上传一个文件。");
-              return;
+            if (files && files.length > 0) {
+              void uploadFiles(files);
             }
-            uploadFile(files[0]);
           }}
         >
           <input
             ref={inputRef}
             type="file"
+            multiple
             disabled={uploading}
             onChange={(event) => {
-              const file = event.target.files?.[0];
+              const files = event.target.files;
+              if (files && files.length > 0) {
+                void uploadFiles(files);
+              }
               event.target.value = "";
-              uploadFile(file);
             }}
           />
           <span className="fa-drive-drop-icon">{uploading ? <RefreshCw size={22} className="fa-spin" /> : <Upload size={22} />}</span>
-          <strong>{uploading ? (phase === "saving" ? "正在保存" : "正在上传") : "选择文件或拖到这里"}</strong>
-          <small>任意格式，最大 {bytesText(maxBytes)}</small>
+          <strong>
+            {uploading
+              ? (batchTotal > 1
+                ? `正在上传 (${batchCurrent}/${batchTotal}): ${batchCurrentName}`
+                : (phase === "saving" ? "正在保存" : "正在上传"))
+              : "选择文件或拖到这里（支持多选批量上传）"}
+          </strong>
+          <small>任意格式，最大 {bytesText(maxBytes)}，支持批量上传</small>
         </label>
         <label className="fa-drive-password">
           访问密码（可选）
@@ -394,7 +434,10 @@ export default function AdminDrive() {
             <div className={"fa-drive-progress" + (phase === "saving" ? " is-saving" : "")} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
               <span style={{ width: progress + "%" }} />
             </div>
-            <small>{phase === "saving" ? "正在写入服务器，请稍候" : progress + "% · " + bytesText(uploadedBytes) + " / " + bytesText(uploadTotal)}</small>
+            <small>
+              {batchTotal > 1 ? `第 ${batchCurrent}/${batchTotal} 个文件 · ` : ""}
+              {phase === "saving" ? "正在写入服务器，请稍候" : progress + "% · " + bytesText(uploadedBytes) + " / " + bytesText(uploadTotal)}
+            </small>
           </div>
         ) : null}
         {latestUrl ? (

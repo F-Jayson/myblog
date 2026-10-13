@@ -2696,6 +2696,16 @@ app.get("/api/files/:token/:fileName", sendPublicDriveFile);
 app.head("/api/files/:token", sendPublicDriveFile);
 app.head("/api/files/:token/:fileName", sendPublicDriveFile);
 
+const appScheduleAssetInput = z.object({
+	abi: z.string().trim().max(50).default("universal"),
+	fileName: z.string().trim().min(1).max(255),
+	downloadUrl: z.string().trim().min(1),
+	byteSize: z.number().int().nonnegative().default(0),
+	driveFileId: z.number().int().positive().nullable().optional(),
+});
+
+type AppScheduleAsset = z.infer<typeof appScheduleAssetInput>;
+
 const appScheduleReleaseInput = z.object({
 	versionName: z.string().trim().min(1, "版本名称不能为空").max(50),
 	versionCode: z.number().int().min(1, "版本号必须为正整数"),
@@ -2704,6 +2714,7 @@ const appScheduleReleaseInput = z.object({
 	downloadUrl: z.string().trim().min(1, "下载链接不能为空"),
 	fileName: z.string().trim().min(1, "文件名不能为空").max(255),
 	byteSize: z.number().int().nonnegative().default(0),
+	assets: z.array(appScheduleAssetInput).optional().default([]),
 });
 
 type AppScheduleRelease = {
@@ -2715,9 +2726,10 @@ type AppScheduleRelease = {
 	fileName: string;
 	byteSize: number;
 	publishedAt: string;
+	assets?: AppScheduleAsset[];
 };
 
-// 公开接口：获取福建师大课表最新发布版本信息
+// 公开接口：获取福建师大课表最新发布版本信息（支持多架构 assets）
 app.get("/api/app/schedule/latest", async (_req, res, next) => {
 	try {
 		const release = (await getSiteSetting("app_release_schedule")) as AppScheduleRelease | null;
@@ -2734,17 +2746,41 @@ app.get("/api/app/schedule/latest", async (_req, res, next) => {
 			apkFileName: release.fileName,
 			apkSize: release.byteSize,
 			publishedAt: release.publishedAt || new Date().toISOString(),
+			assets: (release.assets && release.assets.length > 0)
+				? release.assets.map((asset) => ({
+					abi: asset.abi,
+					fileName: asset.fileName,
+					downloadUrl: asset.downloadUrl,
+					apkSize: asset.byteSize,
+				}))
+				: [
+					{
+						abi: "universal",
+						fileName: release.fileName,
+						downloadUrl: release.downloadUrl,
+						apkSize: release.byteSize,
+					},
+				],
 		});
 	} catch (error) { next(error); }
 });
 
-// 公开接口：直接重定向到最新版课表 APK 下载链接
-app.get("/api/app/schedule/download", async (_req, res, next) => {
+// 公开接口：直接重定向到最新版课表 APK 下载链接（支持通过 ?abi= 自动匹配架构）
+app.get("/api/app/schedule/download", async (req, res, next) => {
 	try {
 		const release = (await getSiteSetting("app_release_schedule")) as AppScheduleRelease | null;
 		if (!release || !release.downloadUrl) {
 			res.status(404).type("text/plain; charset=utf-8").send("尚未发布课表安装包。");
 			return;
+		}
+		const requestedAbi = typeof req.query.abi === "string" ? req.query.abi.trim().toLowerCase() : "";
+		if (requestedAbi && release.assets && release.assets.length > 0) {
+			const matched = release.assets.find((a) => a.abi.toLowerCase() === requestedAbi)
+				|| release.assets.find((a) => a.abi.toLowerCase() === "universal");
+			if (matched && matched.downloadUrl) {
+				res.redirect(302, matched.downloadUrl);
+				return;
+			}
 		}
 		res.redirect(302, release.downloadUrl);
 	} catch (error) { next(error); }
@@ -2771,7 +2807,7 @@ app.get("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWit
 	} catch (error) { next(error); }
 });
 
-// 管理接口：保存并发布课表版本下载源
+// 管理接口：保存并发布课表版本下载源（支持多 APK 资产）
 app.post("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWithAdmin, res, next) => {
 	try {
 		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
@@ -2785,6 +2821,7 @@ app.post("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWi
 			fileName: input.fileName,
 			byteSize: input.byteSize,
 			publishedAt: new Date().toISOString(),
+			assets: input.assets || [],
 		};
 		await saveSiteSetting("app_release_schedule", release);
 		res.status(201).json(release);

@@ -2,20 +2,31 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Check,
+  CheckSquare,
   Copy,
   Download,
   ExternalLink,
   FileText,
   HardDrive,
   Info,
+  Layers,
   RefreshCw,
   Rocket,
   Smartphone,
+  Square,
   Trash2,
 } from "lucide-react";
 
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN ?? "").trim().replace(/\/+$/u, "");
 const AUTH_EXPIRED_EVENT = "firefly-admin-auth-expired";
+
+export type AppScheduleAsset = {
+  abi: string; // "universal" | "arm64-v8a" | "armeabi-v7a" | "x86_64" | string
+  driveFileId?: number | null;
+  fileName: string;
+  downloadUrl: string;
+  byteSize: number;
+};
 
 export type AppScheduleRelease = {
   versionName: string;
@@ -26,6 +37,7 @@ export type AppScheduleRelease = {
   fileName: string;
   byteSize: number;
   publishedAt: string;
+  assets?: AppScheduleAsset[];
 };
 
 export type DriveApkFile = {
@@ -92,6 +104,31 @@ function dateText(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
+function detectAbiFromName(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.includes("arm64-v8a") || lower.includes("arm64") || lower.includes("aarch64")) return "arm64-v8a";
+  if (lower.includes("armeabi-v7a") || lower.includes("armv7") || lower.includes("armeabi")) return "armeabi-v7a";
+  if (lower.includes("x86_64") || lower.includes("x64")) return "x86_64";
+  if (lower.includes("x86")) return "x86";
+  if (lower.includes("universal")) return "universal";
+  return "universal";
+}
+
+function abiBadgeText(abi: string): { label: string; bg: string; color: string } {
+  switch (abi.toLowerCase()) {
+    case "arm64-v8a":
+      return { label: "ARM64 (手机主力)", bg: "#e0f2fe", color: "#0369a1" };
+    case "universal":
+      return { label: "Universal (全架构通用)", bg: "#fef3c7", color: "#b45309" };
+    case "armeabi-v7a":
+      return { label: "ARM32 (旧设备)", bg: "#f3e8ff", color: "#7e22ce" };
+    case "x86_64":
+      return { label: "x86_64 (PC模拟器)", bg: "#ecfdf5", color: "#047857" };
+    default:
+      return { label: abi, bg: "#f1f5f9", color: "#475569" };
+  }
+}
+
 async function copyText(value: string) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
@@ -106,6 +143,15 @@ async function copyText(value: string) {
   input.remove();
 }
 
+type SelectedAssetItem = {
+  driveFileId: number;
+  fileName: string;
+  byteSize: number;
+  downloadUrl: string;
+  abi: string;
+  isPrimary: boolean;
+};
+
 export default function AdminAppRelease() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -118,13 +164,21 @@ export default function AdminAppRelease() {
   const [copiedKey, setCopiedKey] = useState("");
 
   // Form State
-  const [selectedFileId, setSelectedFileId] = useState<string>("");
   const [versionName, setVersionName] = useState("");
   const [versionCode, setVersionCode] = useState<number | "">("");
   const [releaseNotes, setReleaseNotes] = useState("");
+  const [selectedAssets, setSelectedAssets] = useState<SelectedAssetItem[]>([]);
+
+  // 自定义单外链降级支持
+  const [allowCustomFallback, setAllowCustomFallback] = useState(false);
   const [customDownloadUrl, setCustomDownloadUrl] = useState("");
   const [customFileName, setCustomFileName] = useState("");
   const [customFileSize, setCustomFileSize] = useState<number | "">("");
+
+  const candidateFiles = useMemo(() => {
+    if (apkFiles.length > 0) return apkFiles;
+    return allFiles;
+  }, [apkFiles, allFiles]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -138,10 +192,30 @@ export default function AdminAppRelease() {
         setVersionName(data.release.versionName);
         setVersionCode(data.release.versionCode);
         setReleaseNotes(data.release.releaseNotes);
-        if (data.release.driveFileId) {
-          setSelectedFileId(String(data.release.driveFileId));
+
+        if (data.release.assets && data.release.assets.length > 0) {
+          const loadedAssets: SelectedAssetItem[] = data.release.assets.map((a, idx) => ({
+            driveFileId: a.driveFileId || 0,
+            fileName: a.fileName,
+            byteSize: a.byteSize,
+            downloadUrl: a.downloadUrl,
+            abi: a.abi,
+            isPrimary: idx === 0 || a.downloadUrl === data.release?.downloadUrl,
+          }));
+          setSelectedAssets(loadedAssets);
+        } else if (data.release.driveFileId) {
+          setSelectedAssets([
+            {
+              driveFileId: data.release.driveFileId,
+              fileName: data.release.fileName,
+              byteSize: data.release.byteSize,
+              downloadUrl: data.release.downloadUrl,
+              abi: detectAbiFromName(data.release.fileName),
+              isPrimary: true,
+            },
+          ]);
         } else {
-          setSelectedFileId("custom");
+          setAllowCustomFallback(true);
           setCustomDownloadUrl(data.release.downloadUrl);
           setCustomFileName(data.release.fileName);
           setCustomFileSize(data.release.byteSize);
@@ -159,27 +233,95 @@ export default function AdminAppRelease() {
     void loadData();
   }, [loadData]);
 
-  const candidateFiles = useMemo(() => {
-    if (apkFiles.length > 0) return apkFiles;
-    return allFiles;
-  }, [apkFiles, allFiles]);
+  // 切换选中某一个网盘文件
+  const toggleSelectApk = (file: DriveApkFile) => {
+    const isSelected = selectedAssets.some((a) => a.driveFileId === file.id);
+    let next: SelectedAssetItem[];
 
-  const handleSelectFile = (fileIdStr: string) => {
-    setSelectedFileId(fileIdStr);
-    if (!fileIdStr || fileIdStr === "custom") return;
+    if (isSelected) {
+      next = selectedAssets.filter((a) => a.driveFileId !== file.id);
+      if (next.length > 0 && !next.some((a) => a.isPrimary)) {
+        next[0].isPrimary = true;
+      }
+    } else {
+      const autoAbi = detectAbiFromName(file.name);
+      const isFirst = selectedAssets.length === 0;
+      next = [
+        ...selectedAssets,
+        {
+          driveFileId: file.id,
+          fileName: file.name,
+          byteSize: file.byteSize,
+          downloadUrl: file.downloadUrl,
+          abi: autoAbi,
+          isPrimary: isFirst || autoAbi === "universal",
+        },
+      ];
 
-    const file = candidateFiles.find((f) => String(f.id) === fileIdStr);
-    if (!file) return;
-
-    // 智能提取版本号：如 MobileSchedule-v1.0.1.apk 或 1.0.1
-    const match = /(?:v)?(\d+\.\d+(?:\.\d+)?)/i.exec(file.name);
-    if (match && !versionName) {
-      setVersionName(match[1]);
+      // 智能识别版本名称与版本代码
+      const match = /(?:v)?(\d+\.\d+(?:\.\d+)?)/i.exec(file.name);
+      if (match && !versionName) {
+        setVersionName(match[1]);
+      }
+      const codeMatch = /code(\d+)/i.exec(file.name);
+      if (codeMatch && versionCode === "") {
+        setVersionCode(parseInt(codeMatch[1], 10));
+      }
     }
-    // 智能提取纯数字版本代码：如 code4 或 10001
-    const codeMatch = /code(\d+)/i.exec(file.name);
-    if (codeMatch && versionCode === "") {
-      setVersionCode(parseInt(codeMatch[1], 10));
+
+    setSelectedAssets(next);
+  };
+
+  // 修改某个选定资产的 ABI
+  const updateAssetAbi = (driveFileId: number, newAbi: string) => {
+    setSelectedAssets((current) =>
+      current.map((a) => (a.driveFileId === driveFileId ? { ...a, abi: newAbi } : a))
+    );
+  };
+
+  // 设置某一个为默认主下载包
+  const setPrimaryAsset = (driveFileId: number) => {
+    setSelectedAssets((current) =>
+      current.map((a) => ({ ...a, isPrimary: a.driveFileId === driveFileId }))
+    );
+  };
+
+  // 一键选择所有网盘中的候选 APK
+  const selectAllApks = () => {
+    if (candidateFiles.length === 0) return;
+    const allSelected = candidateFiles.every((f) =>
+      selectedAssets.some((a) => a.driveFileId === f.id)
+    );
+    if (allSelected) {
+      setSelectedAssets([]);
+      return;
+    }
+
+    const items: SelectedAssetItem[] = candidateFiles.map((file, idx) => {
+      const existing = selectedAssets.find((a) => a.driveFileId === file.id);
+      const abi = existing ? existing.abi : detectAbiFromName(file.name);
+      return {
+        driveFileId: file.id,
+        fileName: file.name,
+        byteSize: file.byteSize,
+        downloadUrl: file.downloadUrl,
+        abi,
+        isPrimary: existing ? existing.isPrimary : (abi === "universal" || idx === 0),
+      };
+    });
+
+    if (!items.some((i) => i.isPrimary) && items.length > 0) {
+      items[0].isPrimary = true;
+    }
+
+    setSelectedAssets(items);
+
+    // 智能提取版本
+    for (const f of candidateFiles) {
+      const match = /(?:v)?(\d+\.\d+(?:\.\d+)?)/i.exec(f.name);
+      if (match && !versionName) setVersionName(match[1]);
+      const codeMatch = /code(\d+)/i.exec(f.name);
+      if (codeMatch && versionCode === "") setVersionCode(parseInt(codeMatch[1], 10));
     }
   };
 
@@ -197,7 +339,7 @@ export default function AdminAppRelease() {
   const handlePublish = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!versionName.trim()) {
-      setMessage("请填写版本名称（如 1.0.1）。");
+      setMessage("请填写版本名称（如 1.1.0）。");
       setMessageType("error");
       return;
     }
@@ -208,31 +350,47 @@ export default function AdminAppRelease() {
       return;
     }
 
-    let downloadUrl = "";
-    let fileName = "";
-    let byteSize = 0;
-    let driveFileId: number | null = null;
+    let primaryDownloadUrl = "";
+    let primaryFileName = "";
+    let primaryByteSize = 0;
+    let primaryDriveFileId: number | null = null;
+    let assetsPayload: AppScheduleAsset[] = [];
 
-    if (selectedFileId && selectedFileId !== "custom") {
-      const file = candidateFiles.find((f) => String(f.id) === selectedFileId);
-      if (!file) {
-        setMessage("所选网盘文件不存在，请重新选择。");
-        setMessageType("error");
-        return;
-      }
-      driveFileId = file.id;
-      downloadUrl = file.downloadUrl;
-      fileName = file.name;
-      byteSize = file.byteSize;
-    } else {
+    if (selectedAssets.length > 0) {
+      const primary = selectedAssets.find((a) => a.isPrimary) || selectedAssets[0];
+      primaryDownloadUrl = primary.downloadUrl;
+      primaryFileName = primary.fileName;
+      primaryByteSize = primary.byteSize;
+      primaryDriveFileId = primary.driveFileId || null;
+
+      assetsPayload = selectedAssets.map((a) => ({
+        abi: a.abi,
+        driveFileId: a.driveFileId,
+        fileName: a.fileName,
+        downloadUrl: a.downloadUrl,
+        byteSize: a.byteSize,
+      }));
+    } else if (allowCustomFallback) {
       if (!customDownloadUrl.trim()) {
-        setMessage("请选择网盘文件或输入自定义下载直链。");
+        setMessage("请选择网盘 APK 文件或输入自定义下载直链。");
         setMessageType("error");
         return;
       }
-      downloadUrl = customDownloadUrl.trim();
-      fileName = customFileName.trim() || "MobileSchedule.apk";
-      byteSize = typeof customFileSize === "number" ? customFileSize : 0;
+      primaryDownloadUrl = customDownloadUrl.trim();
+      primaryFileName = customFileName.trim() || "MobileSchedule.apk";
+      primaryByteSize = typeof customFileSize === "number" ? customFileSize : 0;
+      assetsPayload = [
+        {
+          abi: "universal",
+          fileName: primaryFileName,
+          downloadUrl: primaryDownloadUrl,
+          byteSize: primaryByteSize,
+        },
+      ];
+    } else {
+      setMessage("请至少在下方勾选一个网盘中的 APK 安装包文件。");
+      setMessageType("error");
+      return;
     }
 
     setSubmitting(true);
@@ -245,14 +403,15 @@ export default function AdminAppRelease() {
           versionName: versionName.trim(),
           versionCode: codeNum,
           releaseNotes: releaseNotes.trim(),
-          driveFileId,
-          downloadUrl,
-          fileName,
-          byteSize,
+          driveFileId: primaryDriveFileId,
+          downloadUrl: primaryDownloadUrl,
+          fileName: primaryFileName,
+          byteSize: primaryByteSize,
+          assets: assetsPayload,
         }),
       });
       setRelease(saved);
-      setMessage("课表下载源发布成功！移动端现在可以通过此源检查并高速下载。");
+      setMessage(`版本 v${saved.versionName} 发布成功！已包含 ${assetsPayload.length} 个架构安装包，客户端将自动按机型精准匹配下载。`);
       setMessageType("success");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "发布失败，请稍后重试。");
@@ -284,41 +443,55 @@ export default function AdminAppRelease() {
   const directDownloadUrl = `${window.location.origin}/api/app/schedule/download`;
 
   return (
-    <div className="fa-drive-page">
-      <div className="fa-page-header">
+    <div className="fa-page fa-drive-page">
+      <div className="fa-page-heading">
         <div>
-          <div className="fa-page-title-row">
-            <span className="fa-page-icon"><Smartphone size={24} /></span>
-            <h1>应用发布 / 课表下载源</h1>
-          </div>
-          <p className="fa-page-subtitle">
-            将网盘中打包好的 MobileSchedule 课程表 APK 设置为官方更新下载源，客户端可直接通过本博客接口极速下载，免受外部网络影响。
+          <span className="fa-kicker">APPLICATION RELEASE</span>
+          <h1>移动端应用发布 / 课表下载源</h1>
+          <p>
+            将网盘中打包好的课程表 APK 发布为官方高速更新源。支持多架构（Universal、ARM64、x86_64 等）同时发布，移动端客户端可自动识别手机 CPU 并高速匹配下载。
           </p>
         </div>
       </div>
 
       {message ? (
-        <div className={`fa-alert fa-alert-${messageType}`} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <div
+          className={`fa-alert fa-alert-${messageType}`}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.6rem",
+            marginBottom: "1rem",
+            padding: "0.75rem 1rem",
+            borderRadius: "8px",
+            background: messageType === "error" ? "#fef2f2" : messageType === "success" ? "#ecfdf5" : "#eff6ff",
+            color: messageType === "error" ? "#dc2626" : messageType === "success" ? "#059669" : "#2563eb",
+            border: `1px solid ${messageType === "error" ? "#fecaca" : messageType === "success" ? "#a7f3d0" : "#bfdbfe"}`,
+          }}
+        >
           {messageType === "error" ? <AlertCircle size={18} /> : <Info size={18} />}
-          <span>{message}</span>
+          <span style={{ fontWeight: 500, fontSize: "0.92rem" }}>{message}</span>
         </div>
       ) : null}
 
       {/* 当前发布状态卡片 */}
       <section className="fa-panel">
         <div className="fa-panel-head">
-          <div className="fa-panel-title">
-            <Rocket size={18} />
-            <h2>当前生效的下载源</h2>
-            {release ? (
-              <span className="fa-tag" style={{ background: "rgba(16, 185, 129, 0.15)", color: "#10b981", marginLeft: "0.5rem" }}>
-                运行中
-              </span>
-            ) : (
-              <span className="fa-tag" style={{ background: "rgba(100, 116, 139, 0.15)", color: "#64748b", marginLeft: "0.5rem" }}>
-                未发布
-              </span>
-            )}
+          <div>
+            <div className="fa-panel-title">
+              <Rocket size={18} />
+              <h2>当前运行中的下载源</h2>
+              {release ? (
+                <span style={{ marginLeft: "0.5rem", padding: "0.2rem 0.6rem", borderRadius: "999px", background: "#ecfdf5", color: "#059669", fontSize: "0.8rem", fontWeight: "bold" }}>
+                  ● 运行中
+                </span>
+              ) : (
+                <span style={{ marginLeft: "0.5rem", padding: "0.2rem 0.6rem", borderRadius: "999px", background: "#f1f5f9", color: "#64748b", fontSize: "0.8rem", fontWeight: "bold" }}>
+                  未发布
+                </span>
+              )}
+            </div>
+            <p>客户端请求更新接口时实时返回此配置</p>
           </div>
           <button type="button" className="fa-button fa-button-ghost" onClick={() => void loadData()} disabled={loading}>
             <RefreshCw size={15} className={loading ? "fa-spin" : ""} />
@@ -327,55 +500,150 @@ export default function AdminAppRelease() {
         </div>
 
         {release ? (
-          <div style={{ display: "grid", gap: "1rem" }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "1.5rem", padding: "1rem", background: "var(--fa-surface-2, rgba(0,0,0,0.03))", borderRadius: "8px" }}>
+          <div style={{ display: "grid", gap: "1.25rem", marginTop: "0.5rem" }}>
+            {/* 基本元数据展示 */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gap: "1rem",
+                padding: "1rem 1.25rem",
+                background: "var(--fa-surface-sunken, #f8fafc)",
+                borderRadius: "10px",
+                border: "1px solid var(--fa-line, #e2e8f0)",
+              }}
+            >
               <div>
-                <small style={{ color: "var(--fa-text-muted)" }}>版本名称</small>
-                <div style={{ fontSize: "1.25rem", fontWeight: "bold", color: "var(--fa-primary)" }}>
+                <small style={{ color: "var(--fa-muted, #64748b)", display: "block", marginBottom: "0.2rem" }}>版本名称</small>
+                <div style={{ fontSize: "1.3rem", fontWeight: "bold", color: "var(--fa-primary, #0891b2)" }}>
                   v{release.versionName}
                 </div>
               </div>
               <div>
-                <small style={{ color: "var(--fa-text-muted)" }}>内部版本号 (code)</small>
-                <div style={{ fontSize: "1.25rem", fontWeight: "bold" }}>
+                <small style={{ color: "var(--fa-muted, #64748b)", display: "block", marginBottom: "0.2rem" }}>内部构建版本号 (code)</small>
+                <div style={{ fontSize: "1.3rem", fontWeight: "bold", color: "var(--fa-text, #1e293b)" }}>
                   {release.versionCode}
                 </div>
               </div>
               <div>
-                <small style={{ color: "var(--fa-text-muted)" }}>文件大小</small>
-                <div style={{ fontSize: "1.1rem" }}>
-                  {bytesText(release.byteSize)}
+                <small style={{ color: "var(--fa-muted, #64748b)", display: "block", marginBottom: "0.2rem" }}>发布包含架构包</small>
+                <div style={{ fontSize: "1.1rem", fontWeight: 600, color: "var(--fa-text, #1e293b)" }}>
+                  {release.assets && release.assets.length > 0 ? `${release.assets.length} 个架构安装包` : "1 个通用包"}
                 </div>
               </div>
               <div>
-                <small style={{ color: "var(--fa-text-muted)" }}>发布时间</small>
-                <div style={{ fontSize: "1.1rem" }}>
+                <small style={{ color: "var(--fa-muted, #64748b)", display: "block", marginBottom: "0.2rem" }}>发布生效时间</small>
+                <div style={{ fontSize: "0.95rem", fontWeight: 500, color: "var(--fa-text, #1e293b)" }}>
                   {dateText(release.publishedAt)}
-                </div>
-              </div>
-              <div>
-                <small style={{ color: "var(--fa-text-muted)" }}>文件名</small>
-                <div style={{ fontSize: "1.1rem", wordBreak: "break-all" }}>
-                  {release.fileName}
                 </div>
               </div>
             </div>
 
+            {/* 多架构 APK 包列表展示 */}
+            {release.assets && release.assets.length > 0 ? (
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.6rem", fontWeight: 600, fontSize: "0.95rem" }}>
+                  <Layers size={16} /> 已上线的各设备架构安装包 ({release.assets.length})：
+                </div>
+                <div style={{ display: "grid", gap: "0.6rem" }}>
+                  {release.assets.map((asset) => {
+                    const badge = abiBadgeText(asset.abi);
+                    const isDef = asset.downloadUrl === release.downloadUrl;
+                    return (
+                      <div
+                        key={asset.fileName}
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "0.75rem",
+                          padding: "0.75rem 1rem",
+                          borderRadius: "8px",
+                          background: "var(--fa-surface, #ffffff)",
+                          border: `1px solid ${isDef ? "var(--fa-primary, #0891b2)" : "var(--fa-line, #e2e8f0)"}`,
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", minWidth: 0, flex: "1 1 300px" }}>
+                          <span
+                            style={{
+                              padding: "0.25rem 0.6rem",
+                              borderRadius: "6px",
+                              fontSize: "0.8rem",
+                              fontWeight: "bold",
+                              background: badge.bg,
+                              color: badge.color,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {badge.label}
+                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: "0.9rem", wordBreak: "break-all" }}>
+                              {asset.fileName} {isDef && <span style={{ color: "var(--fa-primary, #0891b2)", fontSize: "0.78rem" }}>[默认主包]</span>}
+                            </div>
+                            <small style={{ color: "var(--fa-muted, #64748b)" }}>{bytesText(asset.byteSize)}</small>
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                          <a
+                            href={asset.downloadUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="fa-button fa-button-ghost"
+                            style={{ padding: "0.35rem 0.75rem", height: "32px", fontSize: "0.82rem", display: "inline-flex", alignItems: "center", gap: "0.3rem" }}
+                          >
+                            <Download size={13} /> 下载 APK
+                          </a>
+                          <button
+                            type="button"
+                            className="fa-button fa-button-ghost"
+                            style={{ padding: "0.35rem 0.6rem", height: "32px", fontSize: "0.82rem" }}
+                            onClick={() => void handleCopy(asset.fileName, asset.downloadUrl)}
+                          >
+                            {copiedKey === asset.fileName ? <Check size={13} /> : <Copy size={13} />}
+                            {copiedKey === asset.fileName ? "已复制" : "直链"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {/* 更新日志卡片 */}
             {release.releaseNotes ? (
-              <div style={{ padding: "0.75rem 1rem", background: "var(--fa-surface-1, rgba(0,0,0,0.02))", borderRadius: "8px", border: "1px solid var(--fa-border)" }}>
-                <strong style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.5rem", fontSize: "0.9rem" }}>
-                  <FileText size={15} /> 更新日志
+              <div
+                style={{
+                  padding: "0.85rem 1rem",
+                  background: "var(--fa-surface-sunken, #f8fafc)",
+                  borderRadius: "8px",
+                  border: "1px solid var(--fa-line, #e2e8f0)",
+                }}
+              >
+                <strong style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.4rem", fontSize: "0.9rem" }}>
+                  <FileText size={15} /> 版本更新说明
                 </strong>
-                <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit", fontSize: "0.88rem", color: "var(--fa-text)" }}>
+                <pre
+                  style={{
+                    margin: 0,
+                    whiteSpace: "pre-wrap",
+                    fontFamily: "inherit",
+                    fontSize: "0.88rem",
+                    lineHeight: 1.6,
+                    color: "var(--fa-text, #334155)",
+                  }}
+                >
                   {release.releaseNotes}
                 </pre>
               </div>
             ) : null}
 
-            {/* 公开接口地址展示与复制 */}
-            <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.5rem" }}>
+            {/* 接口地址展示 */}
+            <div style={{ display: "grid", gap: "0.6rem" }}>
               <div className="fa-drive-link">
-                <span style={{ minWidth: "120px" }}>检查更新接口</span>
+                <span style={{ minWidth: "120px", fontWeight: 600 }}>检查更新 API</span>
                 <a href={publicApiUrl} target="_blank" rel="noreferrer">{publicApiUrl}</a>
                 <button type="button" onClick={() => void handleCopy("api", publicApiUrl)}>
                   {copiedKey === "api" ? <Check size={15} /> : <Copy size={15} />}
@@ -383,8 +651,8 @@ export default function AdminAppRelease() {
                 </button>
               </div>
               <div className="fa-drive-link">
-                <span style={{ minWidth: "120px" }}>APK 直链跳转</span>
-                <a href={directDownloadUrl} target="_blank" rel="noreferrer">{directDownloadUrl}</a>
+                <span style={{ minWidth: "120px", fontWeight: 600 }}>自动匹配直链</span>
+                <a href={directDownloadUrl} target="_blank" rel="noreferrer">{directDownloadUrl} (支持 ?abi= 架构筛选)</a>
                 <button type="button" onClick={() => void handleCopy("download", directDownloadUrl)}>
                   {copiedKey === "download" ? <Check size={15} /> : <Copy size={15} />}
                   {copiedKey === "download" ? "已复制" : "复制"}
@@ -392,181 +660,449 @@ export default function AdminAppRelease() {
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.5rem" }}>
-              <a href={release.downloadUrl} target="_blank" rel="noreferrer" className="fa-button fa-button-ghost" style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
-                <Download size={15} /> 测试下载 APK
-              </a>
-              <button type="button" className="fa-button is-danger" onClick={() => void handleUnpublish()} disabled={submitting}>
-                <Trash2 size={15} /> 下架此版本
+            {/* 下架按钮 */}
+            <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.25rem" }}>
+              <button
+                type="button"
+                className="fa-button"
+                style={{
+                  background: "#fee2e2",
+                  color: "#dc2626",
+                  border: "1px solid #fca5a5",
+                  borderRadius: "8px",
+                  padding: "0.5rem 1rem",
+                  fontWeight: 600,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  cursor: "pointer",
+                }}
+                onClick={() => void handleUnpublish()}
+                disabled={submitting}
+              >
+                <Trash2 size={16} /> 下架此版本
               </button>
             </div>
           </div>
         ) : (
-          <div className="fa-empty" style={{ padding: "2rem" }}>
-            <Smartphone size={32} style={{ opacity: 0.4 }} />
-            <span>尚未发布任何课表应用下载源</span>
-            <small style={{ color: "var(--fa-text-muted)" }}>请在下方表单中选择网盘已有的 APK 文件并填写版本信息进行发布。</small>
+          <div className="fa-empty" style={{ padding: "2.5rem 1rem", textAlign: "center" }}>
+            <Smartphone size={36} style={{ opacity: 0.3, margin: "0 auto 0.5rem" }} />
+            <div style={{ fontWeight: 600, fontSize: "1rem" }}>尚未发布任何课表应用下载源</div>
+            <small style={{ color: "var(--fa-muted, #64748b)" }}>
+              请在下方表单中选择网盘中的 APK 安装包文件并填写版本信息。
+            </small>
           </div>
         )}
       </section>
 
-      {/* 发布与更新表单 */}
+      {/* 发布与配置表单 */}
       <section className="fa-panel">
         <div className="fa-panel-head">
-          <div className="fa-panel-title">
-            <HardDrive size={18} />
-            <h2>{release ? "更新或重新发布下载源" : "发布新版本下载源"}</h2>
+          <div>
+            <div className="fa-panel-title">
+              <HardDrive size={18} />
+              <h2>{release ? "更新或重新发布新版本" : "发布新版本下载源"}</h2>
+            </div>
+            <p>从网盘选择一个或多个 APK（支持多 CPU 架构分发），配置版本与更新日志</p>
           </div>
         </div>
 
-        <form onSubmit={(e) => void handlePublish(e)} style={{ display: "grid", gap: "1.25rem" }}>
-          {/* 选择网盘文件 */}
+        <form onSubmit={(e) => void handlePublish(e)} style={{ display: "grid", gap: "1.5rem" }}>
+          {/* 选择网盘 APK 资产（多选支持） */}
           <div>
-            <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "600" }}>
-              选择网盘中的 APK 安装包文件
-            </label>
-            <select
-              value={selectedFileId}
-              onChange={(e) => handleSelectFile(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "0.6rem 0.8rem",
-                borderRadius: "6px",
-                border: "1px solid var(--fa-border)",
-                background: "var(--fa-surface-input)",
-                color: "var(--fa-text)",
-              }}
-            >
-              <option value="">-- 请从网盘中选择上传的 APK 文件 --</option>
-              {candidateFiles.map((f) => (
-                <option key={f.id} value={String(f.id)}>
-                  {f.name} ({bytesText(f.byteSize)}) - 上传于 {dateText(f.createdAt)}
-                </option>
-              ))}
-              <option value="custom">-- 自定义外链 URL --</option>
-            </select>
-            <small style={{ display: "block", marginTop: "0.35rem", color: "var(--fa-text-muted)" }}>
-              提示：打包好的 APK 请先在“文件网盘”中上传，上传后即可在上方下拉菜单中直接选中。
-            </small>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
+              <label style={{ fontWeight: "700", fontSize: "0.95rem", color: "var(--fa-text, #1e293b)" }}>
+                选择网盘中的 APK 安装包文件 (支持多选不同架构包) <span style={{ color: "#ef4444" }}>*</span>
+              </label>
+              {candidateFiles.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={selectAllApks}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "var(--fa-primary, #0891b2)",
+                    fontSize: "0.85rem",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.3rem",
+                    fontWeight: 600,
+                  }}
+                >
+                  {candidateFiles.every((f) => selectedAssets.some((a) => a.driveFileId === f.id)) ? (
+                    <><CheckSquare size={16} /> 取消全选</>
+                  ) : (
+                    <><Square size={16} /> 全选候选 APK</>
+                  )}
+                </button>
+              ) : null}
+            </div>
+
+            {candidateFiles.length > 0 ? (
+              <div
+                style={{
+                  display: "grid",
+                  gap: "0.6rem",
+                  padding: "0.75rem",
+                  background: "var(--fa-surface-sunken, #f8fafc)",
+                  borderRadius: "10px",
+                  border: "1.5px solid var(--fa-line-strong, #cfdae3)",
+                  maxHeight: "320px",
+                  overflowY: "auto",
+                }}
+              >
+                {candidateFiles.map((file) => {
+                  const isChecked = selectedAssets.some((a) => a.driveFileId === file.id);
+                  const selectedItem = selectedAssets.find((a) => a.driveFileId === file.id);
+                  const currentAbi = selectedItem ? selectedItem.abi : detectAbiFromName(file.name);
+                  const badge = abiBadgeText(currentAbi);
+
+                  return (
+                    <div
+                      key={file.id}
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "0.6rem 0.85rem",
+                        borderRadius: "8px",
+                        background: isChecked ? "#f0fdf4" : "var(--fa-surface, #ffffff)",
+                        border: `1.5px solid ${isChecked ? "#86efac" : "var(--fa-line, #e2e8f0)"}`,
+                        transition: "all 0.15s ease",
+                        cursor: "pointer",
+                      }}
+                      onClick={() => toggleSelectApk(file)}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", minWidth: 0, flex: "1 1 260px" }}>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => {}} // 由外层 onClick 驱动
+                          style={{
+                            width: "18px",
+                            height: "18px",
+                            cursor: "pointer",
+                            accentColor: "var(--fa-primary, #0891b2)",
+                          }}
+                        />
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: "0.92rem", wordBreak: "break-all", color: "var(--fa-text, #1e293b)" }}>
+                            {file.name}
+                          </div>
+                          <small style={{ color: "var(--fa-muted, #64748b)" }}>
+                            {bytesText(file.byteSize)} · 上传于 {dateText(file.createdAt)}
+                          </small>
+                        </div>
+                      </div>
+
+                      {/* 选定后配置其架构与主包属性 */}
+                      {isChecked ? (
+                        <div
+                          style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <label style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.82rem", fontWeight: 500 }}>
+                            架构:
+                            <select
+                              value={currentAbi}
+                              onChange={(e) => updateAssetAbi(file.id, e.target.value)}
+                              style={{
+                                padding: "0.25rem 0.5rem",
+                                borderRadius: "6px",
+                                border: "1.5px solid #cbd5e1",
+                                background: "#ffffff",
+                                fontSize: "0.82rem",
+                                fontWeight: "bold",
+                                color: "#0f172a",
+                              }}
+                            >
+                              <option value="universal">Universal (全架构通用)</option>
+                              <option value="arm64-v8a">ARM64-v8a (主流手机)</option>
+                              <option value="armeabi-v7a">ARMeabi-v7a (32位老机)</option>
+                              <option value="x86_64">x86_64 (PC模拟器)</option>
+                              <option value="other">其它架构</option>
+                            </select>
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => setPrimaryAsset(file.id)}
+                            style={{
+                              padding: "0.25rem 0.6rem",
+                              borderRadius: "6px",
+                              fontSize: "0.8rem",
+                              fontWeight: "bold",
+                              border: selectedItem?.isPrimary ? "1.5px solid #059669" : "1.5px solid #cbd5e1",
+                              background: selectedItem?.isPrimary ? "#059669" : "#ffffff",
+                              color: selectedItem?.isPrimary ? "#ffffff" : "#475569",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {selectedItem?.isPrimary ? "✓ 默认主包" : "设为主包"}
+                          </button>
+                        </div>
+                      ) : (
+                        <span
+                          style={{
+                            padding: "0.2rem 0.5rem",
+                            borderRadius: "6px",
+                            fontSize: "0.78rem",
+                            fontWeight: 600,
+                            background: badge.bg,
+                            color: badge.color,
+                          }}
+                        >
+                          建议: {badge.label}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div
+                style={{
+                  padding: "1.5rem",
+                  background: "var(--fa-surface-sunken, #f8fafc)",
+                  borderRadius: "8px",
+                  border: "1.5px dashed var(--fa-line-strong, #cbd5e1)",
+                  textAlign: "center",
+                }}
+              >
+                <div style={{ color: "var(--fa-muted, #64748b)", fontSize: "0.92rem", marginBottom: "0.5rem" }}>
+                  网盘中暂未检测到以 <code>.apk</code> 结尾的文件。
+                </div>
+                <small style={{ color: "var(--fa-soft, #94a3b8)" }}>
+                  请先前往左侧导航栏的“文件网盘”上传打包好的 APK 安装包。
+                </small>
+              </div>
+            )}
+
+            <div style={{ marginTop: "0.4rem", display: "flex", justifyContent: "space-between" }}>
+              <small style={{ color: "var(--fa-muted, #64748b)" }}>
+                已勾选 <strong>{selectedAssets.length}</strong> 个安装包作为本次发布的下载资产。
+              </small>
+              <button
+                type="button"
+                onClick={() => setAllowCustomFallback(!allowCustomFallback)}
+                style={{ background: "none", border: "none", color: "var(--fa-primary, #0891b2)", fontSize: "0.82rem", cursor: "pointer" }}
+              >
+                {allowCustomFallback ? "收起自定义外部外链" : "使用外部直接 URL (不经过网盘)"}
+              </button>
+            </div>
           </div>
 
-          {/* 若选择自定义外部直链 */}
-          {selectedFileId === "custom" ? (
-            <div style={{ display: "grid", gap: "0.75rem", padding: "1rem", background: "var(--fa-surface-2, rgba(0,0,0,0.02))", borderRadius: "6px", border: "1px dashed var(--fa-border)" }}>
+          {/* 外部自定义外链 */}
+          {allowCustomFallback ? (
+            <div
+              style={{
+                display: "grid",
+                gap: "0.75rem",
+                padding: "1rem",
+                background: "var(--fa-surface-sunken, #f8fafc)",
+                borderRadius: "8px",
+                border: "1.5px dashed var(--fa-line-strong, #cfdae3)",
+              }}
+            >
               <div>
-                <label style={{ display: "block", marginBottom: "0.3rem", fontSize: "0.88rem" }}>下载直链 URL</label>
+                <label style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.88rem", fontWeight: 600 }}>
+                  下载直链 URL
+                </label>
                 <input
                   type="url"
-                  placeholder="https://example.com/MobileSchedule.apk"
+                  placeholder="https://example.com/mobileschedule.apk"
                   value={customDownloadUrl}
                   onChange={(e) => setCustomDownloadUrl(e.target.value)}
-                  style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--fa-border)" }}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    minHeight: "40px",
+                    padding: "0.5rem 0.85rem",
+                    borderRadius: "8px",
+                    border: "1.5px solid var(--fa-line-strong, #cfdae3)",
+                    background: "var(--fa-surface, #ffffff)",
+                    color: "var(--fa-text, #14344b)",
+                    fontSize: "0.95rem",
+                  }}
                 />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
                 <div>
-                  <label style={{ display: "block", marginBottom: "0.3rem", fontSize: "0.88rem" }}>文件名称</label>
+                  <label style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.88rem", fontWeight: 600 }}>
+                    文件名称
+                  </label>
                   <input
                     type="text"
-                    placeholder="MobileSchedule.apk"
+                    placeholder="mobileschedule.apk"
                     value={customFileName}
                     onChange={(e) => setCustomFileName(e.target.value)}
-                    style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--fa-border)" }}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      minHeight: "40px",
+                      padding: "0.5rem 0.85rem",
+                      borderRadius: "8px",
+                      border: "1.5px solid var(--fa-line-strong, #cfdae3)",
+                      background: "var(--fa-surface, #ffffff)",
+                      color: "var(--fa-text, #14344b)",
+                      fontSize: "0.95rem",
+                    }}
                   />
                 </div>
                 <div>
-                  <label style={{ display: "block", marginBottom: "0.3rem", fontSize: "0.88rem" }}>文件大小 (Bytes，可选)</label>
+                  <label style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.88rem", fontWeight: 600 }}>
+                    文件大小 (字节，可选)
+                  </label>
                   <input
                     type="number"
-                    placeholder="13293107"
+                    placeholder="13474302"
                     value={customFileSize}
                     onChange={(e) => setCustomFileSize(e.target.value ? parseInt(e.target.value, 10) : "")}
-                    style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--fa-border)" }}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      minHeight: "40px",
+                      padding: "0.5rem 0.85rem",
+                      borderRadius: "8px",
+                      border: "1.5px solid var(--fa-line-strong, #cfdae3)",
+                      background: "var(--fa-surface, #ffffff)",
+                      color: "var(--fa-text, #14344b)",
+                      fontSize: "0.95rem",
+                    }}
                   />
                 </div>
               </div>
             </div>
           ) : null}
 
-          {/* 版本信息 */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+          {/* 版本信息输入区域（明确边框与文本框外观） */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1.25rem" }}>
             <div>
-              <label style={{ display: "block", marginBottom: "0.4rem", fontWeight: "600" }}>
+              <label style={{ display: "block", marginBottom: "0.45rem", fontWeight: "700", fontSize: "0.95rem", color: "var(--fa-text, #1e293b)" }}>
                 版本名称 (Version Name) <span style={{ color: "#ef4444" }}>*</span>
               </label>
               <input
                 type="text"
-                placeholder="例如 1.0.0"
+                placeholder="例如 1.1.0"
                 value={versionName}
                 onChange={(e) => setVersionName(e.target.value)}
                 required
                 style={{
+                  display: "block",
                   width: "100%",
-                  padding: "0.6rem 0.8rem",
-                  borderRadius: "6px",
-                  border: "1px solid var(--fa-border)",
-                  background: "var(--fa-surface-input)",
-                  color: "var(--fa-text)",
+                  minHeight: "42px",
+                  padding: "0.55rem 0.9rem",
+                  borderRadius: "8px",
+                  border: "1.5px solid var(--fa-line-strong, #cfdae3)",
+                  background: "var(--fa-surface, #ffffff)",
+                  color: "var(--fa-text, #14344b)",
+                  fontSize: "0.95rem",
+                  fontWeight: "500",
                 }}
               />
-              <small style={{ color: "var(--fa-text-muted)" }}>显示给用户的版本号，如 1.0.0、1.0.1</small>
+              <small style={{ display: "block", marginTop: "0.3rem", color: "var(--fa-muted, #64748b)" }}>
+                展示给用户的版本名，如 1.0.0、1.1.0
+              </small>
             </div>
+
             <div>
-              <label style={{ display: "block", marginBottom: "0.4rem", fontWeight: "600" }}>
+              <label style={{ display: "block", marginBottom: "0.45rem", fontWeight: "700", fontSize: "0.95rem", color: "var(--fa-text, #1e293b)" }}>
                 版本代码 (Version Code) <span style={{ color: "#ef4444" }}>*</span>
               </label>
               <input
                 type="number"
                 min="1"
-                placeholder="例如 4"
+                placeholder="例如 5"
                 value={versionCode}
                 onChange={(e) => setVersionCode(e.target.value ? parseInt(e.target.value, 10) : "")}
                 required
                 style={{
+                  display: "block",
                   width: "100%",
-                  padding: "0.6rem 0.8rem",
-                  borderRadius: "6px",
-                  border: "1px solid var(--fa-border)",
-                  background: "var(--fa-surface-input)",
-                  color: "var(--fa-text)",
+                  minHeight: "42px",
+                  padding: "0.55rem 0.9rem",
+                  borderRadius: "8px",
+                  border: "1.5px solid var(--fa-line-strong, #cfdae3)",
+                  background: "var(--fa-surface, #ffffff)",
+                  color: "var(--fa-text, #14344b)",
+                  fontSize: "0.95rem",
+                  fontWeight: "500",
                 }}
               />
-              <small style={{ color: "var(--fa-text-muted)" }}>Android 应用内部版本递增数字，如 4、5</small>
+              <small style={{ display: "block", marginTop: "0.3rem", color: "var(--fa-muted, #64748b)" }}>
+                Android 应用内部版本递增整数，如 4、5
+              </small>
             </div>
           </div>
 
           {/* 更新日志 */}
           <div>
-            <label style={{ display: "block", marginBottom: "0.4rem", fontWeight: "600" }}>
+            <label style={{ display: "block", marginBottom: "0.45rem", fontWeight: "700", fontSize: "0.95rem", color: "var(--fa-text, #1e293b)" }}>
               更新日志与说明 (Release Notes)
             </label>
             <textarea
-              rows={5}
-              placeholder="在此输入新版本功能说明与修复内容，支持多行，如：&#10;1. 优化界面显示效果，增加现代化莫兰迪主题色&#10;2. 增加周课表切周平滑过渡动画&#10;3. 支持在线更新与多下载镜像源加速"
+              rows={6}
+              placeholder="在此输入新版本功能说明与修复内容，支持多行，如：&#10;1. 优化界面显示效果，增加现代化莫兰迪主题色&#10;2. 增加周课表切周平滑过渡动画&#10;3. 支持在线更新与多下载镜像源加速&#10;4. 支持针对设备 CPU 架构自动匹配下载"
               value={releaseNotes}
               onChange={(e) => setReleaseNotes(e.target.value)}
               style={{
+                display: "block",
                 width: "100%",
-                padding: "0.6rem 0.8rem",
-                borderRadius: "6px",
-                border: "1px solid var(--fa-border)",
-                background: "var(--fa-surface-input)",
-                color: "var(--fa-text)",
+                padding: "0.75rem 0.9rem",
+                borderRadius: "8px",
+                border: "1.5px solid var(--fa-line-strong, #cfdae3)",
+                background: "var(--fa-surface, #ffffff)",
+                color: "var(--fa-text, #14344b)",
+                fontSize: "0.92rem",
                 fontFamily: "inherit",
-                fontSize: "0.9rem",
+                lineHeight: 1.6,
+                resize: "vertical",
               }}
             />
           </div>
 
           {/* 操作按钮 */}
           <div style={{ display: "flex", gap: "1rem", marginTop: "0.5rem" }}>
-            <button type="submit" className="fa-button fa-button-primary" disabled={submitting}>
+            <button
+              type="submit"
+              className="fa-button"
+              disabled={submitting}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                padding: "0.6rem 1.4rem",
+                height: "42px",
+                borderRadius: "8px",
+                border: "none",
+                background: "var(--fa-primary, #0891b2)",
+                color: "#ffffff",
+                fontWeight: "bold",
+                fontSize: "0.95rem",
+                cursor: "pointer",
+                boxShadow: "0 2px 4px rgba(8, 145, 178, 0.2)",
+              }}
+            >
               {submitting ? <RefreshCw size={16} className="fa-spin" /> : <Rocket size={16} />}
-              {submitting ? "正在发布..." : release ? "保存并更新发布" : "确认发布生效"}
+              {submitting ? "正在发布..." : release ? "保存并生效更新" : "确认发布生效"}
             </button>
+
             <button
               type="button"
-              className="fa-button fa-button-ghost"
+              className="fa-button"
+              style={{
+                padding: "0.6rem 1.25rem",
+                height: "42px",
+                borderRadius: "8px",
+                border: "1.5px solid var(--fa-line-strong, #cfdae3)",
+                background: "var(--fa-surface, #ffffff)",
+                color: "var(--fa-text, #14344b)",
+                fontWeight: 600,
+                fontSize: "0.95rem",
+                cursor: "pointer",
+              }}
               onClick={() => {
                 if (release) {
                   setVersionName(release.versionName);
@@ -576,11 +1112,11 @@ export default function AdminAppRelease() {
                   setVersionName("");
                   setVersionCode("");
                   setReleaseNotes("");
-                  setSelectedFileId("");
+                  setSelectedAssets([]);
                 }
               }}
             >
-              重置
+              重置表单
             </button>
           </div>
         </form>
