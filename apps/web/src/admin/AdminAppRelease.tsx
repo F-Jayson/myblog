@@ -3,15 +3,20 @@ import {
   AlertCircle,
   Check,
   CheckSquare,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Download,
   ExternalLink,
   FileText,
   HardDrive,
+  History,
   Info,
   Layers,
+  PlusCircle,
   RefreshCw,
   Rocket,
+  RotateCcw,
   Smartphone,
   Square,
   Trash2,
@@ -29,6 +34,7 @@ export type AppScheduleAsset = {
 };
 
 export type AppScheduleRelease = {
+  id: string;
   versionName: string;
   versionCode: number;
   releaseNotes: string;
@@ -38,6 +44,7 @@ export type AppScheduleRelease = {
   byteSize: number;
   publishedAt: string;
   assets?: AppScheduleAsset[];
+  isActive?: boolean;
 };
 
 export type DriveApkFile = {
@@ -52,6 +59,7 @@ export type DriveApkFile = {
 
 type ReleaseResponse = {
   release: AppScheduleRelease | null;
+  releases?: AppScheduleRelease[];
   apkFiles: DriveApkFile[];
   allDriveFiles: DriveApkFile[];
   publicOrigin: string;
@@ -158,6 +166,8 @@ export default function AdminAppRelease() {
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"info" | "error" | "success">("info");
   const [release, setRelease] = useState<AppScheduleRelease | null>(null);
+  const [releases, setReleases] = useState<AppScheduleRelease[]>([]);
+  const [expandedReleaseId, setExpandedReleaseId] = useState<string | null>(null);
   const [apkFiles, setApkFiles] = useState<DriveApkFile[]>([]);
   const [allFiles, setAllFiles] = useState<DriveApkFile[]>([]);
   const [publicOrigin, setPublicOrigin] = useState("https://files.fjayson.com");
@@ -185,41 +195,19 @@ export default function AdminAppRelease() {
     try {
       const data = await apiRequest<ReleaseResponse>("/api/admin/app-releases/schedule");
       setRelease(data.release);
+      const historyList = data.releases && data.releases.length > 0
+        ? data.releases
+        : (data.release ? [data.release] : []);
+      setReleases(historyList);
       setApkFiles(data.apkFiles || []);
       setAllFiles(data.allDriveFiles || []);
       setPublicOrigin(data.publicOrigin || "https://files.fjayson.com");
-      if (data.release) {
-        setVersionName(data.release.versionName);
-        setVersionCode(data.release.versionCode);
-        setReleaseNotes(data.release.releaseNotes);
 
-        if (data.release.assets && data.release.assets.length > 0) {
-          const loadedAssets: SelectedAssetItem[] = data.release.assets.map((a, idx) => ({
-            driveFileId: a.driveFileId || 0,
-            fileName: a.fileName,
-            byteSize: a.byteSize,
-            downloadUrl: a.downloadUrl,
-            abi: a.abi,
-            isPrimary: idx === 0 || a.downloadUrl === data.release?.downloadUrl,
-          }));
-          setSelectedAssets(loadedAssets);
-        } else if (data.release.driveFileId) {
-          setSelectedAssets([
-            {
-              driveFileId: data.release.driveFileId,
-              fileName: data.release.fileName,
-              byteSize: data.release.byteSize,
-              downloadUrl: data.release.downloadUrl,
-              abi: detectAbiFromName(data.release.fileName),
-              isPrimary: true,
-            },
-          ]);
-        } else {
-          setAllowCustomFallback(true);
-          setCustomDownloadUrl(data.release.downloadUrl);
-          setCustomFileName(data.release.fileName);
-          setCustomFileSize(data.release.byteSize);
-        }
+      // 仅当表单完全空白时，根据最新发布版本预填充建议信息
+      if (data.release && !versionName && versionCode === "") {
+        setVersionName(data.release.versionName);
+        setVersionCode(data.release.versionCode + 1);
+        setReleaseNotes(data.release.releaseNotes);
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "加载发布信息失败。");
@@ -227,7 +215,7 @@ export default function AdminAppRelease() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [versionName, versionCode]);
 
   useEffect(() => {
     void loadData();
@@ -411,7 +399,8 @@ export default function AdminAppRelease() {
         }),
       });
       setRelease(saved);
-      setMessage(`版本 v${saved.versionName} 发布成功！已包含 ${assetsPayload.length} 个架构安装包，客户端将自动按机型精准匹配下载。`);
+      setReleases((prev) => [saved, ...prev.filter((r) => r.id !== saved.id).map((r) => ({ ...r, isActive: false }))]);
+      setMessage(`版本 v${saved.versionName} 新建发布成功！已归档至历史记录中，包含 ${assetsPayload.length} 个架构安装包，客户端将自动按机型精准匹配下载。`);
       setMessageType("success");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "发布失败，请稍后重试。");
@@ -421,15 +410,104 @@ export default function AdminAppRelease() {
     }
   };
 
+  const handleActivateRelease = async (id: string, vName: string) => {
+    setSubmitting(true);
+    setMessage("");
+    try {
+      const res = await apiRequest<{ success: boolean; activeRelease: AppScheduleRelease; releases: AppScheduleRelease[] }>(
+        `/api/admin/app-releases/schedule/${encodeURIComponent(id)}/active`,
+        { method: "POST" }
+      );
+      setRelease(res.activeRelease);
+      setReleases(res.releases || []);
+      setMessage(`已成功将历史版本 v${vName} 切换为当前在线生效版本！`);
+      setMessageType("success");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "切换生效版本失败。");
+      setMessageType("error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteRelease = async (id: string, vName: string) => {
+    if (!window.confirm(`确定要删除历史版本 v${vName} 的发布记录吗？此操作不会删除网盘中的 APK 原文件。`)) return;
+    setSubmitting(true);
+    setMessage("");
+    try {
+      const res = await apiRequest<{ success: boolean; activeRelease: AppScheduleRelease | null; releases: AppScheduleRelease[] }>(
+        `/api/admin/app-releases/schedule/${encodeURIComponent(id)}`,
+        { method: "DELETE" }
+      );
+      setRelease(res.activeRelease || null);
+      setReleases(res.releases || []);
+      setMessage(`已成功删除版本 v${vName} 的发布记录。`);
+      setMessageType("info");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除失败。");
+      setMessageType("error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handlePrefillFrom = (target: AppScheduleRelease) => {
+    setVersionName(target.versionName);
+    setVersionCode(target.versionCode + 1);
+    setReleaseNotes(target.releaseNotes);
+    if (target.assets && target.assets.length > 0) {
+      const loadedAssets: SelectedAssetItem[] = target.assets.map((a, idx) => ({
+        driveFileId: a.driveFileId || 0,
+        fileName: a.fileName,
+        byteSize: a.byteSize,
+        downloadUrl: a.downloadUrl,
+        abi: a.abi,
+        isPrimary: idx === 0 || a.downloadUrl === target.downloadUrl,
+      }));
+      setSelectedAssets(loadedAssets);
+    } else if (target.driveFileId) {
+      setSelectedAssets([
+        {
+          driveFileId: target.driveFileId,
+          fileName: target.fileName,
+          byteSize: target.byteSize,
+          downloadUrl: target.downloadUrl,
+          abi: detectAbiFromName(target.fileName),
+          isPrimary: true,
+        },
+      ]);
+    } else {
+      setAllowCustomFallback(true);
+      setCustomDownloadUrl(target.downloadUrl);
+      setCustomFileName(target.fileName);
+      setCustomFileSize(target.byteSize);
+    }
+    setMessage(`已载入 v${target.versionName} 的信息作为新建模板（版本代码已自动建议为 ${target.versionCode + 1}）。`);
+    setMessageType("info");
+    document.getElementById("publish-form-card")?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const handleResetForm = () => {
+    setVersionName("");
+    setVersionCode("");
+    setReleaseNotes("");
+    setSelectedAssets([]);
+    setAllowCustomFallback(false);
+    setCustomDownloadUrl("");
+    setCustomFileName("");
+    setCustomFileSize("");
+  };
+
   const handleUnpublish = async () => {
-    if (!window.confirm("确定要下架当前的课表下载源吗？下架后客户端将无法通过此源获取更新。")) return;
+    if (!window.confirm("确定要下架当前的所有课表发布吗？下架后客户端将无法通过此源获取更新。")) return;
     setSubmitting(true);
     try {
       await apiRequest<{ success: boolean }>("/api/admin/app-releases/schedule", {
         method: "DELETE",
       });
       setRelease(null);
-      setMessage("下载源已成功下架。");
+      setReleases([]);
+      setMessage("所有课表发布记录已成功清空/下架。");
       setMessageType("info");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "下架失败。");
@@ -695,16 +773,345 @@ export default function AdminAppRelease() {
         )}
       </section>
 
-      {/* 发布与配置表单 */}
+      {/* 历史版本发布记录面板 */}
       <section className="fa-panel">
         <div className="fa-panel-head">
           <div>
             <div className="fa-panel-title">
-              <HardDrive size={18} />
-              <h2>{release ? "更新或重新发布新版本" : "发布新版本下载源"}</h2>
+              <History size={18} />
+              <h2>版本发布历史记录 ({releases.length})</h2>
             </div>
-            <p>从网盘选择一个或多个 APK（支持多 CPU 架构分发），配置版本与更新日志</p>
+            <p>保存全部历史发布记录，支持随时查看历史版本下载直链、架构包与更新说明，或一键回滚生效</p>
           </div>
+          <button
+            type="button"
+            className="fa-button fa-button-ghost"
+            onClick={() => {
+              handleResetForm();
+              document.getElementById("publish-form-card")?.scrollIntoView({ behavior: "smooth" });
+            }}
+          >
+            <PlusCircle size={15} />
+            发布全新版本
+          </button>
+        </div>
+
+        {releases.length > 0 ? (
+          <div style={{ display: "grid", gap: "1rem" }}>
+            {releases.map((item) => {
+              const isItemActive = item.isActive || (release && release.id === item.id);
+              const isExpanded = expandedReleaseId === item.id;
+              const assetCount = item.assets && item.assets.length > 0 ? item.assets.length : 1;
+
+              return (
+                <div
+                  key={item.id}
+                  style={{
+                    borderRadius: "10px",
+                    border: `1.5px solid ${isItemActive ? "var(--fa-primary, #0891b2)" : "var(--fa-line, #e2e8f0)"}`,
+                    background: isItemActive ? "var(--fa-surface, #ffffff)" : "var(--fa-surface-sunken, #f8fafc)",
+                    overflow: "hidden",
+                    transition: "all 0.2s ease",
+                  }}
+                >
+                  {/* 版本卡片头部 */}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "0.75rem",
+                      padding: "0.9rem 1.15rem",
+                      background: isItemActive ? "rgba(8, 145, 178, 0.04)" : "transparent",
+                      borderBottom: isExpanded ? "1px solid var(--fa-line, #e2e8f0)" : "none",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.85rem", minWidth: 0, flex: "1 1 320px" }}>
+                      <span
+                        style={{
+                          fontSize: "1.15rem",
+                          fontWeight: "bold",
+                          color: isItemActive ? "var(--fa-primary, #0891b2)" : "var(--fa-text, #1e293b)",
+                        }}
+                      >
+                        v{item.versionName}
+                      </span>
+
+                      <span
+                        style={{
+                          fontSize: "0.82rem",
+                          fontWeight: 600,
+                          color: "var(--fa-muted, #64748b)",
+                          background: "var(--fa-surface, #ffffff)",
+                          padding: "0.15rem 0.5rem",
+                          borderRadius: "6px",
+                          border: "1px solid var(--fa-line, #e2e8f0)",
+                        }}
+                      >
+                        Code: {item.versionCode}
+                      </span>
+
+                      {isItemActive ? (
+                        <span
+                          style={{
+                            padding: "0.2rem 0.6rem",
+                            borderRadius: "999px",
+                            background: "#ecfdf5",
+                            color: "#059669",
+                            fontSize: "0.8rem",
+                            fontWeight: "bold",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.3rem",
+                          }}
+                        >
+                          ● 当前在线生效中
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            padding: "0.2rem 0.6rem",
+                            borderRadius: "999px",
+                            background: "#f1f5f9",
+                            color: "#64748b",
+                            fontSize: "0.8rem",
+                            fontWeight: 500,
+                          }}
+                        >
+                          历史版本
+                        </span>
+                      )}
+
+                      <span style={{ fontSize: "0.82rem", color: "var(--fa-muted, #64748b)" }}>
+                        {dateText(item.publishedAt)} · {assetCount} 个架构安装包
+                      </span>
+                    </div>
+
+                    {/* 操作按钮区 */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      {!isItemActive ? (
+                        <button
+                          type="button"
+                          className="fa-button"
+                          style={{
+                            padding: "0.35rem 0.75rem",
+                            height: "32px",
+                            fontSize: "0.82rem",
+                            fontWeight: 600,
+                            borderRadius: "6px",
+                            border: "1px solid #059669",
+                            background: "#ecfdf5",
+                            color: "#059669",
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.3rem",
+                          }}
+                          disabled={submitting}
+                          onClick={() => void handleActivateRelease(item.id, item.versionName)}
+                          title="将此历史版本设为当前在线生效版本，客户端更新将立即指向此版本"
+                        >
+                          <RotateCcw size={13} />
+                          设为当前生效
+                        </button>
+                      ) : null}
+
+                      <button
+                        type="button"
+                        className="fa-button fa-button-ghost"
+                        style={{
+                          padding: "0.35rem 0.75rem",
+                          height: "32px",
+                          fontSize: "0.82rem",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "0.3rem",
+                        }}
+                        onClick={() => handlePrefillFrom(item)}
+                        title="以此版本信息为模板填入下方新建表单"
+                      >
+                        以此为模板新建
+                      </button>
+
+                      <button
+                        type="button"
+                        className="fa-button fa-button-ghost"
+                        style={{
+                          padding: "0.35rem 0.65rem",
+                          height: "32px",
+                          fontSize: "0.82rem",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "0.2rem",
+                        }}
+                        onClick={() => setExpandedReleaseId(isExpanded ? null : item.id)}
+                      >
+                        {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        {isExpanded ? "收起详情" : "查看详情"}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="fa-button fa-button-ghost"
+                        style={{
+                          padding: "0.35rem 0.5rem",
+                          height: "32px",
+                          color: "#dc2626",
+                        }}
+                        disabled={submitting}
+                        onClick={() => void handleDeleteRelease(item.id, item.versionName)}
+                        title="删除该条发布记录"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 展开的详情部分 */}
+                  {isExpanded ? (
+                    <div style={{ padding: "1rem 1.15rem", display: "grid", gap: "0.85rem", background: "var(--fa-surface, #ffffff)" }}>
+                      {/* 更新说明 */}
+                      {item.releaseNotes ? (
+                        <div
+                          style={{
+                            padding: "0.75rem 0.9rem",
+                            borderRadius: "6px",
+                            background: "var(--fa-surface-sunken, #f8fafc)",
+                            border: "1px solid var(--fa-line, #e2e8f0)",
+                          }}
+                        >
+                          <strong style={{ fontSize: "0.85rem", display: "block", marginBottom: "0.3rem", color: "var(--fa-muted, #64748b)" }}>
+                            更新日志与说明：
+                          </strong>
+                          <pre
+                            style={{
+                              margin: 0,
+                              whiteSpace: "pre-wrap",
+                              fontFamily: "inherit",
+                              fontSize: "0.85rem",
+                              lineHeight: 1.5,
+                              color: "var(--fa-text, #334155)",
+                            }}
+                          >
+                            {item.releaseNotes}
+                          </pre>
+                        </div>
+                      ) : null}
+
+                      {/* 包含的架构包 */}
+                      <div>
+                        <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--fa-muted, #64748b)", marginBottom: "0.4rem" }}>
+                          包含的 APK 安装包文件：
+                        </div>
+                        <div style={{ display: "grid", gap: "0.4rem" }}>
+                          {(item.assets && item.assets.length > 0
+                            ? item.assets
+                            : [
+                                {
+                                  abi: "universal",
+                                  fileName: item.fileName,
+                                  downloadUrl: item.downloadUrl,
+                                  byteSize: item.byteSize,
+                                },
+                              ]
+                          ).map((asset) => {
+                            const badge = abiBadgeText(asset.abi);
+                            const isDef = asset.downloadUrl === item.downloadUrl;
+                            const copyKey = `${item.id}_${asset.fileName}`;
+                            return (
+                              <div
+                                key={asset.fileName}
+                                style={{
+                                  display: "flex",
+                                  flexWrap: "wrap",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  gap: "0.5rem",
+                                  padding: "0.5rem 0.75rem",
+                                  borderRadius: "6px",
+                                  background: "var(--fa-surface-sunken, #f8fafc)",
+                                  border: "1px solid var(--fa-line, #e2e8f0)",
+                                  fontSize: "0.85rem",
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", minWidth: 0 }}>
+                                  <span
+                                    style={{
+                                      padding: "0.15rem 0.45rem",
+                                      borderRadius: "4px",
+                                      fontSize: "0.75rem",
+                                      fontWeight: "bold",
+                                      background: badge.bg,
+                                      color: badge.color,
+                                    }}
+                                  >
+                                    {badge.label}
+                                  </span>
+                                  <span style={{ fontWeight: 600, wordBreak: "break-all" }}>
+                                    {asset.fileName} {isDef ? <span style={{ color: "var(--fa-primary, #0891b2)", fontSize: "0.75rem" }}>[默认包]</span> : null}
+                                  </span>
+                                  <small style={{ color: "var(--fa-muted, #64748b)" }}>{bytesText(asset.byteSize)}</small>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                                  <a
+                                    href={asset.downloadUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="fa-button fa-button-ghost"
+                                    style={{ padding: "0.2rem 0.5rem", height: "26px", fontSize: "0.78rem", display: "inline-flex", alignItems: "center", gap: "0.2rem" }}
+                                  >
+                                    <Download size={12} /> 下载
+                                  </a>
+                                  <button
+                                    type="button"
+                                    className="fa-button fa-button-ghost"
+                                    style={{ padding: "0.2rem 0.5rem", height: "26px", fontSize: "0.78rem" }}
+                                    onClick={() => void handleCopy(copyKey, asset.downloadUrl)}
+                                  >
+                                    {copiedKey === copyKey ? <Check size={12} /> : <Copy size={12} />}
+                                    {copiedKey === copyKey ? "已复制" : "复制直链"}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="fa-empty" style={{ padding: "2rem 1rem", textAlign: "center" }}>
+            <History size={32} style={{ opacity: 0.3, margin: "0 auto 0.5rem" }} />
+            <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>暂无发布历史记录</div>
+            <small style={{ color: "var(--fa-muted, #64748b)" }}>在下方发布新版本后，将自动在这里归档记录。</small>
+          </div>
+        )}
+      </section>
+
+      {/* 发布与配置表单 */}
+      <section className="fa-panel" id="publish-form-card">
+        <div className="fa-panel-head">
+          <div>
+            <div className="fa-panel-title">
+              <HardDrive size={18} />
+              <h2>发布新版本下载源（新建并归档至历史记录）</h2>
+            </div>
+            <p>从网盘选择一个或多个 APK（支持多 CPU 架构分发），配置版本与更新日志。每次发布将在系统中新建一条独立的版本发布记录，历史版本均可随时查阅并一键回滚。</p>
+          </div>
+          <button
+            type="button"
+            className="fa-button fa-button-ghost"
+            onClick={handleResetForm}
+            title="清空当前表单输入内容"
+          >
+            <PlusCircle size={15} />
+            清空表单（新建空白发布）
+          </button>
         </div>
 
         <form onSubmit={(e) => void handlePublish(e)} style={{ display: "grid", gap: "1.5rem" }}>
@@ -1086,7 +1493,7 @@ export default function AdminAppRelease() {
               }}
             >
               {submitting ? <RefreshCw size={16} className="fa-spin" /> : <Rocket size={16} />}
-              {submitting ? "正在发布..." : release ? "保存并生效更新" : "确认发布生效"}
+              {submitting ? "正在发布并归档..." : "新建并发布为当前版本"}
             </button>
 
             <button
@@ -1103,20 +1510,9 @@ export default function AdminAppRelease() {
                 fontSize: "0.95rem",
                 cursor: "pointer",
               }}
-              onClick={() => {
-                if (release) {
-                  setVersionName(release.versionName);
-                  setVersionCode(release.versionCode);
-                  setReleaseNotes(release.releaseNotes);
-                } else {
-                  setVersionName("");
-                  setVersionCode("");
-                  setReleaseNotes("");
-                  setSelectedAssets([]);
-                }
-              }}
+              onClick={handleResetForm}
             >
-              重置表单
+              清空表单（新建空白）
             </button>
           </div>
         </form>

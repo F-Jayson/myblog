@@ -2726,6 +2726,7 @@ const appScheduleReleaseInput = z.object({
 });
 
 type AppScheduleRelease = {
+	id: string;
 	versionName: string;
 	versionCode: number;
 	releaseNotes: string;
@@ -2735,18 +2736,45 @@ type AppScheduleRelease = {
 	byteSize: number;
 	publishedAt: string;
 	assets?: AppScheduleAsset[];
+	isActive?: boolean;
 };
+
+async function getScheduleReleasesList(): Promise<AppScheduleRelease[]> {
+	const stored = (await getSiteSetting("app_releases_schedule")) as AppScheduleRelease[] | null;
+	if (Array.isArray(stored) && stored.length > 0) {
+		return stored;
+	}
+	// 兼容迁移：若尚未创建列表，检查是否有单个遗留版本
+	const legacy = (await getSiteSetting("app_release_schedule")) as (AppScheduleRelease & { id?: string }) | null;
+	if (legacy && legacy.versionName && legacy.downloadUrl) {
+		const single: AppScheduleRelease = {
+			...legacy,
+			id: legacy.id || `rel_${Date.now()}`,
+			isActive: true,
+		};
+		await saveSiteSetting("app_releases_schedule", [single]);
+		return [single];
+	}
+	return [];
+}
+
+async function getActiveScheduleRelease(): Promise<AppScheduleRelease | null> {
+	const list = await getScheduleReleasesList();
+	if (list.length === 0) return null;
+	return list.find((r) => r.isActive) || list[0] || null;
+}
 
 // 公开接口：获取福建师大课表最新发布版本信息（支持多架构 assets）
 app.get("/api/app/schedule/latest", async (_req, res, next) => {
 	try {
-		const release = (await getSiteSetting("app_release_schedule")) as AppScheduleRelease | null;
+		const release = await getActiveScheduleRelease();
 		if (!release || !release.versionName || !release.downloadUrl) {
 			res.status(404).json({ error: "尚未发布课表安装包" });
 			return;
 		}
 		res.setHeader("Cache-Control", "no-cache");
 		res.json({
+			id: release.id,
 			versionName: release.versionName,
 			versionCode: release.versionCode,
 			releaseNotes: release.releaseNotes || "",
@@ -2773,10 +2801,23 @@ app.get("/api/app/schedule/latest", async (_req, res, next) => {
 	} catch (error) { next(error); }
 });
 
-// 公开接口：直接重定向到最新版课表 APK 下载链接（支持通过 ?abi= 自动匹配架构）
+// 公开接口：直接重定向到课表 APK 下载链接（支持指定版本/架构）
 app.get("/api/app/schedule/download", async (req, res, next) => {
 	try {
-		const release = (await getSiteSetting("app_release_schedule")) as AppScheduleRelease | null;
+		const list = await getScheduleReleasesList();
+		const requestedVersion = typeof req.query.version === "string" ? req.query.version.trim() : "";
+		const requestedId = typeof req.query.id === "string" ? req.query.id.trim() : "";
+
+		let release: AppScheduleRelease | null = null;
+		if (requestedId) {
+			release = list.find((r) => r.id === requestedId) || null;
+		} else if (requestedVersion) {
+			release = list.find((r) => r.versionName === requestedVersion || `v${r.versionName}` === requestedVersion) || null;
+		}
+		if (!release) {
+			release = await getActiveScheduleRelease();
+		}
+
 		if (!release || !release.downloadUrl) {
 			res.status(404).type("text/plain; charset=utf-8").send("尚未发布课表安装包。");
 			return;
@@ -2794,20 +2835,22 @@ app.get("/api/app/schedule/download", async (req, res, next) => {
 	} catch (error) { next(error); }
 });
 
-// 管理接口：获取当前发布的课表版本及网盘中的 APK 文件列表
+// 管理接口：获取课表版本列表（包含历史记录）、当前激活版本及网盘中的 APK 文件列表
 app.get("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWithAdmin, res, next) => {
 	try {
 		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
-		const [release, listed] = await Promise.all([
-			getSiteSetting("app_release_schedule") as Promise<AppScheduleRelease | null>,
+		const [releases, listed] = await Promise.all([
+			getScheduleReleasesList(),
 			listAdminDriveFiles(driveOwner(req.adminUser)),
 		]);
+		const activeRelease = releases.find((r) => r.isActive) || releases[0] || null;
 		const apkFiles = listed.items
 			.filter((file) => file.originalName.toLowerCase().endsWith(".apk"))
 			.map(presentDriveFile);
 		const allDriveFiles = listed.items.map(presentDriveFile);
 		res.json({
-			release: release || null,
+			release: activeRelease,
+			releases,
 			apkFiles,
 			allDriveFiles,
 			publicOrigin: config.filesPublicOrigin,
@@ -2815,12 +2858,16 @@ app.get("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWit
 	} catch (error) { next(error); }
 });
 
-// 管理接口：保存并发布课表版本下载源（支持多 APK 资产）
+// 管理接口：新建并发布课表版本（保留历史记录，追加到列表开头并设为当前生效版本）
 app.post("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWithAdmin, res, next) => {
 	try {
 		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
 		const input = appScheduleReleaseInput.parse(req.body);
-		const release: AppScheduleRelease = {
+		const existingList = await getScheduleReleasesList();
+
+		const newReleaseId = `rel_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+		const newRelease: AppScheduleRelease = {
+			id: newReleaseId,
 			versionName: input.versionName,
 			versionCode: input.versionCode,
 			releaseNotes: input.releaseNotes,
@@ -2830,16 +2877,73 @@ app.post("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWi
 			byteSize: input.byteSize,
 			publishedAt: new Date().toISOString(),
 			assets: input.assets || [],
+			isActive: true,
 		};
-		await saveSiteSetting("app_release_schedule", release);
-		res.status(201).json(release);
+
+		// 设新发布的版本为激活状态，历史所有旧版本保留在列表中
+		const updatedList = [
+			newRelease,
+			...existingList.map((r) => ({ ...r, isActive: false })),
+		];
+
+		await saveSiteSetting("app_releases_schedule", updatedList);
+		await saveSiteSetting("app_release_schedule", newRelease);
+
+		res.status(201).json(newRelease);
 	} catch (error) { next(error); }
 });
 
-// 管理接口：下架/清除课表版本下载源
+// 管理接口：将指定历史版本切换为当前生效版本（支持版本回滚或激活）
+app.post("/api/admin/app-releases/schedule/:id/active", requireAdmin, async (req: RequestWithAdmin, res, next) => {
+	try {
+		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		const id = req.params.id;
+		const list = await getScheduleReleasesList();
+		const target = list.find((r) => r.id === id);
+		if (!target) {
+			res.status(404).json({ error: "未找到该历史发布版本" });
+			return;
+		}
+		const updatedList = list.map((r) => ({
+			...r,
+			isActive: r.id === id,
+		}));
+		const newActive = updatedList.find((r) => r.id === id) || target;
+		await saveSiteSetting("app_releases_schedule", updatedList);
+		await saveSiteSetting("app_release_schedule", newActive);
+		res.json({ success: true, activeRelease: newActive, releases: updatedList });
+	} catch (error) { next(error); }
+});
+
+// 管理接口：删除指定的某一条历史发布版本
+app.delete("/api/admin/app-releases/schedule/:id", requireAdmin, async (req: RequestWithAdmin, res, next) => {
+	try {
+		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		const id = req.params.id;
+		const list = await getScheduleReleasesList();
+		const remaining = list.filter((r) => r.id !== id);
+
+		let activeRelease: AppScheduleRelease | null = null;
+		if (remaining.length > 0) {
+			if (!remaining.some((r) => r.isActive)) {
+				remaining[0].isActive = true;
+			}
+			activeRelease = remaining.find((r) => r.isActive) || remaining[0];
+			await saveSiteSetting("app_releases_schedule", remaining);
+			await saveSiteSetting("app_release_schedule", activeRelease);
+		} else {
+			await deleteSiteSetting("app_releases_schedule");
+			await deleteSiteSetting("app_release_schedule");
+		}
+		res.json({ success: true, remainingCount: remaining.length, activeRelease, releases: remaining });
+	} catch (error) { next(error); }
+});
+
+// 管理接口：下架/清除全部课表版本下载源
 app.delete("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWithAdmin, res, next) => {
 	try {
 		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
+		await deleteSiteSetting("app_releases_schedule");
 		await deleteSiteSetting("app_release_schedule");
 		res.json({ success: true });
 	} catch (error) { next(error); }
