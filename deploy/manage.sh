@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Firefly React production deployment manager for Debian/Ubuntu.
+# Jayson's Blog production deployment manager for Debian/Ubuntu.
 # Repository updates never run git clean or a destructive reset, so application
 # secrets, uploads and other untracked persistent data remain intact.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CONFIG_DIR="/etc/firefly-react"
+CONFIG_DIR="/etc/jayson-blog"
 CONFIG_FILE="${CONFIG_DIR}/deploy.env"
-LOCK_DIR="/var/lock/firefly-react"
+LOCK_DIR="/var/lock/jayson-blog"
 LOCK_FILE="${LOCK_DIR}/deploy.lock"
-SYSTEMD_UNIT="firefly-react.service"
+SYSTEMD_UNIT="jayson-blog.service"
 PNPM_VERSION="11.22.0"
 BOOTSTRAP_ADMIN_HASH_PREFIX='scrypt$firefly-default$'
 COMPILER_IMAGES=(
@@ -42,14 +42,14 @@ DOMAIN=""
 FILES_DOMAIN=""
 SERVE_HTTP_ORIGIN="false"
 API_PORT="5180"
-APP_USER="firefly"
+APP_USER="jayson"
 NODE_MAJOR="22"
-NGINX_SITE="firefly-react"
+NGINX_SITE="jayson-blog"
 DB_MODE="local"
 MYSQL_HOST="127.0.0.1"
 MYSQL_PORT="3306"
-MYSQL_DATABASE="firefly_blog"
-MYSQL_USER="firefly"
+MYSQL_DATABASE="jayson_blog"
+MYSQL_USER="jayson"
 SSL_EMAIL=""
 PUBLIC_SCHEME="http"
 DB_PASSWORD=""
@@ -61,7 +61,7 @@ MENU_COMMAND=""
 LOCK_ACQUIRED="false"
 
 DEFAULT_REPO_URL="$(git -C "${REPO_ROOT}" config --get remote.origin.url 2>/dev/null || true)"
-DEFAULT_REPO_URL="${DEFAULT_REPO_URL:-https://github.com/example/firefly-react.git}"
+DEFAULT_REPO_URL="${DEFAULT_REPO_URL:-https://github.com/example/jayson-blog.git}"
 DEFAULT_BRANCH="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
 
 SECRET_TEMP_FILES=()
@@ -235,7 +235,7 @@ write_config() {
   SECRET_TEMP_FILES+=("${tmp}")
   chmod 600 "${tmp}"
   {
-    printf '# Firefly React deployment settings; passwords are intentionally excluded\n'
+    printf '# Jayson blog deployment settings; passwords are intentionally excluded\n'
     printf 'APP_DIR=%s\n' "${APP_DIR}"
     printf 'REPO_URL=%s\n' "${REPO_URL}"
     printf 'BRANCH=%s\n' "${BRANCH}"
@@ -300,8 +300,8 @@ collect_database_settings() {
     DB_MODE=cloud
     prompt_validated MYSQL_HOST "云数据库主机" "${MYSQL_HOST:-db.example.com}" valid_host
     prompt_validated MYSQL_PORT "云数据库端口" "${MYSQL_PORT:-3306}" valid_port
-    prompt_validated MYSQL_DATABASE "云数据库名" "${MYSQL_DATABASE:-firefly_blog}" valid_db_id
-    prompt_validated MYSQL_USER "云数据库用户" "${MYSQL_USER:-firefly}" valid_mysql_user
+    prompt_validated MYSQL_DATABASE "云数据库名" "${MYSQL_DATABASE:-jayson_blog}" valid_db_id
+    prompt_validated MYSQL_USER "云数据库用户" "${MYSQL_USER:-jayson}" valid_mysql_user
     load_existing_password
     prompt_secret DB_PASSWORD "云数据库密码" "${DB_PASSWORD:-}"
     valid_secret "${DB_PASSWORD}" || die "云数据库密码须为 8-256 位，且不能包含控制字符。"
@@ -310,8 +310,8 @@ collect_database_settings() {
     MYSQL_HOST=127.0.0.1
     MYSQL_PORT=3306
     info "本地数据库使用仅在回环地址开放的 3306 端口。"
-    prompt_validated MYSQL_DATABASE "应用数据库名" "${MYSQL_DATABASE:-firefly_blog}" valid_db_id
-    prompt_validated MYSQL_USER "应用数据库用户" "${MYSQL_USER:-firefly}" valid_mysql_user
+    prompt_validated MYSQL_DATABASE "应用数据库名" "${MYSQL_DATABASE:-jayson_blog}" valid_db_id
+    prompt_validated MYSQL_USER "应用数据库用户" "${MYSQL_USER:-jayson}" valid_mysql_user
     load_existing_password
     prompt_secret DB_PASSWORD "应用数据库密码（留空自动生成）" "${DB_PASSWORD:-}"
     [[ -n "${DB_PASSWORD}" ]] || DB_PASSWORD="$(random_secret)"
@@ -323,14 +323,14 @@ collect_database_settings() {
 
 collect_settings() {
   load_config
-  prompt_validated APP_DIR "部署目录" "${APP_DIR:-/var/www/firefly-react}" valid_app_dir
+  prompt_validated APP_DIR "部署目录" "${APP_DIR:-/var/www/jayson-blog}" valid_app_dir
   prompt_validated REPO_URL "Git 仓库地址" "${REPO_URL:-${DEFAULT_REPO_URL}}" valid_repo
   prompt_validated BRANCH "Git 分支" "${BRANCH:-${DEFAULT_BRANCH}}" valid_branch
-  prompt_validated DOMAIN "站点域名（不含协议和路径）" "${DOMAIN:-firefly.example.com}" valid_domain
+  prompt_validated DOMAIN "站点域名（不含协议和路径）" "${DOMAIN:-blog.example.com}" valid_domain
   prompt_validated API_PORT "API 监听端口" "${API_PORT:-5180}" valid_port
-  prompt_validated APP_USER "服务运行用户" "${APP_USER:-firefly}" valid_id
+  prompt_validated APP_USER "服务运行用户" "${APP_USER:-jayson}" valid_id
   NODE_MAJOR=22
-  prompt_validated NGINX_SITE "Nginx 站点名" "${NGINX_SITE:-firefly-react}" valid_id
+  prompt_validated NGINX_SITE "Nginx 站点名" "${NGINX_SITE:-jayson-blog}" valid_id
   prompt SSL_EMAIL "Let's Encrypt 通知邮箱（可留空，之后用 ssl 命令配置）" "${SSL_EMAIL:-}"
   [[ -z "${SSL_EMAIL}" ]] || valid_email "${SSL_EMAIL}" || die "邮箱格式无效。"
   collect_database_settings
@@ -388,7 +388,7 @@ install_node_pnpm() {
   fi
   if [[ "${current_major}" != "${NODE_MAJOR}" ]]; then
     local setup_script
-    setup_script="$(mktemp /tmp/firefly-nodesource.XXXXXX)"
+    setup_script="$(mktemp /tmp/jayson-nodesource.XXXXXX)"
     SECRET_TEMP_FILES+=("${setup_script}")
     info "安装 Node.js ${NODE_MAJOR}.x。"
     curl --proto '=https' --tlsv1.2 -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" -o "${setup_script}"
@@ -423,7 +423,7 @@ install_node_pnpm() {
 ensure_service_user() {
   if ! id "${APP_USER}" >/dev/null 2>&1; then
     info "创建服务用户 ${APP_USER}。"
-    useradd --system --create-home --home-dir "/var/lib/firefly-react" --shell /usr/sbin/nologin "${APP_USER}"
+    useradd --system --create-home --home-dir "/var/lib/jayson-blog" --shell /usr/sbin/nologin "${APP_USER}"
   fi
   [[ "$(id -u "${APP_USER}")" -ne 0 ]] || die "服务用户不能拥有 root 权限。"
 }
@@ -483,7 +483,7 @@ ensure_repository() {
 
 clone_repository_atomically() {
   local parent="$1" staging_root staging_repo
-  staging_root="$(mktemp -d "${parent}/.firefly-react-clone.XXXXXX")"
+  staging_root="$(mktemp -d "${parent}/.jayson-blog-clone.XXXXXX")"
   staging_repo="${staging_root}/repository"
   info "先克隆到临时目录，成功后再切换到 ${APP_DIR}。"
   if ! git clone --branch "${BRANCH}" --single-branch -- "${REPO_URL}" "${staging_repo}"; then
@@ -534,7 +534,7 @@ safe_git_sync() {
 
 make_mysql_defaults_file() {
   local output_var="$1" user="$2" password="$3" host="$4" port="$5" file
-  file="$(mktemp /tmp/firefly-mysql.XXXXXX)"
+  file="$(mktemp /tmp/jayson-mysql.XXXXXX)"
   SECRET_TEMP_FILES+=("${file}")
   chmod 600 "${file}"
   {
@@ -664,7 +664,7 @@ publish_portal() {
 }
 
 install_and_build_application() {
-  [[ -f "${APP_DIR}/pnpm-lock.yaml" ]] || die "缺少 pnpm-lock.yaml，部署目录可能不是 Firefly React。"
+  [[ -f "${APP_DIR}/pnpm-lock.yaml" ]] || die "缺少 pnpm-lock.yaml，部署目录可能不是 Jayson's Blog。"
   info "按锁文件安装项目依赖。"
   (cd "${APP_DIR}" && NODE_ENV=development pnpm install --frozen-lockfile)
   info "构建 API 与前端。"
@@ -687,11 +687,11 @@ write_systemd_unit() {
   node_path="$(command -v node)"
   [[ "${node_path}" == /* && "${node_path}" != *[[:space:]]* ]] || die "无法确定安全的 Node.js 可执行路径。"
   target="/etc/systemd/system/${SYSTEMD_UNIT}"
-  tmp="$(mktemp /etc/systemd/system/.firefly-react.XXXXXX)"
+  tmp="$(mktemp /etc/systemd/system/.jayson-blog.XXXXXX)"
   SECRET_TEMP_FILES+=("${tmp}")
   {
     printf '[Unit]\n'
-    printf 'Description=Firefly React API\n'
+    printf 'Description=Jayson Blog API\n'
     printf 'Wants=network-online.target\n'
     printf 'After=network-online.target\n\n'
     printf '[Service]\n'
@@ -971,7 +971,7 @@ EOF
 
 validate_staged_nginx_site() {
   local site_file="$1" validation_file
-  validation_file="$(mktemp /tmp/firefly-nginx-test.XXXXXX)"
+  validation_file="$(mktemp /tmp/jayson-nginx-test.XXXXXX)"
   SECRET_TEMP_FILES+=("${validation_file}")
   {
     printf 'events {}\n'
@@ -1141,18 +1141,18 @@ write_files_nginx_config() {
   normalize_files_domain
   [[ -n "${FILES_DOMAIN}" ]] || return 0
   local scheme="http" target enabled staged backup="" had_target=false
-  target="/etc/nginx/sites-available/firefly-files"
-  enabled="/etc/nginx/sites-enabled/firefly-files"
+  target="/etc/nginx/sites-available/jayson-files"
+  enabled="/etc/nginx/sites-enabled/jayson-files"
   files_certificate_pair_exists && scheme="https"
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /var/www/letsencrypt
   [[ ! -L "${target}" && ( ! -e "${target}" || -f "${target}" ) ]] || die "${target} 不是普通文件，拒绝覆盖。"
   [[ ! -e "${enabled}" || -L "${enabled}" ]] || die "${enabled} 已存在且不是符号链接，拒绝覆盖。"
-  staged="$(mktemp /etc/nginx/sites-available/.firefly-files.XXXXXX)"
+  staged="$(mktemp /etc/nginx/sites-available/.jayson-files.XXXXXX)"
   SECRET_TEMP_FILES+=("${staged}")
   render_files_nginx_site "${scheme}" > "${staged}"
   chmod 644 "${staged}"
   if [[ -f "${target}" ]]; then
-    backup="$(mktemp /etc/nginx/sites-available/.firefly-files-backup.XXXXXX)"
+    backup="$(mktemp /etc/nginx/sites-available/.jayson-files-backup.XXXXXX)"
     cp -a "${target}" "${backup}"
     had_target=true
   fi
@@ -1215,14 +1215,14 @@ write_nginx_config() {
   [[ ! -L "${target}" && ( ! -e "${target}" || -f "${target}" ) ]] || die "${target} 不是普通文件，拒绝覆盖。"
   [[ ! -e "${enabled}" || -L "${enabled}" ]] || die "${enabled} 已存在且不是符号链接，拒绝覆盖。"
 
-  staged="$(mktemp /etc/nginx/sites-available/.firefly-react.XXXXXX)"
+  staged="$(mktemp /etc/nginx/sites-available/.jayson-blog.XXXXXX)"
   SECRET_TEMP_FILES+=("${staged}")
   render_nginx_site "${scheme}" > "${staged}"
   chmod 644 "${staged}"
   validate_staged_nginx_site "${staged}" || die "Nginx 候选配置校验失败。"
 
   if [[ -f "${target}" ]]; then
-    backup="$(mktemp /etc/nginx/sites-available/.firefly-react-backup.XXXXXX)"
+    backup="$(mktemp /etc/nginx/sites-available/.jayson-blog-backup.XXXXXX)"
     cp -a "${target}" "${backup}"
     had_target=true
   fi
@@ -1298,7 +1298,7 @@ install_certbot() {
 
 write_certbot_reload_hook() {
   local hook_dir='/etc/letsencrypt/renewal-hooks/deploy' hook
-  hook="${hook_dir}/firefly-reload-nginx"
+  hook="${hook_dir}/jayson-blog-reload-nginx"
   mkdir -p "${hook_dir}"
   {
     printf '#!/usr/bin/env bash\n'
@@ -1387,7 +1387,7 @@ prompt_admin_password() {
 set_initial_admin_password() {
   valid_admin_password "${ADMIN_PASSWORD}" || die "未提供有效的初始管理员密码。"
   info "设置初始管理员密码。"
-  (cd "${APP_DIR}" && printf '%s' "${ADMIN_PASSWORD}" | pnpm --filter @firefly-rebuild/api exec tsx src/cli.ts set-admin-password)
+  (cd "${APP_DIR}" && printf '%s' "${ADMIN_PASSWORD}" | pnpm --filter @jayson-blog/api exec tsx src/cli.ts set-admin-password)
   ADMIN_PASSWORD=""
   if database_needs_admin_password; then
     die "管理员密码写入后校验失败。"
@@ -1534,7 +1534,7 @@ run_configure() {
 run_status() {
   load_config
   validate_loaded_config
-  printf '\nFirefly API 服务\n'
+  printf '\nJayson Blog API 服务\n'
   systemctl status "${SYSTEMD_UNIT}" --no-pager || true
   printf '\nNginx 服务\n'
   systemctl status nginx --no-pager || true
@@ -1561,7 +1561,7 @@ run_stop() {
   load_config
   validate_loaded_config
   systemctl stop "${SYSTEMD_UNIT}"
-  info "Firefly API 已停止。"
+  info "Jayson Blog API 已停止。"
 }
 
 run_restart() {
@@ -1597,7 +1597,7 @@ run_ssl() {
 
 show_usage() {
   cat <<'EOF'
-Firefly React 部署管理器
+Jayson's Blog 部署管理器
 
 用法: sudo ./deploy/manage.sh <command>
 
@@ -1622,7 +1622,7 @@ interactive_menu() {
   cat <<'EOF'
 
 ==========================================
-       Firefly React 部署管理器
+       Jayson's Blog 部署管理器
 ==========================================
   1. 首次部署
   2. 仅拉取代码

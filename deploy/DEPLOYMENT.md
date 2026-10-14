@@ -1,6 +1,6 @@
-# Firefly React 生产部署
+# Jayson's Blog 生产部署
 
-`deploy/manage.sh` 是 Firefly React 的 Debian/Ubuntu 单服务器部署入口。它统一管理安全同步、依赖安装、MySQL、Docker 编译沙箱、构建、systemd、Nginx 和 HTTPS。脚本需以 root 身份或具备 sudo 权限的用户运行：
+`deploy/manage.sh` 是 Jayson's Blog 的 Debian/Ubuntu 单服务器部署入口。它统一管理安全同步、依赖安装、MySQL、Docker 编译沙箱、构建、systemd、Nginx 和 HTTPS。脚本需以 root 身份或具备 sudo 权限的用户运行：
 
 ```bash
 chmod +x deploy/manage.sh
@@ -44,10 +44,10 @@ sudo ./deploy/manage.sh
 部署参数保存在：
 
 ```text
-/etc/firefly-react/deploy.env
+/etc/jayson-blog/deploy.env
 ```
 
-脚本创建 `/etc/firefly-react` 时设为 `700`，并将该文件设为 `600`。它保存应用路径、仓库、分支、域名、端口、运行用户、数据库模式和数据库非敏感连接参数；数据库密码、令牌和私钥不会写入其中。
+脚本创建 `/etc/jayson-blog` 时设为 `700`，并将该文件设为 `600`。它保存应用路径、仓库、分支、域名、端口、运行用户、数据库模式和数据库非敏感连接参数；数据库密码、令牌和私钥不会写入其中。
 
 应用运行时配置位于：
 
@@ -67,7 +67,7 @@ sudo ./deploy/manage.sh
 
 ## 代码同步与持久化数据
 
-首次克隆会先在应用父目录创建 `.firefly-react-clone.*` 临时目录，只有 `git clone` 成功后才移动到应用目录；克隆失败不会改动目标目录，可能留下临时目录供人工检查或删除。
+首次克隆会先在应用父目录创建 `.jayson-blog-clone.*` 临时目录，只有 `git clone` 成功后才移动到应用目录；克隆失败不会改动目标目录，可能留下临时目录供人工检查或删除。
 
 已有仓库使用 fetch、切换目标分支和 `merge --ff-only` 同步。受 Git 跟踪文件有本地修改、分支已分叉或远程版本不匹配时会中止；脚本不使用 `git clean` 或破坏性 reset，也不删除未跟踪持久化数据。
 
@@ -82,8 +82,8 @@ systemd 服务运行 `<APP_DIR>/apps/api/dist/server.js`，工作目录是 `<APP
 ```bash
 sudo ./deploy/manage.sh status
 sudo ./deploy/manage.sh logs
-sudo systemctl status firefly-react
-sudo journalctl -u firefly-react -n 200 --no-pager
+sudo systemctl status jayson-blog
+sudo journalctl -u jayson-blog -n 200 --no-pager
 ```
 
 Nginx 提供 `<APP_DIR>/apps/web/dist` 的静态文件，并把 `/api/` 反代到本机 API。站点配置以临时文件生成，先经独立及完整 `nginx -t` 校验，失败会恢复旧配置。普通上传请求体限制为 64 MB。管理员网盘 `POST /api/admin/drive` 单独放宽到约 2.15 GB，并把上传和下载代理超时放到 2 小时。下载响应关闭代理缓冲，且不设置 `limit_rate`。当前面的 CDN 用 HTTP 回源时，把 `SERVE_HTTP_ORIGIN=true` 写进部署配置，80 端口会转到本机 HTTPS，而不是再跳回公网地址。
@@ -114,8 +114,8 @@ sudo certbot renew --dry-run
 每次 `update`、`migrate`、大版本升级或数据库配置调整前，至少备份数据库和上传目录：
 
 ```bash
-sudo mysqldump --single-transaction --routines --triggers -u <db_user> -p <db_name> > firefly-$(date +%F).sql
-sudo tar -C <APP_DIR> -czf firefly-uploads-$(date +%F).tar.gz uploads
+sudo mysqldump --single-transaction --routines --triggers -u <db_user> -p <db_name> > jayson-blog-$(date +%F).sql
+sudo tar -C <APP_DIR> -czf jayson-blog-uploads-$(date +%F).tar.gz uploads
 ```
 
 云数据库应优先启用快照、自动备份和时间点恢复，并保存独立逻辑备份。备份含用户数据，应加密、限制访问并放在独立存储；应定期演练恢复。恢复时先停止 API，恢复数据库和 `uploads/`，核对 `.env` 与权限，再启动服务并通过 `status` 或 `GET /api/health` 验证。
@@ -124,4 +124,4 @@ sudo tar -C <APP_DIR> -czf firefly-uploads-$(date +%F).tar.gz uploads
 
 此脚本只支持 Debian/Ubuntu、apt 与 systemd 的单服务器部署，不替代多节点发布、容器编排、数据库高可用、对象存储、CDN/WAF 或监控告警。Windows 开发机不能实际执行 apt、systemd、Nginx 或 Certbot；首次部署必须在目标 Linux 服务器完成。
 
-脚本不会替用户决定域名、DNS、云数据库权限、安全组、防火墙及备份保留策略。建议限制 SSH 登录，启用系统安全更新，保护 `/etc/firefly-react/deploy.env` 和 `<APP_DIR>/.env` 的读取权限，定期检查日志、磁盘空间、备份可恢复性和证书续期状态。
+脚本不会替用户决定域名、DNS、云数据库权限、安全组、防火墙及备份保留策略。建议限制 SSH 登录，启用系统安全更新，保护 `/etc/jayson-blog/deploy.env` 和 `<APP_DIR>/.env` 的读取权限，定期检查日志、磁盘空间、备份可恢复性和证书续期状态。

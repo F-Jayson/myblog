@@ -7,7 +7,7 @@ playwright-report/
 test-results/
 screenshots/
 *.tsbuildinfo
-.firefly-run/
+.blog-run/
 .compiler-work/
 data/ip2region/*.xdb
 .edge-check/

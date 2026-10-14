@@ -9,7 +9,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$StateDirectory = Join-Path $Root ".firefly-run"
+$StateDirectory = Join-Path $Root ".blog-run"
 $StatePath = Join-Path $StateDirectory "processes.json"
 $LogDirectory = Join-Path $Root "logs"
 $EnvironmentPath = Join-Path $Root ".env"
@@ -89,10 +89,7 @@ function Initialize-DockerEnvironment {
 	$user = Get-DotEnvValue $EnvironmentPath "MYSQL_USER"
 	$portText = Get-DotEnvValue $EnvironmentPath "MYSQL_PORT"
 	$password = Get-DotEnvValue $EnvironmentPath "MYSQL_PASSWORD"
-	if ([string]::IsNullOrWhiteSpace($database)) { $database = "firefly_blog" }
-	if ($database -ne "firefly_blog") {
-		throw "Docker Compose and database/schema.sql use the fixed database name firefly_blog. Set MYSQL_DATABASE=firefly_blog in $EnvironmentPath."
-	}
+	if ([string]::IsNullOrWhiteSpace($database)) { $database = "jayson_blog" }
 	if ([string]::IsNullOrWhiteSpace($user) -or $user -eq "root") {
 		throw "Docker Compose requires a non-root MYSQL_USER. Copy .env.docker.example to .env and set a unique MYSQL_PASSWORD."
 	}
@@ -225,11 +222,11 @@ function Stop-ExistingRun {
 	if (-not $state -or -not $apiValid -or -not $webValid -or $apiPid -lt 0 -or $webPid -lt 0 -or ($apiPid -eq 0 -and $webPid -eq 0) -or ($apiPid -gt 0 -and $apiPid -eq $webPid)) {
 		throw "The run record has no valid, distinct managed process IDs and was kept for diagnosis: $StatePath"
 	}
-	$apiStopped = Stop-TrackedProcess $apiPid "@firefly-rebuild/api" ([string]$state.ApiCommandLine) ([string]$state.ApiCreationDate) ([string]$state.StartedAt)
-	$webStopped = Stop-TrackedProcess $webPid "@firefly-rebuild/web" ([string]$state.WebCommandLine) ([string]$state.WebCreationDate) ([string]$state.StartedAt)
-	if (-not ($apiStopped -and $webStopped)) { throw "Could not stop all tracked Firefly processes; state was kept at $StatePath." }
+	$apiStopped = Stop-TrackedProcess $apiPid "@jayson-blog/api" ([string]$state.ApiCommandLine) ([string]$state.ApiCreationDate) ([string]$state.StartedAt)
+	$webStopped = Stop-TrackedProcess $webPid "@jayson-blog/web" ([string]$state.WebCommandLine) ([string]$state.WebCreationDate) ([string]$state.StartedAt)
+	if (-not ($apiStopped -and $webStopped)) { throw "Could not stop all tracked blog processes; state was kept at $StatePath." }
 	Remove-Item $StatePath -Force -ErrorAction Stop
-	if (Test-Path -LiteralPath $StatePath) { throw "Could not remove the Firefly run record; state was kept at $StatePath." }
+	if (Test-Path -LiteralPath $StatePath) { throw "Could not remove the blog run record; state was kept at $StatePath." }
 }
 
 function Test-PortAvailable([int]$Port) {
@@ -405,7 +402,7 @@ $state = [ordered]@{
 }
 try {
 	$apiProcess = Start-Process -FilePath $script:PnpmPath `
-		-ArgumentList @($script:PnpmPrefix + @("--filter", "@firefly-rebuild/api", "dev")) `
+		-ArgumentList @($script:PnpmPrefix + @("--filter", "@jayson-blog/api", "dev")) `
 		-WorkingDirectory $Root -WindowStyle Hidden `
 		-RedirectStandardOutput $apiLog -RedirectStandardError $apiErrorLog -PassThru
 	$state.ApiPid = $apiProcess.Id
@@ -415,7 +412,7 @@ try {
 	$state | ConvertTo-Json | Set-Content -Path $StatePath -Encoding UTF8
 
 	$webProcess = Start-Process -FilePath $script:PnpmPath `
-		-ArgumentList @($script:PnpmPrefix + @("--filter", "@firefly-rebuild/web", "dev")) `
+		-ArgumentList @($script:PnpmPrefix + @("--filter", "@jayson-blog/web", "dev")) `
 		-WorkingDirectory $Root -WindowStyle Hidden `
 		-RedirectStandardOutput $webLog -RedirectStandardError $webErrorLog -PassThru
 	$state.WebPid = $webProcess.Id
@@ -427,8 +424,8 @@ try {
 } catch {
 	$apiStopped = $true
 	$webStopped = $true
-	if ($apiProcess) { $apiStopped = Stop-TrackedProcess $apiProcess.Id "@firefly-rebuild/api" ([string]$state.ApiCommandLine) ([string]$state.ApiCreationDate) ([string]$state.StartedAt) }
-	if ($webProcess) { $webStopped = Stop-TrackedProcess $webProcess.Id "@firefly-rebuild/web" ([string]$state.WebCommandLine) ([string]$state.WebCreationDate) ([string]$state.StartedAt) }
+	if ($apiProcess) { $apiStopped = Stop-TrackedProcess $apiProcess.Id "@jayson-blog/api" ([string]$state.ApiCommandLine) ([string]$state.ApiCreationDate) ([string]$state.StartedAt) }
+	if ($webProcess) { $webStopped = Stop-TrackedProcess $webProcess.Id "@jayson-blog/web" ([string]$state.WebCommandLine) ([string]$state.WebCreationDate) ([string]$state.StartedAt) }
 	if ($apiStopped -and $webStopped) {
 		Remove-Item $StatePath -Force -ErrorAction SilentlyContinue
 		if (Test-Path -LiteralPath $StatePath) { Write-Warning "Could not remove the run record; state was kept at $StatePath." }
@@ -439,7 +436,7 @@ try {
 	throw
 }
 
-Write-Host "`nFirefly Headless started." -ForegroundColor Green
+Write-Host "`nJayson's Blog started." -ForegroundColor Green
 Write-Host "Web:   $($state.WebUrl)"
 Write-Host "Admin: $($state.WebUrl)/admin/login"
 Write-Host "API:   $($state.ApiUrl)"

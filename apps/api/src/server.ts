@@ -149,12 +149,12 @@ async function readApplicationMetadata(): Promise<ApplicationMetadata> {
 			const metadata = value as Record<string, unknown>;
 			const name = typeof metadata.name === "string" ? metadata.name.trim() : "";
 			const version = typeof metadata.version === "string" ? metadata.version.trim() : "";
-			if (name && version) return { name, version };
+			if (name && version) return { name: "Jayson's Blog", version };
 		}
 	} catch {
 		// The site remains available when a deployment intentionally omits package.json.
 	}
-	return { name: "firefly-rebuild", version: "unknown" };
+	return { name: "Jayson's Blog", version: "unknown" };
 }
 
 const applicationMetadata = await readApplicationMetadata();
@@ -964,14 +964,18 @@ app.get("/api/site", async (_req, res, next) => {
 	try {
 		const [summary, categories, tags, announcement] = await Promise.all([siteSummary(), listCategories(), listTags(), getCurrentAnnouncement()]);
 		const favicon = typeof summary.site.siteFavicon === "string" ? summary.site.siteFavicon.trim() : "";
+		const siteLogo = typeof summary.site.siteLogo === "string" ? summary.site.siteLogo.trim() : "";
+		const siteLogoDark = typeof summary.site.siteLogoDark === "string" ? summary.site.siteLogoDark.trim() : "";
 		const videoUploadLimit = Number(summary.site.videoUploadMaxSizeMb);
 		res.json({
 			...summary.site,
-			title: summary.site.title ?? "Firefly",
+			title: summary.site.title ?? "Jayson's Blog",
 			subtitle: summary.site.subtitle ?? "Demo site",
-			description: summary.site.description ?? "Firefly 是一款清新美观的个人博客。",
+			description: summary.site.description ?? "Jayson's Blog 是一个个人博客。",
 			hue: summary.site.hue ?? 165,
 			siteFavicon: favicon,
+			siteLogo,
+			siteLogoDark,
 			videoUploadMaxSizeMb: Number.isInteger(videoUploadLimit) && videoUploadLimit >= 1 && videoUploadLimit <= 2048 ? videoUploadLimit : 1024,
 			videoAutoTranscodeEnabled: summary.site.videoAutoTranscodeEnabled === true,
 			runtime: {
@@ -1063,7 +1067,7 @@ async function fetchRemoteWallpaper(initialUrl: string) {
 				method: "GET",
 				redirect: "manual",
 				signal: controller.signal,
-				headers: { accept: "image/avif,image/webp,image/*,*/*;q=0.8", "user-agent": "FireflyBlogWallpaper/1.0" },
+				headers: { accept: "image/avif,image/webp,image/*,*/*;q=0.8", "user-agent": "JaysonsBlogWallpaper/1.0" },
 			});
 			if (response.status >= 300 && response.status < 400) {
 				const location = response.headers.get("location");
@@ -1407,11 +1411,13 @@ app.get("/api/allPostMeta.json", async (_req, res, next) => {
 
 app.get("/api/rss.xml", async (_req, res, next) => {
 	try {
-		const posts = await listPosts({ page: 1, pageSize: 50 });
+		const [posts, summary] = await Promise.all([listPosts({ page: 1, pageSize: 50 }), siteSummary()]);
 		const escapeXml = (value: string) => value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/"/gu, "&quot;").replace(/'/gu, "&apos;");
 		const siteOrigin = config.clientOrigin.split(",")[0].trim().replace(/\/+$/u, "");
+		const channelTitle = typeof summary.site.title === "string" && summary.site.title.trim() ? summary.site.title.trim() : "Jayson's Blog";
+		const channelDescription = typeof summary.site.description === "string" && summary.site.description.trim() ? summary.site.description.trim() : channelTitle;
 		const items = posts.items.map((post) => `<item><title>${escapeXml(post.title)}</title><link>${siteOrigin}/posts/${post.slug}</link><description>${escapeXml(post.excerpt)}</description><pubDate>${post.publishedAt ?? ""}</pubDate><guid>${post.slug}</guid></item>`).join("");
-		res.type("application/rss+xml").send(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Firefly</title><link>${siteOrigin}/</link><description>Firefly Demo site</description>${items}</channel></rss>`);
+		res.type("application/rss+xml").send(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>${escapeXml(channelTitle)}</title><link>${siteOrigin}/</link><description>${escapeXml(channelDescription)}</description>${items}</channel></rss>`);
 	} catch (error) {
 		next(error);
 	}
@@ -1938,7 +1944,7 @@ app.get("/api/admin/monitoring", requireAdmin, async (req, res, next) => {
 			hours,
 			generatedAt: new Date().toISOString(),
 			thresholds: { slowRequestMs: config.monitorSlowRequestMs, slowSqlMs: config.monitorSlowSqlMs },
-			resources: { server: getProcessSnapshot(), project: { name: "firefly-api", startedAt: metrics.collectedSince, database } },
+			resources: { server: getProcessSnapshot(), project: { name: "blog-api", startedAt: metrics.collectedSince, database } },
 			summary: { ...metrics.requests, slowSql: metrics.sql.slow, sql: metrics.sql },
 			trend: metrics.trends,
 			paths: metrics.frequentPaths,
@@ -2048,6 +2054,8 @@ const siteSettingsInput = z.object({
 	description: optionalText(10000),
 	hue: z.number().int().min(0).max(360).optional(),
 	siteFavicon: siteAssetUrl.optional(),
+	siteLogo: siteAssetUrl.optional(),
+	siteLogoDark: siteAssetUrl.optional(),
 	videoUploadMaxSizeMb: z.number().int().min(1).max(2048).optional(),
 	videoAutoTranscodeEnabled: z.boolean().optional(),
 	cover: z.object({ mode: z.enum(["upload", "url", "api"]), value: z.string().trim().max(2000), apiUrl: optionalText(2000), position: optionalText(120) }).passthrough().nullable().optional(),
@@ -2079,7 +2087,7 @@ async function saveAdminSite(req: Request, res: Response, next: NextFunction) {
 		const value = mergeSettings(isRecord(currentSetting) ? currentSetting : {}, sitePatch);
 		const author = authorPatch
 			? {
-				name: authorPatch.name ?? currentAuthor?.name ?? "Firefly",
+				name: authorPatch.name ?? currentAuthor?.name ?? "Jayson",
 				bio: authorPatch.bio ?? currentAuthor?.bio ?? "",
 				avatar: authorPatch.avatar ?? currentAuthor?.avatar ?? "",
 				email: authorPatch.email === "" ? null : (authorPatch.email ?? currentAuthor?.email ?? null),
@@ -2112,7 +2120,7 @@ app.put("/api/admin/author-profile", requireAdmin, async (req, res, next) => {
 		const patch = authorProfileOnlyInput.parse(req.body);
 		const [currentSetting, currentAuthor] = await Promise.all([getSiteSetting("site"), getAuthorProfile()]);
 		const author = {
-			name: patch.name ?? currentAuthor?.name ?? "Firefly", bio: patch.bio ?? currentAuthor?.bio ?? "", avatar: patch.avatar ?? currentAuthor?.avatar ?? "",
+			name: patch.name ?? currentAuthor?.name ?? "Jayson", bio: patch.bio ?? currentAuthor?.bio ?? "", avatar: patch.avatar ?? currentAuthor?.avatar ?? "",
 			email: patch.email === "" ? null : (patch.email ?? currentAuthor?.email ?? null), githubUrl: patch.githubUrl ?? currentAuthor?.githubUrl ?? null, qqUrl: patch.qqUrl ?? currentAuthor?.qqUrl ?? null, rssUrl: patch.rssUrl ?? currentAuthor?.rssUrl ?? null, links: patch.links ?? currentAuthor?.links ?? [],
 			profile: { ...currentAuthor?.profile, ...patch.profile },
 		};
@@ -2884,7 +2892,7 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 
 const server = app.listen(config.port, config.host, () => {
 	const displayHost = config.host.includes(":") ? `[${config.host}]` : config.host;
-	console.log(`Firefly API listening on http://${displayHost}:${config.port}`);
+	console.log(`Jayson's Blog API listening on http://${displayHost}:${config.port}`);
 	warmIpLocation();
 });
 server.requestTimeout = 2 * 60 * 60 * 1000;

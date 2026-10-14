@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN ?? "").trim().replace(/\/+$/u, "");
-const AUTH_EXPIRED_EVENT = "firefly-admin-auth-expired";
+const AUTH_EXPIRED_EVENT = "site-admin-auth-expired";
 
 export type AppScheduleAsset = {
   abi: string; // "universal" | "arm64-v8a" | "armeabi-v7a" | "x86_64" | string
@@ -59,15 +59,15 @@ type ReleaseResponse = {
 
 function authHeaders() {
   const headers = new Headers();
-  const token = sessionStorage.getItem("firefly-admin-token");
+  const token = sessionStorage.getItem("site-admin-token");
   if (token) headers.set("authorization", "Bearer " + token);
   return headers;
 }
 
 function expireAdminSession() {
-  sessionStorage.removeItem("firefly-admin-token");
-  sessionStorage.removeItem("firefly-admin-username");
-  sessionStorage.setItem("firefly-admin-auth-message", "登录状态已失效，请重新输入管理员账号和密码。");
+  sessionStorage.removeItem("site-admin-token");
+  sessionStorage.removeItem("site-admin-username");
+  sessionStorage.setItem("site-admin-auth-message", "登录状态已失效，请重新输入管理员账号和密码。");
   window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
 }
 

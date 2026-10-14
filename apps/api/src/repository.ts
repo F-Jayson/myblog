@@ -42,7 +42,7 @@ async function commentMailSettings(): Promise<CommentMailSettings> {
 	const from = String(value.senderEmail ?? value.smtpFrom ?? env.SMTP_FROM ?? user).trim();
 	const notificationValue = value.notificationEmails ?? value.adminNotificationEmail ?? env.ADMIN_NOTIFICATION_EMAIL ?? "";
 	const notificationEmails = (Array.isArray(notificationValue) ? notificationValue : String(notificationValue).split(/[;,\n]/u)).map(String).map((item) => item.trim()).filter((item) => /^\S+@\S+\.\S+$/u.test(item)).slice(0, 30);
-	return { host, port, secure, user, password, from, siteName: String(value.senderName ?? env.SMTP_SITE_NAME ?? "Firefly"), notificationEmails };
+	return { host, port, secure, user, password, from, siteName: String(value.senderName ?? env.SMTP_SITE_NAME ?? "Jayson's Blog"), notificationEmails };
 }
 
 async function sendCommentMail(to: string | string[], subject: string, text: string) {
@@ -405,11 +405,11 @@ export async function listPosts(filters: ListPostFilters): Promise<Paginated<Pos
 		 ${clause}
 		 ORDER BY p.pinned DESC,
 			CASE p.slug
-				WHEN 'firefly' THEN 0
+				WHEN 'journal' THEN 0
 				WHEN 'guide/index' THEN 1
 				WHEN 'code-examples' THEN 2
-				WHEN 'guide/firefly-layout-system' THEN 3
-				WHEN 'guide/firefly-wiki-link' THEN 4
+				WHEN 'guide/layout-system' THEN 3
+				WHEN 'guide/wiki-link' THEN 4
 				WHEN 'encrypted-demo' THEN 5
 				WHEN 'katex-math-example' THEN 6
 				WHEN 'mdx-example' THEN 7
@@ -487,11 +487,11 @@ export async function archivePosts() {
 		 FROM posts p LEFT JOIN categories c ON c.id = p.category_id
 		 WHERE p.status = 'published'
 		 ORDER BY CASE p.slug
-			WHEN 'firefly' THEN 0
+			WHEN 'journal' THEN 0
 			WHEN 'guide/index' THEN 1
 			WHEN 'code-examples' THEN 2
-			WHEN 'guide/firefly-layout-system' THEN 3
-			WHEN 'guide/firefly-wiki-link' THEN 4
+			WHEN 'guide/layout-system' THEN 3
+			WHEN 'guide/wiki-link' THEN 4
 			WHEN 'encrypted-demo' THEN 5
 			WHEN 'katex-math-example' THEN 6
 			WHEN 'mdx-example' THEN 7

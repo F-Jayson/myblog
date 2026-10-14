@@ -28,8 +28,8 @@ const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN ?? "").trim().replace(/\/+$/
 const requestCache = new Map<string, Promise<unknown>>();
 const retryAfter = new Map<string, number>();
 
-const USER_TOKEN_KEY = "firefly-user-token";
-const GAME_GUEST_KEY = "firefly-game-guest";
+const USER_TOKEN_KEY = "site-user-token";
+const GAME_GUEST_KEY = "site-game-guest";
 
 export function ensureGameGuestToken() {
 	try {

@@ -536,7 +536,7 @@ img { display: block; max-width: 100%; }
 	.site-info-version-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* Sidebar and secondary pages follow the information-dense Firefly layout. */
+/* Sidebar and secondary pages follow the information-dense reference layout. */
 .profile-card-large { padding: 1rem .75rem 1.15rem; }
 .profile-card-large .avatar { width: 100%; max-width: 256px; height: auto; aspect-ratio: 1; margin: 0 auto 1rem; border: 0; border-radius: .75rem; object-fit: cover; }
 .profile-name-row { display: flex; align-items: center; justify-content: center; gap: .42rem; }
@@ -1050,7 +1050,7 @@ body { font-family: var(--site-body-font, system-ui, sans-serif); }
 }
 
 /* Managed public pages: keep the same quiet, content-first rhythm as the
-   rest of the Firefly reading surface while giving each workflow a clear
+   rest of the reading surface while giving each workflow a clear
    visual boundary. */
 .drawer-section-label { display: flex; align-items: center; gap: .7rem; margin: .65rem 0 .1rem; padding: .7rem .65rem .35rem; border-top: 1px dashed var(--line); color: var(--primary); font-size: .72rem; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .managed-page .page-heading { margin-bottom: .55rem; }

@@ -1,16 +1,16 @@
-USE firefly_blog;
+USE jayson_blog;
 
 -- Do not seed a reusable administrator password. Run
--- `pnpm --filter @firefly-rebuild/api db:migrate`, then pipe a unique
+-- `pnpm --filter @jayson-blog/api db:migrate`, then pipe a unique
 -- 12+ character password to `tsx src/cli.ts set-admin-password`, or run it
 -- interactively in a terminal and follow the hidden prompts.
 
 INSERT INTO authors (id, name, bio, avatar, email, github_url, qq_url, rss_url, links)
-VALUES (1, 'Firefly', 'Hello, I\'m Firefly.', '/images/avatar.avif', 'hello@example.com', 'https://github.com/', 'https://wpa.qq.com/', '/rss.xml', JSON_ARRAY())
+VALUES (1, 'Jayson', 'Hello, I\'m Jayson.', '/images/avatar.avif', 'hello@example.com', 'https://github.com/', 'https://wpa.qq.com/', '/rss.xml', JSON_ARRAY())
 ON DUPLICATE KEY UPDATE name = VALUES(name), bio = VALUES(bio), avatar = VALUES(avatar), email = VALUES(email), github_url = VALUES(github_url), qq_url = VALUES(qq_url), rss_url = VALUES(rss_url), links = VALUES(links);
 
 INSERT INTO categories (name, slug, description) VALUES
-  ('博客指南', 'guide', 'Firefly 的使用指南与布局说明'),
+  ('博客指南', 'guide', 'Jayson''s Blog 的使用指南与布局说明'),
   ('文章示例', 'examples', 'Markdown、代码块和主题功能示例'),
   ('开发笔记', 'dev-note', '前端、后端与工具链记录'),
   ('随笔', 'essay', '生活与灵感的片段')
@@ -18,42 +18,42 @@ ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description);
 
 INSERT INTO tags (name, slug) VALUES
   ('Astro', 'astro'), ('React', 'react'), ('TypeScript', 'typescript'), ('设计', 'design'), ('随笔', 'essay'),
-  ('Markdown', 'markdown'), ('Firefly', 'firefly'), ('博客', 'blog'), ('主题', 'theme'), ('模板', 'template'),
+  ('Markdown', 'markdown'), ('Jayson', 'journal'), ('博客', 'blog'), ('主题', 'theme'), ('模板', 'template'),
   ('指南', 'guide'), ('布局', 'layout'), ('演示', 'demo'), ('示例', 'example'), ('KaTeX', 'katex'), ('Math', 'math'), ('MDX', 'mdx'), ('Mermaid', 'mermaid'), ('Obsidian', 'obsidian'), ('PlantUML', 'plantuml'), ('Wiki-Link', 'wiki-link'), ('密码保护', 'password-protected'), ('视频', 'video')
 ON DUPLICATE KEY UPDATE name = VALUES(name), slug = VALUES(slug);
 
 -- Remove records from the initial scaffold so the demo archive matches the source site.
-DELETE FROM posts WHERE slug IN ('firefly-layout-system', 'react-and-express', 'a-small-archive');
+DELETE FROM posts WHERE slug IN ('layout-system', 'react-and-express', 'a-small-archive');
 DELETE FROM categories WHERE slug IN ('dev-note', 'essay');
 
--- The first four records mirror the source Firefly content collection.
+-- The first four records mirror the source theme content collection.
 INSERT INTO posts (slug, title, excerpt, content, cover, category_id, status, pinned, views, words, minutes, published_at)
-SELECT 'firefly', 'Firefly 一款清新美观的 Astro 博客主题模板',
-  'Firefly 是一款基于 Astro 框架和 Fuwari 模板开发的清新美观且现代化个人博客主题模板，专为技术爱好者和内容创作者设计。',
-  '## 项目概述\n\nFirefly 是一款基于 Astro 和 Fuwari 的清新美观博客主题模板，提供现代 Web 技术栈、响应式布局和高度可定制的界面。\n\n**在线预览：** [Firefly Demo](https://firefly.cuteleaf.cn/)\n\n## 技术架构\n\n- 基于 Astro 的静态站点生成\n- 完整的 TypeScript 支持\n- 使用 Tailwind CSS 的响应式设计\n- Astro 与 Svelte 组件化开发\n\n## 配置说明\n\n详细配置可以参考 Firefly 使用文档。',
-  '/images/posts/firefly2.avif', id, 'published', TRUE, 128, 640, 4, '1970-01-02 00:00:00'
+SELECT 'journal', 'Jayson''s Blog 一款清新美观的 Astro 博客主题模板',
+  'Jayson''s Blog 是一款基于 Astro 框架和 Fuwari 模板开发的清新美观且现代化个人博客主题模板，专为技术爱好者和内容创作者设计。',
+  '## 项目概述\n\nJayson''s Blog 是一款基于 Astro 和 Fuwari 的清新美观博客主题模板，提供现代 Web 技术栈、响应式布局和高度可定制的界面。\n\n**在线预览：** [Jayson''s Blog](https://blog.fjayson.com/)\n\n## 技术架构\n\n- 基于 Astro 的静态站点生成\n- 完整的 TypeScript 支持\n- 使用 Tailwind CSS 的响应式设计\n- Astro 与 Svelte 组件化开发\n\n## 配置说明\n\n详细配置可以参考 Jayson''s Blog 使用文档。',
+  '/images/posts/post-cover-2.avif', id, 'published', TRUE, 128, 640, 4, '1970-01-02 00:00:00'
 FROM categories WHERE slug = 'examples'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), cover = VALUES(cover), category_id = VALUES(category_id), status = VALUES(status), pinned = VALUES(pinned), views = VALUES(views), words = VALUES(words), minutes = VALUES(minutes), published_at = VALUES(published_at);
 
 INSERT INTO posts (slug, title, excerpt, content, cover, category_id, status, pinned, views, words, minutes, published_at)
-SELECT 'guide/index', 'Firefly 简单使用指南', '如何使用 Firefly 博客模板。',
+SELECT 'guide/index', 'Jayson''s Blog 简单使用指南', '如何使用 Jayson''s Blog 博客模板。',
   '## 开始使用\n\n这个博客模板基于 [Astro](https://astro.build/) 构建。文章内容放在 `src/content/posts/` 目录中，保存为 Markdown 文件即可。\n\n## 文章 Front-matter\n\n```yaml\n---\ntitle: 我的第一篇博客文章\npublished: 2023-09-09\ndescription: 这是我新 Astro 博客的第一篇文章。\ntags: [前端, 开发]\ncategory: 前端开发\n---\n```\n\n## 自定义文章 URL\n\n可以通过 `slug` 字段为文章设置简洁、稳定的地址。更多配置请参考 Astro 文档。',
   '/images/posts/guide-cover.avif', id, 'published', TRUE, 96, 430, 3, '1970-01-02 00:00:00'
 FROM categories WHERE slug = 'guide'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), cover = VALUES(cover), category_id = VALUES(category_id), status = VALUES(status), pinned = VALUES(pinned), views = VALUES(views), words = VALUES(words), minutes = VALUES(minutes), published_at = VALUES(published_at);
 
 INSERT INTO posts (slug, title, excerpt, content, cover, category_id, status, pinned, views, words, minutes, published_at)
-SELECT 'guide/firefly-layout-system', 'Firefly 布局系统详解',
-  '深入了解 Firefly 的布局系统，包括侧边栏布局、文章列表布局和自适应网格。',
-  '## 概述\n\nFirefly 提供灵活的布局系统，可以根据内容需求自定义侧边栏和文章列表。\n\n## 侧边栏布局\n\n博客支持左侧、右侧和双侧边栏。双侧边栏适合宽屏显示器，单侧边栏则为文章保留更多阅读空间。\n\n## 文章列表布局\n\n列表模式展示封面、摘要和标签；网格模式根据容器宽度自适应列数，还可以开启瀑布流。\n\n## 响应式行为\n\n屏幕变窄时网格列数会减少，双侧边栏会收起，页面自然变为单栏布局。',
-  '/images/posts/firefly1.avif', id, 'published', FALSE, 91, 900, 5, '1970-01-03 00:00:00'
+SELECT 'guide/layout-system', 'Jayson''s Blog 布局系统详解',
+  '深入了解 Jayson''s Blog 的布局系统，包括侧边栏布局、文章列表布局和自适应网格。',
+  '## 概述\n\nJayson''s Blog 提供灵活的布局系统，可以根据内容需求自定义侧边栏和文章列表。\n\n## 侧边栏布局\n\n博客支持左侧、右侧和双侧边栏。双侧边栏适合宽屏显示器，单侧边栏则为文章保留更多阅读空间。\n\n## 文章列表布局\n\n列表模式展示封面、摘要和标签；网格模式根据容器宽度自适应列数，还可以开启瀑布流。\n\n## 响应式行为\n\n屏幕变窄时网格列数会减少，双侧边栏会收起，页面自然变为单栏布局。',
+  '/images/posts/post-cover-1.avif', id, 'published', FALSE, 91, 900, 5, '1970-01-03 00:00:00'
 FROM categories WHERE slug = 'guide'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), cover = VALUES(cover), category_id = VALUES(category_id), status = VALUES(status), pinned = VALUES(pinned), views = VALUES(views), words = VALUES(words), minutes = VALUES(minutes), published_at = VALUES(published_at);
 
 INSERT INTO posts (slug, title, excerpt, content, cover, category_id, status, pinned, views, words, minutes, published_at)
-SELECT 'code-examples', 'Firefly 代码块示例', '在 Firefly 中使用表达性代码块的 Markdown 示例。',
-  '## 表达性代码\n\nFirefly 支持在 Markdown 中展示带语法高亮的代码块。\n\n### 语法高亮\n\n```js\nconsole.log("此代码有语法高亮!");\n```\n\n### 文件框架\n\n```js title="example.js"\nexport function greet(name) {\n  return `Hello, ${name}`;\n}\n```\n\n### 行标记与自动换行\n\n代码块还可以标记行、显示行号，并按需要启用自动换行。',
-  '/images/posts/firefly3.avif', id, 'published', FALSE, 64, 780, 4, '1970-01-03 00:00:00'
+SELECT 'code-examples', 'Jayson''s Blog 代码块示例', '在 Jayson''s Blog 中使用表达性代码块的 Markdown 示例。',
+  '## 表达性代码\n\nJayson''s Blog 支持在 Markdown 中展示带语法高亮的代码块。\n\n### 语法高亮\n\n```js\nconsole.log("此代码有语法高亮!");\n```\n\n### 文件框架\n\n```js title="example.js"\nexport function greet(name) {\n  return `Hello, ${name}`;\n}\n```\n\n### 行标记与自动换行\n\n代码块还可以标记行、显示行号，并按需要启用自动换行。',
+  '/images/posts/post-cover-3.avif', id, 'published', FALSE, 64, 780, 4, '1970-01-03 00:00:00'
 FROM categories WHERE slug = 'examples'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), cover = VALUES(cover), category_id = VALUES(category_id), status = VALUES(status), pinned = VALUES(pinned), views = VALUES(views), words = VALUES(words), minutes = VALUES(minutes), published_at = VALUES(published_at);
 
@@ -73,36 +73,36 @@ FROM categories WHERE slug = 'essay'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), cover = VALUES(cover), category_id = VALUES(category_id), status = VALUES(status), pinned = VALUES(pinned), views = VALUES(views), words = VALUES(words), minutes = VALUES(minutes), published_at = VALUES(published_at);
 
 INSERT INTO posts (slug, title, excerpt, content, cover, category_id, status, pinned, views, words, minutes, published_at)
-SELECT 'markdown-extended', 'Markdown 扩展功能', '了解 Firefly 中的 Markdown 功能。',
+SELECT 'markdown-extended', 'Markdown 扩展功能', '了解 Jayson''s Blog 中的 Markdown 功能。',
   '## Markdown 功能\n\n文章页支持代码块、引用、表格和链接，并保持与列表页一致的色彩语言。\n\n### 提醒框\n\n可以使用 GitHub、Obsidian、VitePress 和 Docusaurus 风格的提示块。\n\n### 图片画廊\n\n`[grid]` 标签可以把多张图片排列成响应式画廊。',
   NULL, id, 'published', FALSE, 52, 374, 2, '1970-01-01 07:00:00'
 FROM categories WHERE slug = 'examples'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), cover = VALUES(cover), category_id = VALUES(category_id), status = VALUES(status), pinned = VALUES(pinned), views = VALUES(views), words = VALUES(words), minutes = VALUES(minutes), published_at = VALUES(published_at);
 
 INSERT INTO posts (slug, title, excerpt, content, cover, category_id, status, pinned, views, words, minutes, published_at)
-SELECT 'guide/firefly-wiki-link', 'Firefly Wiki Link 内部链接示例', '在 Firefly 文章中使用 Obsidian 风格的 Wiki Link 内部链接，并自动生成文章链接卡片。',
-  '## 文章链接卡片\n\nFirefly 支持在 Markdown、MDX 文章中使用 Obsidian 风格的 Wiki Link 内部链接。',
+SELECT 'guide/wiki-link', 'Jayson''s Blog Wiki Link 内部链接示例', '在 Jayson''s Blog 文章中使用 Obsidian 风格的 Wiki Link 内部链接，并自动生成文章链接卡片。',
+  '## 文章链接卡片\n\nJayson''s Blog 支持在 Markdown、MDX 文章中使用 Obsidian 风格的 Wiki Link 内部链接。',
   NULL, id, 'published', FALSE, 38, 420, 3, '1970-01-03 00:00:00'
 FROM categories WHERE slug = 'guide'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), category_id = VALUES(category_id), status = VALUES(status), published_at = VALUES(published_at);
 
 INSERT INTO posts (slug, title, excerpt, content, cover, category_id, status, pinned, views, words, minutes, published_at)
-SELECT 'encrypted-demo', 'Firefly 文章加密', '这是一篇密码保护的示例文章，用于演示文章加密功能。',
+SELECT 'encrypted-demo', 'Jayson''s Blog 文章加密', '这是一篇密码保护的示例文章，用于演示文章加密功能。',
   '## 成功解锁了这篇文章！\n\n这是密码保护文章的示例内容。',
   NULL, id, 'published', FALSE, 31, 160, 1, '1970-01-02 00:00:00'
 FROM categories WHERE slug = 'examples'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), category_id = VALUES(category_id), status = VALUES(status), published_at = VALUES(published_at);
 
 INSERT INTO posts (slug, title, excerpt, content, cover, category_id, status, pinned, views, words, minutes, published_at)
-SELECT 'katex-math-example', 'KaTeX 数学公式示例', '展示 Firefly 主题对 KaTeX 数学公式的支持，包括行内公式、块级公式和复杂数学符号。',
-  '## 行内公式\n\n本文展示 Firefly 主题对数学公式的渲染支持。',
+SELECT 'katex-math-example', 'KaTeX 数学公式示例', '展示 Jayson''s Blog 主题对 KaTeX 数学公式的支持，包括行内公式、块级公式和复杂数学符号。',
+  '## 行内公式\n\n本文展示 Jayson''s Blog 主题对数学公式的渲染支持。',
   NULL, id, 'published', FALSE, 27, 260, 2, '1970-01-02 00:00:00'
 FROM categories WHERE slug = 'examples'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), category_id = VALUES(category_id), status = VALUES(status), published_at = VALUES(published_at);
 
 INSERT INTO posts (slug, title, excerpt, content, cover, category_id, status, pinned, views, words, minutes, published_at)
 SELECT 'mdx-example', 'MDX 格式文章示例', '这是一个 MDX 格式的示例文章，展示了如何在 Markdown 中使用 JSX。',
-  '## MDX\n\nFirefly 支持 Markdown 和 MDX 两种文章格式。',
+  '## MDX\n\nJayson''s Blog 支持 Markdown 和 MDX 两种文章格式。',
   NULL, id, 'published', FALSE, 24, 230, 2, '1970-01-02 00:00:00'
 FROM categories WHERE slug = 'examples'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), category_id = VALUES(category_id), status = VALUES(status), published_at = VALUES(published_at);
@@ -115,7 +115,7 @@ FROM categories WHERE slug = 'examples'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), category_id = VALUES(category_id), status = VALUES(status), published_at = VALUES(published_at);
 
 INSERT INTO posts (slug, title, excerpt, content, cover, category_id, status, pinned, views, words, minutes, published_at)
-SELECT 'markdown-plantuml', 'Markdown PlantUML 图表', '用于验证 Firefly 中 PlantUML 插件渲染、主题切换与交互能力的示例文章。',
+SELECT 'markdown-plantuml', 'Markdown PlantUML 图表', '用于验证 Jayson''s Blog 中 PlantUML 插件渲染、主题切换与交互能力的示例文章。',
   '## Markdown 中 PlantUML 图表指南\n\nPlantUML 使用纯文本描述工程图表。',
   NULL, id, 'published', FALSE, 18, 250, 2, '1970-01-01 00:00:00'
 FROM categories WHERE slug = 'examples'
@@ -136,24 +136,24 @@ FROM categories WHERE slug = 'examples'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), category_id = VALUES(category_id), status = VALUES(status), published_at = VALUES(published_at);
 
 DELETE FROM post_tags
-WHERE post_id IN (SELECT id FROM posts WHERE slug IN ('firefly', 'guide/index', 'guide/firefly-layout-system', 'code-examples', 'react-and-express', 'a-small-archive', 'markdown-extended'));
+WHERE post_id IN (SELECT id FROM posts WHERE slug IN ('journal', 'guide/index', 'guide/layout-system', 'code-examples', 'react-and-express', 'a-small-archive', 'markdown-extended'));
 
 INSERT IGNORE INTO post_tags (post_id, tag_id)
-SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('markdown', 'firefly', 'blog', 'theme', 'template') WHERE p.slug = 'firefly';
+SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('markdown', 'journal', 'blog', 'theme', 'template') WHERE p.slug = 'journal';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
-SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('firefly', 'blog', 'markdown', 'guide') WHERE p.slug = 'guide/index';
+SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('journal', 'blog', 'markdown', 'guide') WHERE p.slug = 'guide/index';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
-SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('firefly', 'layout', 'blog', 'guide', 'astro') WHERE p.slug = 'guide/firefly-layout-system';
+SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('journal', 'layout', 'blog', 'guide', 'astro') WHERE p.slug = 'guide/layout-system';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
-SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('markdown', 'firefly') WHERE p.slug = 'code-examples';
+SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('markdown', 'journal') WHERE p.slug = 'code-examples';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
 SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('react', 'typescript') WHERE p.slug = 'react-and-express';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
 SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('essay', 'design') WHERE p.slug = 'a-small-archive';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
-SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('demo', 'example', 'markdown', 'firefly') WHERE p.slug = 'markdown-extended';
+SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('demo', 'example', 'markdown', 'journal') WHERE p.slug = 'markdown-extended';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
-SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('markdown', 'obsidian', 'wiki-link', 'example') WHERE p.slug = 'guide/firefly-wiki-link';
+SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('markdown', 'obsidian', 'wiki-link', 'example') WHERE p.slug = 'guide/wiki-link';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
 SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('example', 'password-protected') WHERE p.slug = 'encrypted-demo';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
@@ -161,29 +161,29 @@ SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('katex', 'math', 'examp
 INSERT IGNORE INTO post_tags (post_id, tag_id)
 SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('mdx', 'markdown', 'example') WHERE p.slug = 'mdx-example';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
-SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('markdown', 'mermaid', 'blog', 'firefly') WHERE p.slug = 'markdown-mermaid';
+SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('markdown', 'mermaid', 'blog', 'journal') WHERE p.slug = 'markdown-mermaid';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
-SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('plantuml', 'firefly', 'markdown') WHERE p.slug = 'markdown-plantuml';
+SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('plantuml', 'journal', 'markdown') WHERE p.slug = 'markdown-plantuml';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
 SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('markdown', 'example') WHERE p.slug = 'markdown-tutorial';
 INSERT IGNORE INTO post_tags (post_id, tag_id)
-SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('example', 'video', 'firefly') WHERE p.slug = 'video';
+SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('example', 'video', 'journal') WHERE p.slug = 'video';
 
 DELETE FROM dynamics;
 INSERT INTO dynamics (body, images, published_at) VALUES
   ('又是美好的一天！', JSON_ARRAY(), '2026-07-15 02:11:27'),
-  ('飞萤之火自无梦的长夜亮起，绽放在终竟的明天。', JSON_ARRAY(), '2026-07-15 16:15:29'),
-  ('这是一条测试动态！', JSON_ARRAY('/images/posts/firefly1.avif'), '2026-07-15 02:06:13'),
-  ('今天天气真不错，流萤真可爱。', JSON_ARRAY(), '2026-07-15 01:07:56');
+  ('记录技术与生活。', JSON_ARRAY(), '2026-07-15 16:15:29'),
+  ('这是一条测试动态！', JSON_ARRAY('/images/posts/post-cover-1.avif'), '2026-07-15 02:06:13'),
+  ('今天天气真不错。', JSON_ARRAY(), '2026-07-15 01:07:56');
 
 INSERT INTO site_settings (setting_key, setting_value) VALUES
   ('site', JSON_OBJECT(
-    'title', 'Firefly',
+    'title', 'Jayson''s Blog',
     'subtitle', 'Demo site',
     'description', 'A calm personal blog built with React, Express and MySQL.',
     'hue', 165,
     'cover', JSON_OBJECT('mode', 'url', 'value', '/images/DesktopWallpaper/d2.avif', 'position', 'center 35%'),
-    'titleConfig', JSON_OBJECT('title', 'Firefly', 'subtitle', 'Demo site', 'subtitleMode', 'text', 'hitokotoApi', 'https://v1.hitokoto.cn/?encode=json', 'titleFontUrl', '', 'subtitleFontUrl', '', 'bodyFontUrl', '', 'postTitleFontUrl', '', 'postContentFontUrl', '', 'tagFontUrl', ''),
+    'titleConfig', JSON_OBJECT('title', 'Jayson''s Blog', 'subtitle', 'Demo site', 'subtitleMode', 'text', 'hitokotoApi', 'https://v1.hitokoto.cn/?encode=json', 'titleFontUrl', '', 'subtitleFontUrl', '', 'bodyFontUrl', '', 'postTitleFontUrl', '', 'postContentFontUrl', '', 'tagFontUrl', ''),
     'music', JSON_OBJECT('enabled', true, 'src', '/assets/music/使一颗心免于哀伤-哼唱.mp3', 'title', '使一颗心免于哀伤', 'artist', '知更鸟 / HOYO-MiX / Chevy', 'cover', '/assets/music/cover/109951169585655912.webp', 'autoplay', false, 'loop', false)
   )),
   ('announcement', JSON_OBJECT('content', '欢迎来到我的博客！这是一则示例公告。', 'historyId', NULL)),
@@ -193,9 +193,9 @@ ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
 -- Standalone Markdown pages and transfer links. Keep existing editorial
 -- changes when the seed is run again.
 INSERT INTO managed_pages (page_key, title, content, friend_links_intro, friend_links) VALUES
-  ('about', '关于', '# 关于\n\n这里是站点的关于页面。\n\nFirefly 是一个以 Markdown 为核心的个人博客空间，记录技术、设计和日常思考。', '', JSON_ARRAY()),
+  ('about', '关于', '# 关于\n\n这里是站点的关于页面。\n\nJayson''s Blog 是一个以 Markdown 为核心的个人博客空间，记录技术、设计和日常思考。', '', JSON_ARRAY()),
   ('transfer', '传送', '# 传送\n\n这里收集常用入口与值得访问的站点。', '欢迎交换友情链接，也欢迎通过问题反馈告诉我你的站点。', JSON_ARRAY(
-    JSON_OBJECT('name', 'Firefly 主页', 'url', 'https://firefly.cuteleaf.cn/', 'logo', '/images/avatar.avif', 'description', '博客主题与项目主页'),
+    JSON_OBJECT('name', '本站', 'url', 'https://blog.fjayson.com/', 'logo', '/images/avatar.avif', 'description', '个人博客'),
     JSON_OBJECT('name', 'GitHub', 'url', 'https://github.com/', 'logo', '', 'description', '开源项目与代码仓库')
   )),
   ('issues', '问题总结', '# 问题总结\n\n## 常见问题\n\n### 页面没有更新\n\n请刷新浏览器缓存，或稍后再次访问。\n\n### 如何反馈问题\n\n可以从“更多”菜单进入问题反馈页面，提交页面地址、复现步骤和联系方式。', '', JSON_ARRAY())

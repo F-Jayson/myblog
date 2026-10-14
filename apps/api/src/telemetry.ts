@@ -172,6 +172,6 @@ export function getProcessSnapshot() {
 	} catch {
 		// Disk statistics are unavailable on a few restricted hosts.
 	}
-	const processInfo = { pid: process.pid, name: "firefly-api", cpuPercent: processCpuPercent, node: process.version, uptimeSeconds: Math.floor(process.uptime()), rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, heapTotalBytes: memory.heapTotal, externalBytes: memory.external };
+	const processInfo = { pid: process.pid, name: "blog-api", cpuPercent: processCpuPercent, node: process.version, uptimeSeconds: Math.floor(process.uptime()), rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, heapTotalBytes: memory.heapTotal, externalBytes: memory.external };
 	return { hostname: os.hostname(), platform: `${os.platform()} ${os.release()}`, arch: os.arch(), cpu: { cores: cpus.length, model: cpus[0]?.model ?? "Unknown", load1: load[0], load5: load[1], load15: load[2], usagePercent: hostCpuPercent }, memory: { totalBytes: os.totalmem(), freeBytes: os.freemem(), usedBytes: os.totalmem() - os.freemem() }, disk, process: processInfo, processes: [processInfo] };
 }

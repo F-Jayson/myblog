@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { USER_TOKEN_KEY } from "./api";
 import { resolveMediaUrl } from "./media";
 
-const ADMIN_TOKEN_KEY = "firefly-admin-token";
+const ADMIN_TOKEN_KEY = "site-admin-token";
 
 function authHeaderFor(url: string) {
 	if (/\/api\/admin\//u.test(url)) {

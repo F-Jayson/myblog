@@ -148,12 +148,12 @@ async function downloadWallpaperFrame(frame: WallpaperFrame | null) {
 }
 
 const configuredFontDefinitions = [
-	{ key: "titleFontUrl", family: "FireflySiteTitle", variable: "--site-title-font" },
-	{ key: "subtitleFontUrl", family: "FireflySiteSubtitle", variable: "--site-subtitle-font" },
-	{ key: "postTitleFontUrl", family: "FireflyPostTitle", variable: "--site-post-title-font" },
-	{ key: "bodyFontUrl", family: "FireflySiteBody", variable: "--site-body-font" },
-	{ key: "postContentFontUrl", family: "FireflyPostContent", variable: "--site-post-content-font" },
-	{ key: "tagFontUrl", family: "FireflySiteTag", variable: "--site-tag-font" },
+	{ key: "titleFontUrl", family: "SiteTitleFont", variable: "--site-title-font" },
+	{ key: "subtitleFontUrl", family: "SiteSubtitleFont", variable: "--site-subtitle-font" },
+	{ key: "postTitleFontUrl", family: "SitePostTitleFont", variable: "--site-post-title-font" },
+	{ key: "bodyFontUrl", family: "SiteBodyFont", variable: "--site-body-font" },
+	{ key: "postContentFontUrl", family: "SitePostContentFont", variable: "--site-post-content-font" },
+	{ key: "tagFontUrl", family: "SiteTagFont", variable: "--site-tag-font" },
 ] as const;
 
 type ArchiveItem = {
@@ -363,6 +363,15 @@ function DisplaySettingsPanel(props: DisplaySettingsProps) {
 	</div>;
 }
 
+const DEFAULT_LOGO_LIGHT = "/images/logo/site-light.png";
+const DEFAULT_LOGO_DARK = "/images/logo/site-dark.png";
+
+function brandLogoSrc(site: { siteLogo?: string | null; siteLogoDark?: string | null }, dark: boolean) {
+	const preferred = (dark ? site.siteLogoDark : site.siteLogo)?.trim() ?? "";
+	const alternate = (dark ? site.siteLogo : site.siteLogoDark)?.trim() ?? "";
+	return resolveMediaUrl(preferred || alternate) || (dark ? DEFAULT_LOGO_DARK : DEFAULT_LOGO_LIGHT);
+}
+
 function Header({ dark, setDark, wallpaper, setWallpaper, settings }: { dark: boolean; setDark: (value: boolean) => void; wallpaper: string; setWallpaper: (value: string) => void; settings: DisplaySettingsProps }) {
 	const [mobileOpen, setMobileOpen] = useState(false);
 	const [searchOpen, setSearchOpen] = useState(false);
@@ -386,7 +395,7 @@ function Header({ dark, setDark, wallpaper, setWallpaper, settings }: { dark: bo
 		<header className="top-row">
 			<nav className="navbar" aria-label="主导航">
 				<Link to="/" className="brand" aria-label={`${site.title} 首页`}>
-					<img src={dark ? "/images/logo/firefly-dark.png" : "/images/logo/firefly-light.png"} alt="" width="32" height="32" decoding="async" />
+					<img src={brandLogoSrc(site, dark)} alt="" width="32" height="32" decoding="async" />
 					<span>{site.title}</span>
 				</Link>
 				<div className="desktop-navigation">
@@ -575,7 +584,7 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 	const downloadButton = <button type="button" className="hero-download" title="下载当前壁纸" aria-label="下载当前壁纸" onClick={() => { void downloadWallpaperFrame(currentFrame); }}><Download size={14} /></button>;
 	const crossfadeImages = (className = "") => <>{outgoingFrame ? <div className={`hero-image hero-image-outgoing ${className}`} style={imageStyle(outgoingFrame)} /> : null}<div className={`hero-image hero-image-current ${outgoingFrame ? "is-crossfading" : ""} ${className}`} style={imageStyle(currentFrame)} /></>;
 	if (wallpaper === "overlay") return <div className={`hero-overlay-layer ${gradientEnabled ? "" : "hero-gradient-off"}`}>{crossfadeImages()}<div className="hero-scrim" /></div>;
-	const title = site.titleConfig?.title?.trim() || site.title || "Firefly";
+	const title = site.titleConfig?.title?.trim() || site.title || "Jayson's Blog";
 	const subtitle = site.titleConfig?.subtitle?.trim() || site.subtitle || "愿每一颗心，都能免于哀伤。";
 	return (
 		<section className={`hero ${wallpaper === "full" ? "hero-full" : ""} ${gradientEnabled ? "" : "hero-gradient-off"} hero-home`}>
@@ -586,7 +595,7 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 			</div> : null}
 			{downloadButton}
 			{wallpaper === "full" && isHome ? <a className="hero-scroll" href="#content" aria-label="向下查看内容"><ChevronDown size={34} strokeWidth={1.8} /></a> : null}
-			{wavesEnabled ? <div className="hero-waves" aria-hidden="true"><svg viewBox="0 24 150 28" preserveAspectRatio="none" shapeRendering="geometricPrecision"><defs><path id="firefly-wave" d="M-160 44c30 0 58-18 88-18s58 18 88 18 58-18 88-18 58 18 88 18v48h-352z" /></defs><g className="wave-parallax"><use className="wave-layer wave-layer-one" href="#firefly-wave" x="48" y="0" /><use className="wave-layer wave-layer-two" href="#firefly-wave" x="48" y="3" /><use className="wave-layer wave-layer-three" href="#firefly-wave" x="48" y="5" /><use className="wave-layer wave-layer-four" href="#firefly-wave" x="48" y="7" /></g></svg></div> : null}
+			{wavesEnabled ? <div className="hero-waves" aria-hidden="true"><svg viewBox="0 24 150 28" preserveAspectRatio="none" shapeRendering="geometricPrecision"><defs><path id="site-wave" d="M-160 44c30 0 58-18 88-18s58 18 88 18 58-18 88-18 58 18 88 18v48h-352z" /></defs><g className="wave-parallax"><use className="wave-layer wave-layer-one" href="#site-wave" x="48" y="0" /><use className="wave-layer wave-layer-two" href="#site-wave" x="48" y="3" /><use className="wave-layer wave-layer-three" href="#site-wave" x="48" y="5" /><use className="wave-layer wave-layer-four" href="#site-wave" x="48" y="7" /></g></svg></div> : null}
 		</section>
 	);
 }
@@ -629,7 +638,7 @@ function LeftSidebar() {
 	const displayAnnouncements = (site.announcement?.displayItems ?? []).filter((item) => item.isVisible).sort((left, right) => Number(right.isPinned) - Number(left.isPinned) || left.sortOrder - right.sortOrder || new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime() || right.id - left.id);
 	const announcement = (displayAnnouncements[0]?.content ?? site.announcement?.content ?? "欢迎来到我的博客！这是一则示例公告。").trim();
 	return <aside className="sidebar left-sidebar">
-		<section className="card profile-card profile-card-large"><Link className="profile-avatar-link" to="/author" title={`查看 ${author.name} 的主页`}><img className="avatar" src={avatar} alt={`${author.name} 的头像`} width="256" height="256" loading="eager" decoding="async" /></Link><div className="profile-name-row"><h2>{author.name}</h2><span className="profile-status" title="正在记录生活" aria-label="正在记录生活" /></div><p>{author.bio || "飞萤之火自无梦的长夜亮起，绽放在终竟的明天。"}</p><div className="profile-rule" aria-hidden="true" /><div className="profile-links"><a href={navigationUrl(author.qqUrl)} title="QQ"><MessageCircle size={18} /></a><a href={navigationUrl(author.githubUrl)} title="GitHub"><Github size={18} /></a><a href={author.email ? `mailto:${author.email}` : "#"} title="Email"><Mail size={18} /></a><a href={navigationUrl(author.rssUrl)} title="RSS"><Rss size={18} /></a>{(author.links ?? []).filter((link) => link.label.trim() && isSafeNavigationUrl(link.url)).map((link) => <a key={link.label + link.url} href={navigationUrl(link.url)} title={link.label} target={/^https?:\/\//u.test(link.url) ? "_blank" : undefined} rel={/^https?:\/\//u.test(link.url) ? "noreferrer" : undefined}><ExternalLink size={18} /></a>)}</div></section>
+		<section className="card profile-card profile-card-large"><Link className="profile-avatar-link" to="/author" title={`查看 ${author.name} 的主页`}><img className="avatar" src={avatar} alt={`${author.name} 的头像`} width="256" height="256" loading="eager" decoding="async" /></Link><div className="profile-name-row"><h2>{author.name}</h2><span className="profile-status" title="正在记录生活" aria-label="正在记录生活" /></div><p>{author.bio || "记录技术与生活。"}</p><div className="profile-rule" aria-hidden="true" /><div className="profile-links"><a href={navigationUrl(author.qqUrl)} title="QQ"><MessageCircle size={18} /></a><a href={navigationUrl(author.githubUrl)} title="GitHub"><Github size={18} /></a><a href={author.email ? `mailto:${author.email}` : "#"} title="Email"><Mail size={18} /></a><a href={navigationUrl(author.rssUrl)} title="RSS"><Rss size={18} /></a>{(author.links ?? []).filter((link) => link.label.trim() && isSafeNavigationUrl(link.url)).map((link) => <a key={link.label + link.url} href={navigationUrl(link.url)} title={link.label} target={/^https?:\/\//u.test(link.url) ? "_blank" : undefined} rel={/^https?:\/\//u.test(link.url) ? "noreferrer" : undefined}><ExternalLink size={18} /></a>)}</div></section>
 		{announcement ? <section className="card widget announcement"><WidgetTitle icon={Info}>公告</WidgetTitle><p>{announcement}</p><Link className="widget-more" to="/about">了解更多 <ChevronRight size={14} /></Link></section> : null}
 		<div className="sidebar-sticky-section">
 			{music ? <section className="card widget music-widget"><WidgetTitle icon={Music2}>音乐</WidgetTitle><ConfiguredMusicPlayer compact /></section> : null}
@@ -650,7 +659,7 @@ function SiteInfoWidget() {
 	const serviceStartedAt = startedAt && !Number.isNaN(startedAt.getTime())
 		? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "medium" }).format(startedAt)
 		: "运行信息暂不可用";
-	const applicationName = runtime?.application.name || "Firefly";
+	const applicationName = runtime?.application.name || "Jayson's Blog";
 	const applicationVersion = runtime?.application.version || "未获取";
 	return <section className="card widget site-info">
 		<WidgetTitle icon={Info}>站点信息</WidgetTitle>
@@ -859,10 +868,10 @@ function AboutPage() {
 	const site = useSite();
 	const author = site.author ?? fallbackSite.author!;
 	const avatar = resolveMediaUrl(author.avatar || fallbackSite.author?.avatar || "/images/avatar.avif");
-	return <StaticPage title="关于我"><div className="about-intro about-intro-wide"><img src={avatar} alt={author.name + " 的头像"} width="96" height="96" loading="lazy" decoding="async" /><div><h3>关于我 / About Me</h3><p>你好！我是 <strong>{author.name}</strong>，{author.bio || "一个在数字世界中记录生活与思考的人。"}</p><p className="about-signature">{site.subtitle || "愿每一颗心，都能免于哀伤。"}</p></div></div><Markdown content={"### 🛠️ 关于本站\n\n这个网站使用 React、Express 和 MySQL 构建，视觉上延续 Firefly 模板的清新布局。Firefly 是一款基于 Astro 和 Fuwari 二次开发的个人博客主题，专为技术爱好者和内容创作者设计。\n\n- 在线预览：[Firefly Demo](https://firefly.cuteleaf.cn/)\n- 我的博客：[blog.cuteleaf.cn](https://blog.cuteleaf.cn/)\n- 使用文档：[Firefly Docs](https://docs.firefly.cuteleaf.cn/)\n- 开源地址：[CuteLeaf/Firefly](https://github.com/CuteLeaf/Firefly)\n\n### 现在正在做的事\n\n- 让内容从 Markdown 顺利迁移到 MySQL\n- 持续打磨长文章的阅读体验\n- 收集值得反复访问的链接\n\n感谢你的来访！希望在这里能找到对你有用的内容！"} /></StaticPage>;
+	return <StaticPage title="关于我"><div className="about-intro about-intro-wide"><img src={avatar} alt={author.name + " 的头像"} width="96" height="96" loading="lazy" decoding="async" /><div><h3>关于我 / About Me</h3><p>你好！我是 <strong>{author.name}</strong>，{author.bio || "一个在数字世界中记录生活与思考的人。"}</p><p className="about-signature">{site.subtitle || "愿每一颗心，都能免于哀伤。"}</p></div></div><Markdown content={"### 🛠️ 关于本站\n\n这个网站使用 React、Express 和 MySQL 构建，用来记录技术、生活和沿途的想法。\n\n### 现在正在做的事\n\n- 让内容从 Markdown 顺利迁移到 MySQL\n- 持续打磨长文章的阅读体验\n- 收集值得反复访问的链接\n\n感谢你的来访！希望在这里能找到对你有用的内容！"} /></StaticPage>;
 }
 
-function FriendsPage() { const friends = [{ name: "夏夜流萤", text: "飞萤之火自无梦的长夜亮起，绽放在终竟的明天。", group: "Blog", href: "https://blog.cuteleaf.cn/" }, { name: "Firefly Docs", text: "Firefly 主题模板文档", group: "Docs", href: "https://docs.firefly.cuteleaf.cn/" }, { name: "Astro", text: "The web framework for content-driven websites. ⭐️", group: "Framework", href: "https://astro.build/" }]; return <StaticPage title="友链"><p className="page-lead">这里是我的朋友们，欢迎互相访问交流</p><div className="friend-filter" aria-label="友链分类"><button type="button" className="selected">全部</button><button type="button">Blog</button><button type="button">Docs</button><button type="button">Framework</button></div><div className="friend-grid friend-grid-rich">{friends.map((friend, index) => <a key={friend.name} className="friend-card" href={friend.href} target="_blank" rel="noreferrer"><span className="friend-avatar">{index === 0 ? "夏" : index === 1 ? "F" : "A"}</span><div><strong>{friend.name}</strong><p>{friend.text}</p><small>{friend.group}</small></div><ChevronRight size={19} /></a>)}</div><div className="friend-apply"><h3>申请友链</h3><ol><li>请先在您的网站友链页面添加本站信息</li><li>评论区留言或发送申请邮件至 <a href="mailto:xiaye@msn.com">xiaye@msn.com</a></li><li>确认信息无误后会尽快添加您的友链</li></ol><p className="friend-note">互换原则：请先将本站添加到您的友链页面；站点需支持 HTTPS、能够正常访问并保持更新。</p></div></StaticPage>; }
+function FriendsPage() { const friends = [{ name: "Jayson's Blog", text: "个人博客", group: "Blog", href: "https://blog.fjayson.com/" }, { name: "站点文档", text: "记录搭建和写作时用到的资料", group: "Docs", href: "https://blog.fjayson.com/" }, { name: "Astro", text: "The web framework for content-driven websites. ⭐️", group: "Framework", href: "https://astro.build/" }]; return <StaticPage title="友链"><p className="page-lead">这里是我的朋友们，欢迎互相访问交流</p><div className="friend-filter" aria-label="友链分类"><button type="button" className="selected">全部</button><button type="button">Blog</button><button type="button">Docs</button><button type="button">Framework</button></div><div className="friend-grid friend-grid-rich">{friends.map((friend, index) => <a key={friend.name} className="friend-card" href={friend.href} target="_blank" rel="noreferrer"><span className="friend-avatar">{index === 0 ? "夏" : index === 1 ? "F" : "A"}</span><div><strong>{friend.name}</strong><p>{friend.text}</p><small>{friend.group}</small></div><ChevronRight size={19} /></a>)}</div><div className="friend-apply"><h3>申请友链</h3><ol><li>请先在您的网站友链页面添加本站信息</li><li>评论区留言或发送申请邮件至 <a href="mailto:xiaye@msn.com">xiaye@msn.com</a></li><li>确认信息无误后会尽快添加您的友链</li></ol><p className="friend-note">互换原则：请先将本站添加到您的友链页面；站点需支持 HTTPS、能够正常访问并保持更新。</p></div></StaticPage>; }
 
 function GuestbookPage() { return <StaticPage title="留言"><p className="page-lead">欢迎在这里留下你的足迹，分享你的想法和建议。</p><div className="guestbook-guidelines"><p>请保持友善和尊重，营造良好的交流氛围</p><p>欢迎分享你的想法，也可以提出对网站的建议</p><p>你的每一条留言都是对我最大的支持 ✨</p></div><div className="guestbook-disabled"><MessageCircle size={25} /><strong>评论系统暂未配置</strong><span>您还未在配置文件中启用评论系统，启用后访客才可在此留言</span></div><div className="guestbook-form"><input placeholder="昵称" aria-label="昵称" /><textarea placeholder="写下留言..." aria-label="留言内容" rows={5} /><button type="button"><Send size={16} />发送留言</button></div></StaticPage>; }
 
@@ -878,8 +887,8 @@ const managedPageFallbacks: Record<ManagedPageKey, ManagedPage> = {
 		content: "### 传送\n\n这里整理常用的外部入口与协作站点。友情链接会显示在正文下方。",
 		friendLinksIntro: "欢迎通过这些入口访问朋友们的站点。",
 		friendLinks: [
-			{ name: "Firefly 文档", url: "https://docs.firefly.cuteleaf.cn/", description: "Firefly 主题使用文档" },
-			{ name: "CuteLeaf", url: "https://github.com/CuteLeaf/Firefly", description: "开源项目主页" },
+			{ name: "站点文档", url: "https://blog.fjayson.com/", description: "博客与个人主页" },
+			{ name: "GitHub", url: "https://github.com/", description: "开源项目与代码仓库" },
 		],
 	},
 	issues: {
@@ -975,21 +984,21 @@ function DynamicPage() {
 function GalleryPage() {
 	const photos = [
 		{ src: "/images/posts/1.avif", width: 2192, height: 1233 },
-		{ src: "/images/posts/firefly3.avif", width: 3840, height: 2160 },
+		{ src: "/images/posts/post-cover-3.avif", width: 3840, height: 2160 },
 		{ src: "/images/posts/both-list.avif", width: 2192, height: 1233 },
 		{ src: "/images/posts/right-grid2.avif", width: 2192, height: 1233 },
 		{ src: "/images/posts/left-grid3.avif", width: 2192, height: 1233 },
 		{ src: "/images/posts/masonry.avif", width: 2192, height: 1233 },
 	];
 
-	return <StaticPage title="相册"><p className="page-lead">记录生活中的美好瞬间</p><div className="gallery-tabs"><button type="button" className="selected">全部</button><button type="button">加密相册</button><button type="button">崩坏星穹铁道</button><button type="button">流萤</button></div><div className="gallery-grid">{photos.map((photo, index) => <button type="button" className="gallery-item" title={`查看照片 ${index + 1}`} key={photo.src}><img src={photo.src} alt={`相册照片 ${index + 1}`} width={photo.width} height={photo.height} loading="lazy" decoding="async" /><span className="gallery-caption">{index === 0 ? "可爱流萤" : index === 1 ? "崩坏：星穹铁道" : "Firefly 主题记录"}</span></button>)}</div><div className="album-summary"><strong>可爱流萤</strong><span>飞萤之火自无梦的长夜亮起，绽放在终竟的明天。</span><time>2026-01-01 · 9 张照片</time></div></StaticPage>;
+	return <StaticPage title="相册"><p className="page-lead">记录生活中的美好瞬间</p><div className="gallery-tabs"><button type="button" className="selected">全部</button><button type="button">加密相册</button><button type="button">风景</button><button type="button">日常</button></div><div className="gallery-grid">{photos.map((photo, index) => <button type="button" className="gallery-item" title={`查看照片 ${index + 1}`} key={photo.src}><img src={photo.src} alt={`相册照片 ${index + 1}`} width={photo.width} height={photo.height} loading="lazy" decoding="async" /><span className="gallery-caption">{index === 0 ? "站点记录" : index === 1 ? "风景" : "日常"}</span></button>)}</div><div className="album-summary"><strong>站点相册</strong><span>记录生活中的画面。</span><time>2026-01-01 · 9 张照片</time></div></StaticPage>;
 }
 
-function BooknavPage() { const groups = [{ title: "开发", description: "写代码时离不开的站点", items: [{ name: "GitHub", text: "全球最大的代码托管平台", href: "https://github.com/" }, { name: "MDN Web Docs", text: "最权威的 Web 技术文档", href: "https://developer.mozilla.org/" }, { name: "Astro", text: "内容驱动型网站的 Web 框架", href: "https://astro.build/" }, { name: "Svelte", text: "把组件编译成高效原生 JS 的框架", href: "https://svelte.dev/" }, { name: "Tailwind CSS", text: "一个功能强大且灵活的 CSS 框架", href: "https://tailwindcss.com/" }] }, { title: "项目", description: "好用的开源项目", items: [{ name: "Firefly", text: "清晰美观的 Astro 个人博客主题模板", href: "https://github.com/CuteLeaf/Firefly" }] }, { title: "设计", description: "配色、图标与灵感来源", items: [{ name: "Iconify", text: "海量开源图标集合搜索", href: "https://icon-sets.iconify.design/" }, { name: "iconfont", text: "阿里巴巴矢量图标库", href: "https://www.iconfont.cn/" }] }, { title: "工具", description: "顺手的在线小工具", items: [{ name: "TinyPNG", text: "在线压缩 PNG / JPEG 图片", href: "https://tinypng.com/" }, { name: "Squoosh", text: "Google 出品的图片压缩与格式转换", href: "https://squoosh.app/" }, { name: "Carbon", text: "把代码片段生成漂亮的图片", href: "https://carbon.now.sh/" }] }, { title: "资源", description: "文档、教程与阅读", items: [{ name: "Firefly Docs", text: "Firefly 主题模板文档", href: "https://docs.firefly.cuteleaf.cn/" }, { name: "夏夜流萤", text: "飞萤之火自无梦的长夜亮起", href: "https://blog.cuteleaf.cn/" }] }]; return <StaticPage title="书签导航"><p className="page-lead">收藏一些好用的网站，按分类整理</p><div className="bookmark-summary">{groups.map((group) => <span key={group.title}><strong>{group.items.length}</strong>{group.title}</span>)}</div><div className="bookmark-groups bookmark-groups-rich">{groups.map((group) => <section key={group.title}><h3>{group.title}</h3><p>{group.description}</p><div>{group.items.map((item) => <a href={item.href} key={item.name} target="_blank" rel="noreferrer"><span>{item.name.slice(0, 1)}</span><div><strong>{item.name}</strong><small>{item.text}</small></div><ChevronRight size={16} /></a>)}</div></section>)}</div></StaticPage>; }
+function BooknavPage() { const groups = [{ title: "开发", description: "写代码时离不开的站点", items: [{ name: "GitHub", text: "全球最大的代码托管平台", href: "https://github.com/" }, { name: "MDN Web Docs", text: "最权威的 Web 技术文档", href: "https://developer.mozilla.org/" }, { name: "Astro", text: "内容驱动型网站的 Web 框架", href: "https://astro.build/" }, { name: "Svelte", text: "把组件编译成高效原生 JS 的框架", href: "https://svelte.dev/" }, { name: "Tailwind CSS", text: "一个功能强大且灵活的 CSS 框架", href: "https://tailwindcss.com/" }] }, { title: "项目", description: "好用的开源项目", items: [{ name: "Jayson's Blog", text: "个人博客", href: "https://blog.fjayson.com/" }] }, { title: "设计", description: "配色、图标与灵感来源", items: [{ name: "Iconify", text: "海量开源图标集合搜索", href: "https://icon-sets.iconify.design/" }, { name: "iconfont", text: "阿里巴巴矢量图标库", href: "https://www.iconfont.cn/" }] }, { title: "工具", description: "顺手的在线小工具", items: [{ name: "TinyPNG", text: "在线压缩 PNG / JPEG 图片", href: "https://tinypng.com/" }, { name: "Squoosh", text: "Google 出品的图片压缩与格式转换", href: "https://squoosh.app/" }, { name: "Carbon", text: "把代码片段生成漂亮的图片", href: "https://carbon.now.sh/" }] }, { title: "资源", description: "文档、教程与阅读", items: [{ name: "站点文档", text: "博客与写作笔记", href: "https://blog.fjayson.com/" }, { name: "个人笔记", text: "平时收集的资料", href: "https://blog.fjayson.com/" }] }]; return <StaticPage title="书签导航"><p className="page-lead">收藏一些好用的网站，按分类整理</p><div className="bookmark-summary">{groups.map((group) => <span key={group.title}><strong>{group.items.length}</strong>{group.title}</span>)}</div><div className="bookmark-groups bookmark-groups-rich">{groups.map((group) => <section key={group.title}><h3>{group.title}</h3><p>{group.description}</p><div>{group.items.map((item) => <a href={item.href} key={item.name} target="_blank" rel="noreferrer"><span>{item.name.slice(0, 1)}</span><div><strong>{item.name}</strong><small>{item.text}</small></div><ChevronRight size={16} /></a>)}</div></section>)}</div></StaticPage>; }
 
-function SponsorPage() { return <StaticPage title="打赏支持"><p className="page-lead">如果我的内容对你有帮助，欢迎通过以下方式打赏我，你的支持是我持续创作的动力！</p><p>您的打赏将用于服务器维护、内容创作和功能开发，帮助我持续提供优质内容。</p><div className="sponsor-options sponsor-options-rich"><a href="https://www.alipay.com/" target="_blank" rel="noreferrer"><img src="/assets/images/sponsor/alipay.png" alt="支付宝" width="80" height="80" /><span><strong>支付宝</strong><small>使用支付宝扫码打赏</small></span></a><a href="https://pay.weixin.qq.com/" target="_blank" rel="noreferrer"><img src="/assets/images/sponsor/wechat.png" alt="微信" width="80" height="80" /><span><strong>微信</strong><small>使用微信扫码打赏</small></span></a><a href="https://ko-fi.com/" target="_blank" rel="noreferrer"><span className="sponsor-icon">☕</span><span><strong>ko-fi</strong><small>Buy a Coffee for Firefly</small></span></a><a href="https://afdian.com/" target="_blank" rel="noreferrer"><span className="sponsor-icon">❤</span><span><strong>爱发电</strong><small>通过爱发电进行打赏</small></span></a></div><div className="supporters"><WidgetTitle icon={Heart}>打赏列表</WidgetTitle><div className="supporter-list"><div><strong>夏叶</strong><b>¥50</b><small>2025-10-01</small></div><div><strong>匿名用户</strong><b>¥20</b><small>2025-10-01</small></div></div></div></StaticPage>; }
+function SponsorPage() { return <StaticPage title="打赏支持"><p className="page-lead">如果我的内容对你有帮助，欢迎通过以下方式打赏我，你的支持是我持续创作的动力！</p><p>您的打赏将用于服务器维护、内容创作和功能开发，帮助我持续提供优质内容。</p><div className="sponsor-options sponsor-options-rich"><a href="https://www.alipay.com/" target="_blank" rel="noreferrer"><img src="/assets/images/sponsor/alipay.png" alt="支付宝" width="80" height="80" /><span><strong>支付宝</strong><small>使用支付宝扫码打赏</small></span></a><a href="https://pay.weixin.qq.com/" target="_blank" rel="noreferrer"><img src="/assets/images/sponsor/wechat.png" alt="微信" width="80" height="80" /><span><strong>微信</strong><small>使用微信扫码打赏</small></span></a><a href="https://ko-fi.com/" target="_blank" rel="noreferrer"><span className="sponsor-icon">☕</span><span><strong>ko-fi</strong><small>Buy a Coffee</small></span></a><a href="https://afdian.com/" target="_blank" rel="noreferrer"><span className="sponsor-icon">❤</span><span><strong>爱发电</strong><small>通过爱发电进行打赏</small></span></a></div><div className="supporters"><WidgetTitle icon={Heart}>打赏列表</WidgetTitle><div className="supporter-list"><div><strong>夏叶</strong><b>¥50</b><small>2025-10-01</small></div><div><strong>匿名用户</strong><b>¥20</b><small>2025-10-01</small></div></div></div></StaticPage>; }
 
-function RssPage() { return <StaticPage title="RSS"><p>订阅 Firefly，随时获取新文章。</p><a className="rss-link" href="/api/rss.xml"><Rss size={20} />打开 RSS 订阅地址</a></StaticPage>; }
+function RssPage() { return <StaticPage title="RSS"><p>订阅 Jayson's Blog，随时获取新文章。</p><a className="rss-link" href="/api/rss.xml"><Rss size={20} />打开 RSS 订阅地址</a></StaticPage>; }
 
 function EmptyState({ title, description }: { title: string; description: string }) { return <section className="card empty-state"><Search size={29} /><h2>{title}</h2><p>{description}</p><Link to="/">返回首页</Link></section>; }
 
@@ -1084,15 +1093,15 @@ function faviconMimeType(source: string): string {
 
 function SiteShell() {
 	const [site, setSite] = useState<SiteData>(fallbackSite);
-	const [dark, setDark] = useState(() => localStorage.getItem("firefly-theme") === "dark" || (!localStorage.getItem("firefly-theme") && window.matchMedia("(prefers-color-scheme: dark)").matches));
-	const [wallpaper, setWallpaperState] = useState(() => localStorage.getItem("firefly-wallpaper") ?? "banner");
-	const [hue, setHueState] = useState(() => Number(localStorage.getItem("firefly-hue") ?? 165));
-	const [layout, setLayout] = useState<"list" | "grid">(() => (localStorage.getItem("firefly-layout") as "list" | "grid") ?? "list");
-	const [cardBorder, setCardBorder] = useState(() => localStorage.getItem("firefly-card-border") === "true");
-	const [cardFollowTheme, setCardFollowTheme] = useState(() => localStorage.getItem("firefly-card-theme") === "true");
-	const [bannerTitle, setBannerTitle] = useState(() => localStorage.getItem("firefly-banner-title") !== "false");
-	const [carousel, setCarousel] = useState(() => localStorage.getItem("firefly-carousel") === "true");
-	const [carouselInterval, setCarouselIntervalState] = useState(() => clampCarouselInterval(Number(localStorage.getItem("firefly-carousel-interval"))));
+	const [dark, setDark] = useState(() => localStorage.getItem("site-theme") === "dark" || (!localStorage.getItem("site-theme") && window.matchMedia("(prefers-color-scheme: dark)").matches));
+	const [wallpaper, setWallpaperState] = useState(() => localStorage.getItem("site-wallpaper") ?? "banner");
+	const [hue, setHueState] = useState(() => Number(localStorage.getItem("site-hue") ?? 165));
+	const [layout, setLayout] = useState<"list" | "grid">(() => (localStorage.getItem("site-layout") as "list" | "grid") ?? "list");
+	const [cardBorder, setCardBorder] = useState(() => localStorage.getItem("site-card-border") === "true");
+	const [cardFollowTheme, setCardFollowTheme] = useState(() => localStorage.getItem("site-card-theme") === "true");
+	const [bannerTitle, setBannerTitle] = useState(() => localStorage.getItem("site-banner-title") !== "false");
+	const [carousel, setCarousel] = useState(() => localStorage.getItem("site-carousel") === "true");
+	const [carouselInterval, setCarouselIntervalState] = useState(() => clampCarouselInterval(Number(localStorage.getItem("site-carousel-interval"))));
 	const [wallpaperDownloadAvailable, setWallpaperDownloadAvailable] = useState(false);
 	const wallpaperDownloadRef = useRef<() => void>(() => undefined);
 	const bindWallpaperDownload = useCallback((download: (() => void) | null) => {
@@ -1100,12 +1109,12 @@ function SiteShell() {
 		setWallpaperDownloadAvailable(Boolean(download));
 	}, []);
 	const setCarouselInterval = (value: number) => setCarouselIntervalState(clampCarouselInterval(value));
-	const [wavesEnabled, setWavesEnabled] = useState(() => localStorage.getItem("firefly-waves") !== "false");
-	const [gradientEnabled, setGradientEnabled] = useState(() => localStorage.getItem("firefly-gradient") !== "false");
-	const [sakuraEnabled, setSakuraEnabled] = useState(() => localStorage.getItem("firefly-sakura") === "true");
-	const [overlayOpacity, setOverlayOpacity] = useState(() => Number(localStorage.getItem("firefly-overlay-opacity") ?? 80));
-	const [overlayBlur, setOverlayBlur] = useState(() => Number(localStorage.getItem("firefly-overlay-blur") ?? 10));
-	const [overlayCardOpacity, setOverlayCardOpacity] = useState(() => Number(localStorage.getItem("firefly-overlay-card-opacity") ?? 50));
+	const [wavesEnabled, setWavesEnabled] = useState(() => localStorage.getItem("site-waves") !== "false");
+	const [gradientEnabled, setGradientEnabled] = useState(() => localStorage.getItem("site-gradient") !== "false");
+	const [sakuraEnabled, setSakuraEnabled] = useState(() => localStorage.getItem("site-sakura") === "true");
+	const [overlayOpacity, setOverlayOpacity] = useState(() => Number(localStorage.getItem("site-overlay-opacity") ?? 80));
+	const [overlayBlur, setOverlayBlur] = useState(() => Number(localStorage.getItem("site-overlay-blur") ?? 10));
+	const [overlayCardOpacity, setOverlayCardOpacity] = useState(() => Number(localStorage.getItem("site-overlay-card-opacity") ?? 50));
 	useEffect(() => {
 		let active = true;
 		const refreshSite = () => { api.site().then((result) => { if (active) setSite(result); }); };
@@ -1117,7 +1126,7 @@ function SiteShell() {
 		const favicon = document.head.querySelector<HTMLLinkElement>('link[rel~="icon"]');
 		if (!favicon) return;
 
-		const defaultHref = favicon.dataset.defaultHref || "/images/logo/firefly-light.png";
+		const defaultHref = favicon.dataset.defaultHref || "/images/logo/site-light.png";
 		const defaultType = favicon.dataset.defaultType || "image/png";
 		const source = resolveMediaUrl(site.siteFavicon);
 		if (!isSafeResourceUrl(source)) {
@@ -1130,7 +1139,7 @@ function SiteShell() {
 		favicon.type = faviconMimeType(source);
 	}, [site.siteFavicon]);
 	useEffect(() => {
-		const styleId = "firefly-configured-fonts";
+		const styleId = "site-configured-fonts";
 		document.getElementById(styleId)?.remove();
 		const config = site.titleConfig ?? {};
 		const rules = configuredFontDefinitions.map((item) => {
@@ -1146,21 +1155,21 @@ function SiteShell() {
 		document.head.appendChild(style);
 		return () => style.remove();
 	}, [site.titleConfig]);
-	useEffect(() => { document.documentElement.classList.toggle("dark", dark); localStorage.setItem("firefly-theme", dark ? "dark" : "light"); }, [dark]);
-	useEffect(() => { document.documentElement.style.setProperty("--hue", String(hue)); localStorage.setItem("firefly-hue", String(hue)); }, [hue]);
-	useEffect(() => { document.documentElement.dataset.wallpaper = wallpaper; localStorage.setItem("firefly-wallpaper", wallpaper); }, [wallpaper]);
-	useEffect(() => { localStorage.setItem("firefly-layout", layout); }, [layout]);
-	useEffect(() => { localStorage.setItem("firefly-card-border", String(cardBorder)); }, [cardBorder]);
-	useEffect(() => { localStorage.setItem("firefly-card-theme", String(cardFollowTheme)); }, [cardFollowTheme]);
-	useEffect(() => { localStorage.setItem("firefly-banner-title", String(bannerTitle)); }, [bannerTitle]);
-	useEffect(() => { localStorage.setItem("firefly-carousel", String(carousel)); }, [carousel]);
-	useEffect(() => { localStorage.setItem("firefly-carousel-interval", String(carouselInterval)); }, [carouselInterval]);
-	useEffect(() => { localStorage.setItem("firefly-waves", String(wavesEnabled)); }, [wavesEnabled]);
-	useEffect(() => { localStorage.setItem("firefly-gradient", String(gradientEnabled)); }, [gradientEnabled]);
-	useEffect(() => { localStorage.setItem("firefly-sakura", String(sakuraEnabled)); }, [sakuraEnabled]);
-	useEffect(() => { localStorage.setItem("firefly-overlay-opacity", String(overlayOpacity)); }, [overlayOpacity]);
-	useEffect(() => { localStorage.setItem("firefly-overlay-blur", String(overlayBlur)); }, [overlayBlur]);
-	useEffect(() => { localStorage.setItem("firefly-overlay-card-opacity", String(overlayCardOpacity)); }, [overlayCardOpacity]);
+	useEffect(() => { document.documentElement.classList.toggle("dark", dark); localStorage.setItem("site-theme", dark ? "dark" : "light"); }, [dark]);
+	useEffect(() => { document.documentElement.style.setProperty("--hue", String(hue)); localStorage.setItem("site-hue", String(hue)); }, [hue]);
+	useEffect(() => { document.documentElement.dataset.wallpaper = wallpaper; localStorage.setItem("site-wallpaper", wallpaper); }, [wallpaper]);
+	useEffect(() => { localStorage.setItem("site-layout", layout); }, [layout]);
+	useEffect(() => { localStorage.setItem("site-card-border", String(cardBorder)); }, [cardBorder]);
+	useEffect(() => { localStorage.setItem("site-card-theme", String(cardFollowTheme)); }, [cardFollowTheme]);
+	useEffect(() => { localStorage.setItem("site-banner-title", String(bannerTitle)); }, [bannerTitle]);
+	useEffect(() => { localStorage.setItem("site-carousel", String(carousel)); }, [carousel]);
+	useEffect(() => { localStorage.setItem("site-carousel-interval", String(carouselInterval)); }, [carouselInterval]);
+	useEffect(() => { localStorage.setItem("site-waves", String(wavesEnabled)); }, [wavesEnabled]);
+	useEffect(() => { localStorage.setItem("site-gradient", String(gradientEnabled)); }, [gradientEnabled]);
+	useEffect(() => { localStorage.setItem("site-sakura", String(sakuraEnabled)); }, [sakuraEnabled]);
+	useEffect(() => { localStorage.setItem("site-overlay-opacity", String(overlayOpacity)); }, [overlayOpacity]);
+	useEffect(() => { localStorage.setItem("site-overlay-blur", String(overlayBlur)); }, [overlayBlur]);
+	useEffect(() => { localStorage.setItem("site-overlay-card-opacity", String(overlayCardOpacity)); }, [overlayCardOpacity]);
 	const displaySettings: DisplaySettingsProps = { hue, setHue: setHueState, wallpaper, setWallpaper: setWallpaperState, layout, setLayout, cardBorder, setCardBorder, cardFollowTheme, setCardFollowTheme, bannerTitle, setBannerTitle, carousel, setCarousel, carouselInterval, setCarouselInterval, onDownloadWallpaper: () => wallpaperDownloadRef.current(), wallpaperDownloadAvailable, wavesEnabled, setWavesEnabled, gradientEnabled, setGradientEnabled, sakuraEnabled, setSakuraEnabled, overlayOpacity, setOverlayOpacity, overlayBlur, setOverlayBlur, overlayCardOpacity, setOverlayCardOpacity };
 	const shellClasses = [`site-shell wallpaper-${wallpaper}`, `post-layout-${layout}`, cardBorder ? "card-enhanced" : "", cardFollowTheme ? "card-follow-theme" : "", gradientEnabled ? "gradient-enabled" : "gradient-disabled"].filter(Boolean).join(" ");
 	const systemFontStack = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
@@ -1176,7 +1185,7 @@ function SiteShell() {
 	fontVars["--font-post-content"] = fontVars["--site-post-content-font"];
 	fontVars["--font-tag"] = fontVars["--site-tag-font"];
 	const shellStyle = { "--overlay-opacity": overlayOpacity / 100, "--overlay-blur": `${overlayBlur}px`, "--overlay-card-opacity": overlayCardOpacity / 100, ...fontVars } as CSSProperties;
-	return <GameSidebarProvider><SiteContext.Provider value={site}><MusicPlaybackProvider><div className={shellClasses} style={shellStyle}><Header dark={dark} setDark={setDark} wallpaper={wallpaper} setWallpaper={setWallpaperState} settings={displaySettings} /><Hero wallpaper={wallpaper} showTitle={bannerTitle} carousel={carousel} carouselInterval={carouselInterval} wavesEnabled={wavesEnabled} gradientEnabled={gradientEnabled} onWallpaperDownloadChange={bindWallpaperDownload} />{sakuraEnabled ? <SakuraEffect /> : null}<main id="content" className="site-grid"><LeftSidebar /><div className="main-column"><Outlet context={site} /></div><RightSidebar /></main><footer className="site-footer"><span>界面风格参考 <a href="https://github.com/CuteLeaf/Firefly" target="_blank" rel="noreferrer">Firefly</a>（MIT）</span><a href="/rss.xml">RSS</a><a href="/sitemap.xml">Sitemap</a></footer><ScrollTop /><WallpaperNavigationScroll wallpaper={wallpaper} /></div></MusicPlaybackProvider></SiteContext.Provider></GameSidebarProvider>;
+	return <GameSidebarProvider><SiteContext.Provider value={site}><MusicPlaybackProvider><div className={shellClasses} style={shellStyle}><Header dark={dark} setDark={setDark} wallpaper={wallpaper} setWallpaper={setWallpaperState} settings={displaySettings} /><Hero wallpaper={wallpaper} showTitle={bannerTitle} carousel={carousel} carouselInterval={carouselInterval} wavesEnabled={wavesEnabled} gradientEnabled={gradientEnabled} onWallpaperDownloadChange={bindWallpaperDownload} />{sakuraEnabled ? <SakuraEffect /> : null}<main id="content" className="site-grid"><LeftSidebar /><div className="main-column"><Outlet context={site} /></div><RightSidebar /></main><footer className="site-footer"><span>Jayson's Blog</span><a href="/rss.xml">RSS</a><a href="/sitemap.xml">Sitemap</a></footer><ScrollTop /><WallpaperNavigationScroll wallpaper={wallpaper} /></div></MusicPlaybackProvider></SiteContext.Provider></GameSidebarProvider>;
 }
 
 export default function App() { return <AuthProvider><Routes><Route path="/admin/*" element={<AdminWorkspace />} /><Route element={<SiteShell />}><Route path="/" element={<HomePage />} /><Route path="/tools/highlight" element={<CodeHighlightPage />} /><Route path="/tools/games" element={<GamesPage />} /><Route path="/tools/games/:gameId" element={<GamesPage />} /><Route path="/tools/compiler" element={<CompilerPage />} /><Route path="/tools/image-host" element={<ImageHostPage />} /><Route path="/tools/clipboard" element={<ClipboardPage />} /><Route path="/share/:token" element={<ClipboardSharePage />} /><Route path="/user/center" element={<UserProfilePage />} /><Route path="/user/space" element={<UserSpacePage />} /><Route path="/page/:page" element={<PageNumberPage />} /><Route path="/archive" element={<ArchivePage />} /><Route path="/timeline" element={<ArchiveTimelinePage />} /><Route path="/archive/timeline" element={<ArchiveTimelinePage />} /><Route path="/categories" element={<TaxonomyPage type="categories" />} /><Route path="/tags" element={<TaxonomyPage type="tags" />} /><Route path="/search" element={<SearchPage />} /><Route path="/posts/*" element={<PostPage />} /><Route path="/author" element={<AuthorProfileRoute />} /><Route path="/about" element={<AboutContentPage />} /><Route path="/transfer" element={<TransferPage />} /><Route path="/friends" element={<TransferPage />} /><Route path="/issues" element={<IssuesPage />} /><Route path="/feedback" element={<FeedbackPage />} /><Route path="/changelog" element={<ChangelogPage />} /><Route path="/guestbook" element={<GuestbookPage />} /><Route path="/dynamic" element={<DynamicPage />} /><Route path="/dynamic/comments" element={<DynamicPage />} /><Route path="/gallery" element={<GalleryPage />} /><Route path="/gallery/:album" element={<GalleryPage />} /><Route path="/booknav" element={<BooknavPage />} /><Route path="/sponsor" element={<SponsorPage />} /><Route path="/rss" element={<RssPage />} /><Route path="/rss.xml" element={<RssPage />} /><Route path="/404" element={<EmptyState title="页面不存在" description="这个地址没有对应的页面。" />} /><Route path="*" element={<EmptyState title="页面不存在" description="这个地址没有对应的页面。" />} /></Route></Routes></AuthProvider>; }

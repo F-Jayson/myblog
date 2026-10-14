@@ -1,13 +1,13 @@
 {
-  "name": "firefly-rebuild",
+  "name": "jayson-blog",
   "private": true,
   "version": "1.0.0",
   "packageManager": "pnpm@11.22.0",
   "scripts": {
-    "dev": "pnpm --parallel --filter @firefly-rebuild/web --filter @firefly-rebuild/api dev",
-    "build": "pnpm --parallel --filter @firefly-rebuild/web --filter @firefly-rebuild/api build",
-    "type-check": "pnpm --parallel --filter @firefly-rebuild/web --filter @firefly-rebuild/api type-check",
-    "db:migrate": "pnpm --filter @firefly-rebuild/api db:migrate",
-    "db:seed": "pnpm --filter @firefly-rebuild/api db:seed"
+    "dev": "pnpm --parallel --filter @jayson-blog/web --filter @jayson-blog/api dev",
+    "build": "pnpm --parallel --filter @jayson-blog/web --filter @jayson-blog/api build",
+    "type-check": "pnpm --parallel --filter @jayson-blog/web --filter @jayson-blog/api type-check",
+    "db:migrate": "pnpm --filter @jayson-blog/api db:migrate",
+    "db:seed": "pnpm --filter @jayson-blog/api db:seed"
   }
 }

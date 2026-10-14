@@ -9,7 +9,7 @@ export type DynamicImage = {
 	height?: number;
 };
 
-const IMAGE_SIZE_COMMENT = /<!--\s*firefly:image-size=(small|medium|large)\s*-->/giu;
+const IMAGE_SIZE_COMMENT = /<!--\s*image-size=(small|medium|large)\s*-->/giu;
 const MARKDOWN_IMAGE = /!\[([^\]]*)\]\(\s*<?([^\s)>]+)>?(?:\s+"([^"]*)")?(?:\s+'([^']*)')?(?:\s+=\s*(\d+)(?:x(\d+))?)?\s*\)/gu;
 const HTML_IMAGE = /<img\b[^>]*>/giu;
 
@@ -45,7 +45,7 @@ function pushImage(images: DynamicImage[], src: string, alt = "", width?: number
 }
 
 export function parseDynamicImageSize(body: string): DynamicImageSize {
-	const match = body.match(/<!--\s*firefly:image-size=(small|medium|large)\s*-->/iu);
+	const match = body.match(/<!--\s*image-size=(small|medium|large)\s*-->/iu);
 	const size = match?.[1]?.toLowerCase();
 	return size === "small" || size === "large" ? size : "medium";
 }
@@ -53,7 +53,7 @@ export function parseDynamicImageSize(body: string): DynamicImageSize {
 export function withDynamicImageSize(body: string, size: DynamicImageSize) {
 	const stripped = body.replace(resetRegex(IMAGE_SIZE_COMMENT), "").trim();
 	if (size === "medium") return stripped;
-	return `<!-- firefly:image-size=${size} -->\n${stripped}`;
+	return `<!-- image-size=${size} -->\n${stripped}`;
 }
 
 export function stripMarkdownImages(source: string) {

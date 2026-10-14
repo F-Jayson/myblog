@@ -1,6 +1,6 @@
-# Firefly Headless
+# Jayson's Blog
 
-基于当前 Firefly 站点视觉重建的前后端分离博客项目。原站仍保留在相邻的 `Firefly` 目录中，本项目独立使用 pnpm 工作区：
+基于参考站点视觉重建的前后端分离博客项目。参考项目仍保留在相邻目录中，本项目独立使用 pnpm 工作区：
 
 ```text
 apps/web   React + Vite，负责路由、主题、壁纸和页面组件
@@ -33,7 +33,7 @@ Windows 也可以直接双击根目录中的 `start.bat`。它优先使用 Power
 .\start.ps1 -DockerMySql -Database -OpenBrowser
 ```
 
-依赖已安装或只想跳过构建时，可以分别使用 `-SkipInstall` 和 `-SkipBuild`。`-Database` 额外执行 `pnpm db:seed`，因此仅应在需要导入或重置演示内容时使用。若本地 MySQL 未启动，普通启动会跳过迁移并以可预览的前端演示模式继续启动；数据库恢复后执行 `pnpm db:migrate`，或再次运行启动脚本即可。启动日志写入 `logs/`，运行中的进程 PID 保存在 `.firefly-run/`。
+依赖已安装或只想跳过构建时，可以分别使用 `-SkipInstall` 和 `-SkipBuild`。`-Database` 额外执行 `pnpm db:seed`，因此仅应在需要导入或重置演示内容时使用。若本地 MySQL 未启动，普通启动会跳过迁移并以可预览的前端演示模式继续启动；数据库恢复后执行 `pnpm db:migrate`，或再次运行启动脚本即可。启动日志写入 `logs/`，运行中的进程 PID 保存在 `.blog-run/`。
 
 前端默认运行在 `http://localhost:5174`，API 默认运行在 `http://localhost:5180`。启动脚本会在端口被占用时明确提示，避免前端代理地址不一致。
 
@@ -63,7 +63,7 @@ pnpm db:migrate
 需要演示内容时再单独执行 `pnpm db:seed`。Compose 只负责创建数据库和专用应用用户，不会自动执行 `database/schema.sql` 或 `database/seed.sql`。`pnpm db:migrate` 和 `pnpm db:seed` 都不会创建或修改管理员凭据。请运行下列命令，并按隐藏提示输入两次唯一的高强度密码：
 
 ```powershell
-pnpm --filter @firefly-rebuild/api exec tsx src/cli.ts set-admin-password
+pnpm --filter @jayson-blog/api exec tsx src/cli.ts set-admin-password
 ```
 
 命令会创建或更新 `admin` 账号。登录成功后，前端会在当前浏览器会话中保存短期 session，并通过 `Authorization: Bearer <session>` 调用管理接口。生产环境请通过 HTTPS 访问管理后台，并按部署规范保管凭据。

@@ -17,18 +17,12 @@ function assertDatabaseIdentifier(database: string) {
 }
 
 function removeHardcodedBootstrapStatements(fileName: string, sql: string) {
-	// These anchored patterns only remove the legacy statements at the beginning
-	// of the checked-in SQL files; SQL later in the file is left untouched.
-	if (fileName === "schema.sql") {
-		return sql.replace(
-			/^\uFEFF?\s*CREATE DATABASE IF NOT EXISTS firefly_blog CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\s*USE firefly_blog;\s*/i,
-			"",
-		);
-	}
-	if (fileName === "seed.sql") {
-		return sql.replace(/^\uFEFF?\s*USE firefly_blog;\s*/i, "");
-	}
-	return sql;
+	// Migration runs against the database selected by MYSQL_DATABASE.
+	// Drop only the leading bootstrap statements so the rest of the file is unchanged.
+	if (fileName !== "schema.sql" && fileName !== "seed.sql") return sql;
+	return sql
+		.replace(/^\uFEFF?\s*CREATE DATABASE IF NOT EXISTS [A-Za-z0-9_]+ CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\s*/i, "")
+		.replace(/^\uFEFF?\s*USE [A-Za-z0-9_]+;\s*/i, "");
 }
 
 async function executeSql(fileName: string) {

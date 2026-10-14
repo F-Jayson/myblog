@@ -53,7 +53,7 @@ export const config = {
 	db: {
 		host: process.env.MYSQL_HOST ?? "127.0.0.1",
 		port: numberFromEnv(process.env.MYSQL_PORT, 3306),
-		database: process.env.MYSQL_DATABASE ?? "firefly_blog",
+		database: process.env.MYSQL_DATABASE ?? "jayson_blog",
 		user: process.env.MYSQL_USER ?? "root",
 		password: databasePasswordFromEnv(),
 		connectionLimit: numberFromEnv(process.env.MYSQL_CONNECTION_LIMIT, 10),

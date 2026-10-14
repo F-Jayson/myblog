@@ -23,7 +23,7 @@ const rawPool = pool.pool as unknown as {
 
 function instrumentQueryMethod(target: { [key: string]: unknown }, name: "query" | "execute") {
 	const original = target[name];
-	if (typeof original !== "function" || (original as { __fireflyInstrumented?: boolean }).__fireflyInstrumented) return;
+	if (typeof original !== "function" || (original as { __blogInstrumented?: boolean }).__blogInstrumented) return;
 	const wrapped = function (this: unknown, ...args: unknown[]) {
 		const started = performance.now();
 		const statement = typeof args[0] === "string" ? args[0] : String((args[0] as { sql?: unknown })?.sql ?? name);
@@ -35,7 +35,7 @@ function instrumentQueryMethod(target: { [key: string]: unknown }, name: "query"
 		}
 		return (original as (...methodArgs: unknown[]) => unknown).apply(this, args);
 	};
-	(wrapped as { __fireflyInstrumented?: boolean }).__fireflyInstrumented = true;
+	(wrapped as { __blogInstrumented?: boolean }).__blogInstrumented = true;
 	target[name] = wrapped;
 }
 

@@ -122,7 +122,7 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 		return () => window.clearInterval(timer);
 	}, [codeCooldown]);
 	if (!open) return null;
-	if (mode === "login" && !features.loginEnabled) return <div className="auth-overlay" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><section className="auth-dialog" role="dialog" aria-modal="true"><header className="auth-dialog-heading"><div><span className="auth-eyebrow"><UserRound size={14} /> Firefly 社区</span><h2>登录已关闭</h2></div><button type="button" className="auth-close" title="关闭" aria-label="关闭" onClick={onClose}><X size={19} /></button></header><p className="auth-lead">管理员暂未开放用户登录。</p></section></div>;
+	if (mode === "login" && !features.loginEnabled) return <div className="auth-overlay" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><section className="auth-dialog" role="dialog" aria-modal="true"><header className="auth-dialog-heading"><div><span className="auth-eyebrow"><UserRound size={14} /> 博客社区</span><h2>登录已关闭</h2></div><button type="button" className="auth-close" title="关闭" aria-label="关闭" onClick={onClose}><X size={19} /></button></header><p className="auth-lead">管理员暂未开放用户登录。</p></section></div>;
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
 		setError("");
@@ -167,7 +167,7 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 	};
 	return <div className="auth-overlay" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
 		<section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-dialog-title">
-			<header className="auth-dialog-heading"><div><span className="auth-eyebrow"><UserRound size={14} /> Firefly 社区</span><h2 id="auth-dialog-title">{mode === "login" ? "登录账号" : "创建账号"}</h2></div><button type="button" className="auth-close" title="关闭" aria-label="关闭" onClick={onClose}><X size={19} /></button></header>
+			<header className="auth-dialog-heading"><div><span className="auth-eyebrow"><UserRound size={14} /> 博客社区</span><h2 id="auth-dialog-title">{mode === "login" ? "登录账号" : "创建账号"}</h2></div><button type="button" className="auth-close" title="关闭" aria-label="关闭" onClick={onClose}><X size={19} /></button></header>
 			{mode === "login" ? <p className="auth-lead">登录后参与评论、回复和表情互动。</p> : <p className="auth-lead">注册一个账号，留下你的头像和昵称。</p>}
 			<form className="auth-form" onSubmit={submit}>
 				<label><span>账号</span><input autoFocus value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder="请输入账号" /></label>

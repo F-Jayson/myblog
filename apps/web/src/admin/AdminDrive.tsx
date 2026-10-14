@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, HardDrive, KeyRound, RefreshCw, Search, Trash2, Upload } from "lucide-react";
 
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN ?? "").trim().replace(/\/+$/u, "");
-const AUTH_EXPIRED_EVENT = "firefly-admin-auth-expired";
+const AUTH_EXPIRED_EVENT = "site-admin-auth-expired";
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
 type DriveFile = {
@@ -33,15 +33,15 @@ type DriveSession = {
 
 function authHeaders() {
   const headers = new Headers();
-  const token = sessionStorage.getItem("firefly-admin-token");
+  const token = sessionStorage.getItem("site-admin-token");
   if (token) headers.set("authorization", "Bearer " + token);
   return headers;
 }
 
 function expireAdminSession() {
-  sessionStorage.removeItem("firefly-admin-token");
-  sessionStorage.removeItem("firefly-admin-username");
-  sessionStorage.setItem("firefly-admin-auth-message", "登录状态已失效，请重新输入管理员账号和密码。");
+  sessionStorage.removeItem("site-admin-token");
+  sessionStorage.removeItem("site-admin-username");
+  sessionStorage.setItem("site-admin-auth-message", "登录状态已失效，请重新输入管理员账号和密码。");
   window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
 }
 
@@ -181,7 +181,7 @@ export default function AdminDrive() {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", API_ORIGIN + "/api/admin/drive/sessions/" + uploadId);
     xhr.timeout = 0;
-    const token = sessionStorage.getItem("firefly-admin-token");
+    const token = sessionStorage.getItem("site-admin-token");
     if (token) xhr.setRequestHeader("authorization", "Bearer " + token);
     xhr.setRequestHeader("content-type", "application/octet-stream");
     xhr.setRequestHeader("x-upload-offset", String(offset));

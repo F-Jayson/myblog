@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$StatePath = Join-Path $Root ".firefly-run\processes.json"
+$StatePath = Join-Path $Root ".blog-run\processes.json"
 
 function Get-ProcessInfo([int]$ProcessId) {
 	try {
@@ -76,7 +76,7 @@ function Stop-TrackedProcess([int]$ProcessId, [string]$ExpectedCommand, [string]
 }
 
 if (-not (Test-Path $StatePath)) {
-	if (-not $Quiet) { Write-Host "No Firefly Headless run record was found; services may already be stopped." }
+	if (-not $Quiet) { Write-Host "No Jayson's Blog run record was found; services may already be stopped." }
 	exit 0
 }
 
@@ -93,12 +93,12 @@ $webValid = [int]::TryParse([string]$state.WebPid, [ref]$webPid)
 if (-not $state -or -not $apiValid -or -not $webValid -or $apiPid -lt 0 -or $webPid -lt 0 -or ($apiPid -eq 0 -and $webPid -eq 0) -or ($apiPid -gt 0 -and $apiPid -eq $webPid)) {
 	throw "The run record has no valid, distinct managed process IDs and was kept for diagnosis: $StatePath"
 }
-$apiStopped = Stop-TrackedProcess $apiPid "@firefly-rebuild/api" ([string]$state.ApiCommandLine) ([string]$state.ApiCreationDate) ([string]$state.StartedAt)
-$webStopped = Stop-TrackedProcess $webPid "@firefly-rebuild/web" ([string]$state.WebCommandLine) ([string]$state.WebCreationDate) ([string]$state.StartedAt)
+$apiStopped = Stop-TrackedProcess $apiPid "@jayson-blog/api" ([string]$state.ApiCommandLine) ([string]$state.ApiCreationDate) ([string]$state.StartedAt)
+$webStopped = Stop-TrackedProcess $webPid "@jayson-blog/web" ([string]$state.WebCommandLine) ([string]$state.WebCreationDate) ([string]$state.StartedAt)
 if (-not ($apiStopped -and $webStopped)) {
-	throw "Could not stop all tracked Firefly processes; state was kept at $StatePath."
+	throw "Could not stop all tracked blog processes; state was kept at $StatePath."
 }
 Remove-Item $StatePath -Force -ErrorAction Stop
-if (Test-Path -LiteralPath $StatePath) { throw "Could not remove the Firefly run record; state was kept at $StatePath." }
+if (Test-Path -LiteralPath $StatePath) { throw "Could not remove the blog run record; state was kept at $StatePath." }
 
-if (-not $Quiet) { Write-Host "Firefly Headless stopped." -ForegroundColor Green }
+if (-not $Quiet) { Write-Host "Jayson's Blog stopped." -ForegroundColor Green }

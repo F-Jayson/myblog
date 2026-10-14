@@ -1,5 +1,5 @@
-CREATE DATABASE IF NOT EXISTS firefly_blog CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE firefly_blog;
+CREATE DATABASE IF NOT EXISTS jayson_blog CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE jayson_blog;
 
 CREATE TABLE IF NOT EXISTS authors (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -67,36 +67,36 @@ CREATE TABLE IF NOT EXISTS post_categories (
 
 -- Idempotent upgrades for databases created before article editor metadata
 -- was added. Existing filenames use the stable URL slug as their fallback.
-SET @firefly_post_filename_sql = IF(
+SET @blog_post_filename_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'posts' AND COLUMN_NAME = 'filename') = 0,
   'ALTER TABLE posts ADD COLUMN filename VARCHAR(255) NOT NULL DEFAULT '''' AFTER slug',
   'SELECT 1'
 );
-PREPARE firefly_post_filename_statement FROM @firefly_post_filename_sql;
-EXECUTE firefly_post_filename_statement;
-DEALLOCATE PREPARE firefly_post_filename_statement;
+PREPARE blog_post_filename_statement FROM @blog_post_filename_sql;
+EXECUTE blog_post_filename_statement;
+DEALLOCATE PREPARE blog_post_filename_statement;
 
-SET @firefly_post_top_image_sql = IF(
+SET @blog_post_top_image_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'posts' AND COLUMN_NAME = 'top_image') = 0,
   'ALTER TABLE posts ADD COLUMN top_image VARCHAR(500) NULL AFTER cover',
   'SELECT 1'
 );
-PREPARE firefly_post_top_image_statement FROM @firefly_post_top_image_sql;
-EXECUTE firefly_post_top_image_statement;
-DEALLOCATE PREPARE firefly_post_top_image_statement;
+PREPARE blog_post_top_image_statement FROM @blog_post_top_image_sql;
+EXECUTE blog_post_top_image_statement;
+DEALLOCATE PREPARE blog_post_top_image_statement;
 
 -- Backfill only when there is work to do. This keeps repeated startup migrations
 -- read-only once legacy rows have been normalized.
-SET @firefly_post_filename_backfill_sql = IF(
+SET @blog_post_filename_backfill_sql = IF(
   EXISTS (SELECT 1 FROM posts WHERE filename = '' OR filename IS NULL),
   'UPDATE posts SET filename = slug WHERE filename = '''' OR filename IS NULL',
   'SELECT 1'
 );
-PREPARE firefly_post_filename_backfill_statement FROM @firefly_post_filename_backfill_sql;
-EXECUTE firefly_post_filename_backfill_statement;
-DEALLOCATE PREPARE firefly_post_filename_backfill_statement;
+PREPARE blog_post_filename_backfill_statement FROM @blog_post_filename_backfill_sql;
+EXECUTE blog_post_filename_backfill_statement;
+DEALLOCATE PREPARE blog_post_filename_backfill_statement;
 
-SET @firefly_post_categories_backfill_sql = IF(
+SET @blog_post_categories_backfill_sql = IF(
   EXISTS (
     SELECT 1
     FROM posts p
@@ -106,9 +106,9 @@ SET @firefly_post_categories_backfill_sql = IF(
   'INSERT IGNORE INTO post_categories (post_id, category_id) SELECT p.id, p.category_id FROM posts p WHERE p.category_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM post_categories pc WHERE pc.post_id = p.id AND pc.category_id = p.category_id)',
   'SELECT 1'
 );
-PREPARE firefly_post_categories_backfill_statement FROM @firefly_post_categories_backfill_sql;
-EXECUTE firefly_post_categories_backfill_statement;
-DEALLOCATE PREPARE firefly_post_categories_backfill_statement;
+PREPARE blog_post_categories_backfill_statement FROM @blog_post_categories_backfill_sql;
+EXECUTE blog_post_categories_backfill_statement;
+DEALLOCATE PREPARE blog_post_categories_backfill_statement;
 
 CREATE TABLE IF NOT EXISTS post_tags (
   post_id BIGINT UNSIGNED NOT NULL,
@@ -130,43 +130,43 @@ CREATE TABLE IF NOT EXISTS dynamics (
 
 -- Keep normal startup migrations idempotent for databases created before the
 -- configurable profile and image-enabled dynamics were introduced.
-SET @firefly_author_links_sql = IF(
+SET @blog_author_links_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'authors' AND COLUMN_NAME = 'links') = 0,
   'ALTER TABLE authors ADD COLUMN links JSON NOT NULL DEFAULT (JSON_ARRAY()) AFTER rss_url',
   'SELECT 1'
 );
-PREPARE firefly_author_links_statement FROM @firefly_author_links_sql;
-EXECUTE firefly_author_links_statement;
-DEALLOCATE PREPARE firefly_author_links_statement;
+PREPARE blog_author_links_statement FROM @blog_author_links_sql;
+EXECUTE blog_author_links_statement;
+DEALLOCATE PREPARE blog_author_links_statement;
 
 -- Extra profile data is deliberately kept as one JSON document. It lets the
 -- author homepage grow without fragmenting the single-author site model.
-SET @firefly_author_profile_sql = IF(
+SET @blog_author_profile_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'authors' AND COLUMN_NAME = 'profile') = 0,
   'ALTER TABLE authors ADD COLUMN profile JSON NOT NULL DEFAULT (JSON_OBJECT()) AFTER links',
   'SELECT 1'
 );
-PREPARE firefly_author_profile_statement FROM @firefly_author_profile_sql;
-EXECUTE firefly_author_profile_statement;
-DEALLOCATE PREPARE firefly_author_profile_statement;
+PREPARE blog_author_profile_statement FROM @blog_author_profile_sql;
+EXECUTE blog_author_profile_statement;
+DEALLOCATE PREPARE blog_author_profile_statement;
 
-SET @firefly_dynamic_images_sql = IF(
+SET @blog_dynamic_images_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dynamics' AND COLUMN_NAME = 'images') = 0,
   'ALTER TABLE dynamics ADD COLUMN images JSON NOT NULL DEFAULT (JSON_ARRAY()) AFTER body',
   'SELECT 1'
 );
-PREPARE firefly_dynamic_images_statement FROM @firefly_dynamic_images_sql;
-EXECUTE firefly_dynamic_images_statement;
-DEALLOCATE PREPARE firefly_dynamic_images_statement;
+PREPARE blog_dynamic_images_statement FROM @blog_dynamic_images_sql;
+EXECUTE blog_dynamic_images_statement;
+DEALLOCATE PREPARE blog_dynamic_images_statement;
 
-SET @firefly_dynamic_updated_at_sql = IF(
+SET @blog_dynamic_updated_at_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dynamics' AND COLUMN_NAME = 'updated_at') = 0,
   'ALTER TABLE dynamics ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at',
   'SELECT 1'
 );
-PREPARE firefly_dynamic_updated_at_statement FROM @firefly_dynamic_updated_at_sql;
-EXECUTE firefly_dynamic_updated_at_statement;
-DEALLOCATE PREPARE firefly_dynamic_updated_at_statement;
+PREPARE blog_dynamic_updated_at_statement FROM @blog_dynamic_updated_at_sql;
+EXECUTE blog_dynamic_updated_at_statement;
+DEALLOCATE PREPARE blog_dynamic_updated_at_statement;
 
 CREATE TABLE IF NOT EXISTS comments (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS comments (
 
 -- User accounts and public comment data. These tables intentionally use the
 -- existing comments table instead of replacing it, so installations upgraded
--- from the first Firefly schema keep their published comments.
+-- from the first schema keep their published comments.
 CREATE TABLE IF NOT EXISTS comment_users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   account VARCHAR(64) NOT NULL UNIQUE,
@@ -295,135 +295,135 @@ CREATE TABLE IF NOT EXISTS user_clipboards (
   INDEX idx_user_clipboards_public (is_public, public_token)
 ) ENGINE=InnoDB;
 
-SET @firefly_clipboard_type_sql = IF(
+SET @blog_clipboard_type_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_clipboards' AND COLUMN_NAME = 'content_type') = 0,
   'ALTER TABLE user_clipboards ADD COLUMN content_type VARCHAR(16) NOT NULL DEFAULT ''text'' AFTER content',
   'SELECT 1'
 );
-PREPARE firefly_clipboard_type_statement FROM @firefly_clipboard_type_sql;
-EXECUTE firefly_clipboard_type_statement;
-DEALLOCATE PREPARE firefly_clipboard_type_statement;
+PREPARE blog_clipboard_type_statement FROM @blog_clipboard_type_sql;
+EXECUTE blog_clipboard_type_statement;
+DEALLOCATE PREPARE blog_clipboard_type_statement;
 
-SET @firefly_clipboard_language_sql = IF(
+SET @blog_clipboard_language_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_clipboards' AND COLUMN_NAME = 'language') = 0,
   'ALTER TABLE user_clipboards ADD COLUMN language VARCHAR(32) NOT NULL DEFAULT '''' AFTER content_type',
   'SELECT 1'
 );
-PREPARE firefly_clipboard_language_statement FROM @firefly_clipboard_language_sql;
-EXECUTE firefly_clipboard_language_statement;
-DEALLOCATE PREPARE firefly_clipboard_language_statement;
+PREPARE blog_clipboard_language_statement FROM @blog_clipboard_language_sql;
+EXECUTE blog_clipboard_language_statement;
+DEALLOCATE PREPARE blog_clipboard_language_statement;
 
-SET @firefly_storage_access_password_sql = IF(
+SET @blog_storage_access_password_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_storage_items' AND COLUMN_NAME = 'access_password_hash') = 0,
   'ALTER TABLE user_storage_items ADD COLUMN access_password_hash VARCHAR(255) NULL AFTER public_token',
   'SELECT 1'
 );
-PREPARE firefly_storage_access_password_statement FROM @firefly_storage_access_password_sql;
-EXECUTE firefly_storage_access_password_statement;
-DEALLOCATE PREPARE firefly_storage_access_password_statement;
+PREPARE blog_storage_access_password_statement FROM @blog_storage_access_password_sql;
+EXECUTE blog_storage_access_password_statement;
+DEALLOCATE PREPARE blog_storage_access_password_statement;
 
-SET @firefly_clipboard_access_password_sql = IF(
+SET @blog_clipboard_access_password_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_clipboards' AND COLUMN_NAME = 'access_password_hash') = 0,
   'ALTER TABLE user_clipboards ADD COLUMN access_password_hash VARCHAR(255) NULL AFTER public_token',
   'SELECT 1'
 );
-PREPARE firefly_clipboard_access_password_statement FROM @firefly_clipboard_access_password_sql;
-EXECUTE firefly_clipboard_access_password_statement;
-DEALLOCATE PREPARE firefly_clipboard_access_password_statement;
+PREPARE blog_clipboard_access_password_statement FROM @blog_clipboard_access_password_sql;
+EXECUTE blog_clipboard_access_password_statement;
+DEALLOCATE PREPARE blog_clipboard_access_password_statement;
 
-SET @firefly_storage_access_hint_sql = IF(
+SET @blog_storage_access_hint_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_storage_items' AND COLUMN_NAME = 'access_password_hint') = 0,
   'ALTER TABLE user_storage_items ADD COLUMN access_password_hint VARCHAR(40) NULL AFTER access_password_hash',
   'SELECT 1'
 );
-PREPARE firefly_storage_access_hint_statement FROM @firefly_storage_access_hint_sql;
-EXECUTE firefly_storage_access_hint_statement;
-DEALLOCATE PREPARE firefly_storage_access_hint_statement;
+PREPARE blog_storage_access_hint_statement FROM @blog_storage_access_hint_sql;
+EXECUTE blog_storage_access_hint_statement;
+DEALLOCATE PREPARE blog_storage_access_hint_statement;
 
-SET @firefly_clipboard_access_hint_sql = IF(
+SET @blog_clipboard_access_hint_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_clipboards' AND COLUMN_NAME = 'access_password_hint') = 0,
   'ALTER TABLE user_clipboards ADD COLUMN access_password_hint VARCHAR(40) NULL AFTER access_password_hash',
   'SELECT 1'
 );
-PREPARE firefly_clipboard_access_hint_statement FROM @firefly_clipboard_access_hint_sql;
-EXECUTE firefly_clipboard_access_hint_statement;
-DEALLOCATE PREPARE firefly_clipboard_access_hint_statement;
+PREPARE blog_clipboard_access_hint_statement FROM @blog_clipboard_access_hint_sql;
+EXECUTE blog_clipboard_access_hint_statement;
+DEALLOCATE PREPARE blog_clipboard_access_hint_statement;
 
 -- The original comments table predates user sessions and threaded replies.
 -- Add the new columns only when they are missing so this file remains safe to
 -- run repeatedly against an existing database.
-SET @firefly_comment_user_id_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'user_id') = 0, 'ALTER TABLE comments ADD COLUMN user_id BIGINT UNSIGNED NULL AFTER post_id', 'SELECT 1');
-PREPARE firefly_comment_user_id_statement FROM @firefly_comment_user_id_sql; EXECUTE firefly_comment_user_id_statement; DEALLOCATE PREPARE firefly_comment_user_id_statement;
-SET @firefly_comment_parent_id_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'parent_id') = 0, 'ALTER TABLE comments ADD COLUMN parent_id BIGINT UNSIGNED NULL AFTER user_id', 'SELECT 1');
-PREPARE firefly_comment_parent_id_statement FROM @firefly_comment_parent_id_sql; EXECUTE firefly_comment_parent_id_statement; DEALLOCATE PREPARE firefly_comment_parent_id_statement;
-SET @firefly_comment_avatar_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'author_avatar') = 0, 'ALTER TABLE comments ADD COLUMN author_avatar VARCHAR(512) NOT NULL DEFAULT '''' AFTER author_name', 'SELECT 1');
-PREPARE firefly_comment_avatar_statement FROM @firefly_comment_avatar_sql; EXECUTE firefly_comment_avatar_statement; DEALLOCATE PREPARE firefly_comment_avatar_statement;
-SET @firefly_comment_ip_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'client_ip') = 0, 'ALTER TABLE comments ADD COLUMN client_ip VARCHAR(128) NOT NULL DEFAULT ''''', 'SELECT 1');
-PREPARE firefly_comment_ip_statement FROM @firefly_comment_ip_sql; EXECUTE firefly_comment_ip_statement; DEALLOCATE PREPARE firefly_comment_ip_statement;
-SET @firefly_comment_ip_location_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'ip_location') = 0, 'ALTER TABLE comments ADD COLUMN ip_location VARCHAR(255) NOT NULL DEFAULT ''''', 'SELECT 1');
-PREPARE firefly_comment_ip_location_statement FROM @firefly_comment_ip_location_sql; EXECUTE firefly_comment_ip_location_statement; DEALLOCATE PREPARE firefly_comment_ip_location_statement;
-SET @firefly_comment_client_browser_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'client_browser') = 0, 'ALTER TABLE comments ADD COLUMN client_browser VARCHAR(128) NOT NULL DEFAULT ''''', 'SELECT 1');
-PREPARE firefly_comment_client_browser_statement FROM @firefly_comment_client_browser_sql; EXECUTE firefly_comment_client_browser_statement; DEALLOCATE PREPARE firefly_comment_client_browser_statement;
-SET @firefly_comment_client_os_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'client_os') = 0, 'ALTER TABLE comments ADD COLUMN client_os VARCHAR(128) NOT NULL DEFAULT ''''', 'SELECT 1');
-PREPARE firefly_comment_client_os_statement FROM @firefly_comment_client_os_sql; EXECUTE firefly_comment_client_os_statement; DEALLOCATE PREPARE firefly_comment_client_os_statement;
-SET @firefly_comment_client_device_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'client_device') = 0, 'ALTER TABLE comments ADD COLUMN client_device VARCHAR(64) NOT NULL DEFAULT ''''', 'SELECT 1');
-PREPARE firefly_comment_client_device_statement FROM @firefly_comment_client_device_sql; EXECUTE firefly_comment_client_device_statement; DEALLOCATE PREPARE firefly_comment_client_device_statement;
-SET @firefly_comment_client_ua_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'client_ua') = 0, 'ALTER TABLE comments ADD COLUMN client_ua VARCHAR(512) NOT NULL DEFAULT ''''', 'SELECT 1');
-PREPARE firefly_comment_client_ua_statement FROM @firefly_comment_client_ua_sql; EXECUTE firefly_comment_client_ua_statement; DEALLOCATE PREPARE firefly_comment_client_ua_statement;
-SET @firefly_comment_images_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'images') = 0, 'ALTER TABLE comments ADD COLUMN images JSON NOT NULL DEFAULT (JSON_ARRAY())', 'SELECT 1');
-PREPARE firefly_comment_images_statement FROM @firefly_comment_images_sql; EXECUTE firefly_comment_images_statement; DEALLOCATE PREPARE firefly_comment_images_statement;
-SET @firefly_comment_admin_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'is_admin') = 0, 'ALTER TABLE comments ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE', 'SELECT 1');
-PREPARE firefly_comment_admin_statement FROM @firefly_comment_admin_sql; EXECUTE firefly_comment_admin_statement; DEALLOCATE PREPARE firefly_comment_admin_statement;
-SET @firefly_comment_sticker_id_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'sticker_id') = 0, 'ALTER TABLE comments ADD COLUMN sticker_id BIGINT UNSIGNED NULL', 'SELECT 1');
-PREPARE firefly_comment_sticker_id_statement FROM @firefly_comment_sticker_id_sql; EXECUTE firefly_comment_sticker_id_statement; DEALLOCATE PREPARE firefly_comment_sticker_id_statement;
-SET @firefly_comment_personal_sticker_id_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'personal_sticker_id') = 0, 'ALTER TABLE comments ADD COLUMN personal_sticker_id BIGINT UNSIGNED NULL', 'SELECT 1');
-PREPARE firefly_comment_personal_sticker_id_statement FROM @firefly_comment_personal_sticker_id_sql; EXECUTE firefly_comment_personal_sticker_id_statement; DEALLOCATE PREPARE firefly_comment_personal_sticker_id_statement;
+SET @blog_comment_user_id_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'user_id') = 0, 'ALTER TABLE comments ADD COLUMN user_id BIGINT UNSIGNED NULL AFTER post_id', 'SELECT 1');
+PREPARE blog_comment_user_id_statement FROM @blog_comment_user_id_sql; EXECUTE blog_comment_user_id_statement; DEALLOCATE PREPARE blog_comment_user_id_statement;
+SET @blog_comment_parent_id_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'parent_id') = 0, 'ALTER TABLE comments ADD COLUMN parent_id BIGINT UNSIGNED NULL AFTER user_id', 'SELECT 1');
+PREPARE blog_comment_parent_id_statement FROM @blog_comment_parent_id_sql; EXECUTE blog_comment_parent_id_statement; DEALLOCATE PREPARE blog_comment_parent_id_statement;
+SET @blog_comment_avatar_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'author_avatar') = 0, 'ALTER TABLE comments ADD COLUMN author_avatar VARCHAR(512) NOT NULL DEFAULT '''' AFTER author_name', 'SELECT 1');
+PREPARE blog_comment_avatar_statement FROM @blog_comment_avatar_sql; EXECUTE blog_comment_avatar_statement; DEALLOCATE PREPARE blog_comment_avatar_statement;
+SET @blog_comment_ip_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'client_ip') = 0, 'ALTER TABLE comments ADD COLUMN client_ip VARCHAR(128) NOT NULL DEFAULT ''''', 'SELECT 1');
+PREPARE blog_comment_ip_statement FROM @blog_comment_ip_sql; EXECUTE blog_comment_ip_statement; DEALLOCATE PREPARE blog_comment_ip_statement;
+SET @blog_comment_ip_location_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'ip_location') = 0, 'ALTER TABLE comments ADD COLUMN ip_location VARCHAR(255) NOT NULL DEFAULT ''''', 'SELECT 1');
+PREPARE blog_comment_ip_location_statement FROM @blog_comment_ip_location_sql; EXECUTE blog_comment_ip_location_statement; DEALLOCATE PREPARE blog_comment_ip_location_statement;
+SET @blog_comment_client_browser_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'client_browser') = 0, 'ALTER TABLE comments ADD COLUMN client_browser VARCHAR(128) NOT NULL DEFAULT ''''', 'SELECT 1');
+PREPARE blog_comment_client_browser_statement FROM @blog_comment_client_browser_sql; EXECUTE blog_comment_client_browser_statement; DEALLOCATE PREPARE blog_comment_client_browser_statement;
+SET @blog_comment_client_os_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'client_os') = 0, 'ALTER TABLE comments ADD COLUMN client_os VARCHAR(128) NOT NULL DEFAULT ''''', 'SELECT 1');
+PREPARE blog_comment_client_os_statement FROM @blog_comment_client_os_sql; EXECUTE blog_comment_client_os_statement; DEALLOCATE PREPARE blog_comment_client_os_statement;
+SET @blog_comment_client_device_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'client_device') = 0, 'ALTER TABLE comments ADD COLUMN client_device VARCHAR(64) NOT NULL DEFAULT ''''', 'SELECT 1');
+PREPARE blog_comment_client_device_statement FROM @blog_comment_client_device_sql; EXECUTE blog_comment_client_device_statement; DEALLOCATE PREPARE blog_comment_client_device_statement;
+SET @blog_comment_client_ua_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'client_ua') = 0, 'ALTER TABLE comments ADD COLUMN client_ua VARCHAR(512) NOT NULL DEFAULT ''''', 'SELECT 1');
+PREPARE blog_comment_client_ua_statement FROM @blog_comment_client_ua_sql; EXECUTE blog_comment_client_ua_statement; DEALLOCATE PREPARE blog_comment_client_ua_statement;
+SET @blog_comment_images_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'images') = 0, 'ALTER TABLE comments ADD COLUMN images JSON NOT NULL DEFAULT (JSON_ARRAY())', 'SELECT 1');
+PREPARE blog_comment_images_statement FROM @blog_comment_images_sql; EXECUTE blog_comment_images_statement; DEALLOCATE PREPARE blog_comment_images_statement;
+SET @blog_comment_admin_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'is_admin') = 0, 'ALTER TABLE comments ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE', 'SELECT 1');
+PREPARE blog_comment_admin_statement FROM @blog_comment_admin_sql; EXECUTE blog_comment_admin_statement; DEALLOCATE PREPARE blog_comment_admin_statement;
+SET @blog_comment_sticker_id_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'sticker_id') = 0, 'ALTER TABLE comments ADD COLUMN sticker_id BIGINT UNSIGNED NULL', 'SELECT 1');
+PREPARE blog_comment_sticker_id_statement FROM @blog_comment_sticker_id_sql; EXECUTE blog_comment_sticker_id_statement; DEALLOCATE PREPARE blog_comment_sticker_id_statement;
+SET @blog_comment_personal_sticker_id_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'personal_sticker_id') = 0, 'ALTER TABLE comments ADD COLUMN personal_sticker_id BIGINT UNSIGNED NULL', 'SELECT 1');
+PREPARE blog_comment_personal_sticker_id_statement FROM @blog_comment_personal_sticker_id_sql; EXECUTE blog_comment_personal_sticker_id_statement; DEALLOCATE PREPARE blog_comment_personal_sticker_id_statement;
 
 -- Add nullable comment relationships only when their semantic foreign key is missing.
 -- Legacy orphan IDs are cleared only in that case. A mismatched existing constraint
 -- is left for explicit operator repair instead of being dropped automatically.
-SET @firefly_comments_user_fk_present = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.TABLE_NAME = k.TABLE_NAME AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.CONSTRAINT_SCHEMA = DATABASE() AND k.TABLE_NAME = 'comments' AND k.COLUMN_NAME = 'user_id' AND k.REFERENCED_TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME = 'comment_users' AND k.REFERENCED_COLUMN_NAME = 'id' AND r.DELETE_RULE = 'SET NULL' AND (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE member WHERE member.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND member.TABLE_NAME = k.TABLE_NAME AND member.CONSTRAINT_NAME = k.CONSTRAINT_NAME) = 1);
-SET @firefly_comments_user_fk_count = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'user_id' AND REFERENCED_TABLE_NAME IS NOT NULL);
-SET @firefly_comments_user_fixed_name_count = (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fk_comments_user');
+SET @blog_comments_user_fk_present = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.TABLE_NAME = k.TABLE_NAME AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.CONSTRAINT_SCHEMA = DATABASE() AND k.TABLE_NAME = 'comments' AND k.COLUMN_NAME = 'user_id' AND k.REFERENCED_TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME = 'comment_users' AND k.REFERENCED_COLUMN_NAME = 'id' AND r.DELETE_RULE = 'SET NULL' AND (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE member WHERE member.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND member.TABLE_NAME = k.TABLE_NAME AND member.CONSTRAINT_NAME = k.CONSTRAINT_NAME) = 1);
+SET @blog_comments_user_fk_count = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'user_id' AND REFERENCED_TABLE_NAME IS NOT NULL);
+SET @blog_comments_user_fixed_name_count = (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fk_comments_user');
 -- The deliberately unknown identifiers abort PREPARE on a conflict without
 -- requiring CREATE ROUTINE privileges or leaving a persistent helper object.
-SET @firefly_comments_user_fk_validation_sql = CASE WHEN @firefly_comments_user_fk_present > 1 THEN 'SELECT `ff_abort_comments_user_multiple_fks`' WHEN @firefly_comments_user_fk_count > @firefly_comments_user_fk_present THEN 'SELECT `ff_abort_comments_user_conflicting_fk`' WHEN @firefly_comments_user_fk_present = 0 AND @firefly_comments_user_fixed_name_count > 0 THEN 'SELECT `ff_abort_comments_user_fk_name_occupied`' ELSE 'SELECT 1' END;
-PREPARE firefly_comments_user_fk_validation_statement FROM @firefly_comments_user_fk_validation_sql; EXECUTE firefly_comments_user_fk_validation_statement; DEALLOCATE PREPARE firefly_comments_user_fk_validation_statement;
-SET @firefly_comments_user_fk_cleanup_sql = IF(@firefly_comments_user_fk_present = 0, 'UPDATE comments c LEFT JOIN comment_users p ON p.id = c.user_id SET c.user_id = NULL WHERE c.user_id IS NOT NULL AND p.id IS NULL', 'SELECT 1');
-PREPARE firefly_comments_user_fk_cleanup_statement FROM @firefly_comments_user_fk_cleanup_sql; EXECUTE firefly_comments_user_fk_cleanup_statement; DEALLOCATE PREPARE firefly_comments_user_fk_cleanup_statement;
-SET @firefly_comments_user_fk_add_sql = IF(@firefly_comments_user_fk_present = 0, 'ALTER TABLE comments ADD CONSTRAINT fk_comments_user FOREIGN KEY (user_id) REFERENCES comment_users(id) ON DELETE SET NULL', 'SELECT 1');
-PREPARE firefly_comments_user_fk_add_statement FROM @firefly_comments_user_fk_add_sql; EXECUTE firefly_comments_user_fk_add_statement; DEALLOCATE PREPARE firefly_comments_user_fk_add_statement;
-SET @firefly_comments_parent_fk_present = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.TABLE_NAME = k.TABLE_NAME AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.CONSTRAINT_SCHEMA = DATABASE() AND k.TABLE_NAME = 'comments' AND k.COLUMN_NAME = 'parent_id' AND k.REFERENCED_TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME = 'comments' AND k.REFERENCED_COLUMN_NAME = 'id' AND r.DELETE_RULE = 'SET NULL' AND (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE member WHERE member.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND member.TABLE_NAME = k.TABLE_NAME AND member.CONSTRAINT_NAME = k.CONSTRAINT_NAME) = 1);
-SET @firefly_comments_parent_fk_count = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'parent_id' AND REFERENCED_TABLE_NAME IS NOT NULL);
-SET @firefly_comments_parent_fixed_name_count = (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fk_comments_parent');
-SET @firefly_comments_parent_fk_validation_sql = CASE WHEN @firefly_comments_parent_fk_present > 1 THEN 'SELECT `ff_abort_comments_parent_multiple_fks`' WHEN @firefly_comments_parent_fk_count > @firefly_comments_parent_fk_present THEN 'SELECT `ff_abort_comments_parent_conflicting_fk`' WHEN @firefly_comments_parent_fk_present = 0 AND @firefly_comments_parent_fixed_name_count > 0 THEN 'SELECT `ff_abort_comments_parent_fk_name_occupied`' ELSE 'SELECT 1' END;
-PREPARE firefly_comments_parent_fk_validation_statement FROM @firefly_comments_parent_fk_validation_sql; EXECUTE firefly_comments_parent_fk_validation_statement; DEALLOCATE PREPARE firefly_comments_parent_fk_validation_statement;
-SET @firefly_comments_parent_fk_cleanup_sql = IF(@firefly_comments_parent_fk_present = 0, 'UPDATE comments c LEFT JOIN comments p ON p.id = c.parent_id SET c.parent_id = NULL WHERE c.parent_id IS NOT NULL AND p.id IS NULL', 'SELECT 1');
-PREPARE firefly_comments_parent_fk_cleanup_statement FROM @firefly_comments_parent_fk_cleanup_sql; EXECUTE firefly_comments_parent_fk_cleanup_statement; DEALLOCATE PREPARE firefly_comments_parent_fk_cleanup_statement;
-SET @firefly_comments_parent_fk_add_sql = IF(@firefly_comments_parent_fk_present = 0, 'ALTER TABLE comments ADD CONSTRAINT fk_comments_parent FOREIGN KEY (parent_id) REFERENCES comments(id) ON DELETE SET NULL', 'SELECT 1');
-PREPARE firefly_comments_parent_fk_add_statement FROM @firefly_comments_parent_fk_add_sql; EXECUTE firefly_comments_parent_fk_add_statement; DEALLOCATE PREPARE firefly_comments_parent_fk_add_statement;
-SET @firefly_comments_sticker_fk_present = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.TABLE_NAME = k.TABLE_NAME AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.CONSTRAINT_SCHEMA = DATABASE() AND k.TABLE_NAME = 'comments' AND k.COLUMN_NAME = 'sticker_id' AND k.REFERENCED_TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME = 'comment_stickers' AND k.REFERENCED_COLUMN_NAME = 'id' AND r.DELETE_RULE = 'SET NULL' AND (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE member WHERE member.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND member.TABLE_NAME = k.TABLE_NAME AND member.CONSTRAINT_NAME = k.CONSTRAINT_NAME) = 1);
-SET @firefly_comments_sticker_fk_count = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'sticker_id' AND REFERENCED_TABLE_NAME IS NOT NULL);
-SET @firefly_comments_sticker_fixed_name_count = (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fk_comments_sticker');
-SET @firefly_comments_sticker_fk_validation_sql = CASE WHEN @firefly_comments_sticker_fk_present > 1 THEN 'SELECT `ff_abort_comments_sticker_multiple_fks`' WHEN @firefly_comments_sticker_fk_count > @firefly_comments_sticker_fk_present THEN 'SELECT `ff_abort_comments_sticker_conflicting_fk`' WHEN @firefly_comments_sticker_fk_present = 0 AND @firefly_comments_sticker_fixed_name_count > 0 THEN 'SELECT `ff_abort_comments_sticker_fk_name_occupied`' ELSE 'SELECT 1' END;
-PREPARE firefly_comments_sticker_fk_validation_statement FROM @firefly_comments_sticker_fk_validation_sql; EXECUTE firefly_comments_sticker_fk_validation_statement; DEALLOCATE PREPARE firefly_comments_sticker_fk_validation_statement;
-SET @firefly_comments_sticker_fk_cleanup_sql = IF(@firefly_comments_sticker_fk_present = 0, 'UPDATE comments c LEFT JOIN comment_stickers p ON p.id = c.sticker_id SET c.sticker_id = NULL WHERE c.sticker_id IS NOT NULL AND p.id IS NULL', 'SELECT 1');
-PREPARE firefly_comments_sticker_fk_cleanup_statement FROM @firefly_comments_sticker_fk_cleanup_sql; EXECUTE firefly_comments_sticker_fk_cleanup_statement; DEALLOCATE PREPARE firefly_comments_sticker_fk_cleanup_statement;
-SET @firefly_comments_sticker_fk_add_sql = IF(@firefly_comments_sticker_fk_present = 0, 'ALTER TABLE comments ADD CONSTRAINT fk_comments_sticker FOREIGN KEY (sticker_id) REFERENCES comment_stickers(id) ON DELETE SET NULL', 'SELECT 1');
-PREPARE firefly_comments_sticker_fk_add_statement FROM @firefly_comments_sticker_fk_add_sql; EXECUTE firefly_comments_sticker_fk_add_statement; DEALLOCATE PREPARE firefly_comments_sticker_fk_add_statement;
-SET @firefly_comments_personal_sticker_fk_present = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.TABLE_NAME = k.TABLE_NAME AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.CONSTRAINT_SCHEMA = DATABASE() AND k.TABLE_NAME = 'comments' AND k.COLUMN_NAME = 'personal_sticker_id' AND k.REFERENCED_TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME = 'comment_user_stickers' AND k.REFERENCED_COLUMN_NAME = 'id' AND r.DELETE_RULE = 'SET NULL' AND (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE member WHERE member.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND member.TABLE_NAME = k.TABLE_NAME AND member.CONSTRAINT_NAME = k.CONSTRAINT_NAME) = 1);
-SET @firefly_comments_personal_sticker_fk_count = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'personal_sticker_id' AND REFERENCED_TABLE_NAME IS NOT NULL);
-SET @firefly_comments_personal_sticker_fixed_name_count = (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fk_comments_personal_sticker');
-SET @firefly_comments_personal_sticker_fk_validation_sql = CASE WHEN @firefly_comments_personal_sticker_fk_present > 1 THEN 'SELECT `ff_abort_comments_personal_sticker_multiple_fks`' WHEN @firefly_comments_personal_sticker_fk_count > @firefly_comments_personal_sticker_fk_present THEN 'SELECT `ff_abort_comments_personal_sticker_conflicting_fk`' WHEN @firefly_comments_personal_sticker_fk_present = 0 AND @firefly_comments_personal_sticker_fixed_name_count > 0 THEN 'SELECT `ff_abort_comments_personal_sticker_fk_name_occupied`' ELSE 'SELECT 1' END;
-PREPARE firefly_comments_personal_sticker_fk_validation_statement FROM @firefly_comments_personal_sticker_fk_validation_sql; EXECUTE firefly_comments_personal_sticker_fk_validation_statement; DEALLOCATE PREPARE firefly_comments_personal_sticker_fk_validation_statement;
-SET @firefly_comments_personal_sticker_fk_cleanup_sql = IF(@firefly_comments_personal_sticker_fk_present = 0, 'UPDATE comments c LEFT JOIN comment_user_stickers p ON p.id = c.personal_sticker_id SET c.personal_sticker_id = NULL WHERE c.personal_sticker_id IS NOT NULL AND p.id IS NULL', 'SELECT 1');
-PREPARE firefly_comments_personal_sticker_fk_cleanup_statement FROM @firefly_comments_personal_sticker_fk_cleanup_sql; EXECUTE firefly_comments_personal_sticker_fk_cleanup_statement; DEALLOCATE PREPARE firefly_comments_personal_sticker_fk_cleanup_statement;
-SET @firefly_comments_personal_sticker_fk_add_sql = IF(@firefly_comments_personal_sticker_fk_present = 0, 'ALTER TABLE comments ADD CONSTRAINT fk_comments_personal_sticker FOREIGN KEY (personal_sticker_id) REFERENCES comment_user_stickers(id) ON DELETE SET NULL', 'SELECT 1');
-PREPARE firefly_comments_personal_sticker_fk_add_statement FROM @firefly_comments_personal_sticker_fk_add_sql; EXECUTE firefly_comments_personal_sticker_fk_add_statement; DEALLOCATE PREPARE firefly_comments_personal_sticker_fk_add_statement;
-SET @firefly_comment_parent_index_sql = IF((SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND INDEX_NAME = 'idx_comments_parent') = 0, 'ALTER TABLE comments ADD INDEX idx_comments_parent (parent_id)', 'SELECT 1');
-PREPARE firefly_comment_parent_index_statement FROM @firefly_comment_parent_index_sql; EXECUTE firefly_comment_parent_index_statement; DEALLOCATE PREPARE firefly_comment_parent_index_statement;
-SET @firefly_comment_user_index_sql = IF((SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND INDEX_NAME = 'idx_comments_user') = 0, 'ALTER TABLE comments ADD INDEX idx_comments_user (user_id)', 'SELECT 1');
-PREPARE firefly_comment_user_index_statement FROM @firefly_comment_user_index_sql; EXECUTE firefly_comment_user_index_statement; DEALLOCATE PREPARE firefly_comment_user_index_statement;
+SET @blog_comments_user_fk_validation_sql = CASE WHEN @blog_comments_user_fk_present > 1 THEN 'SELECT `ff_abort_comments_user_multiple_fks`' WHEN @blog_comments_user_fk_count > @blog_comments_user_fk_present THEN 'SELECT `ff_abort_comments_user_conflicting_fk`' WHEN @blog_comments_user_fk_present = 0 AND @blog_comments_user_fixed_name_count > 0 THEN 'SELECT `ff_abort_comments_user_fk_name_occupied`' ELSE 'SELECT 1' END;
+PREPARE blog_comments_user_fk_validation_statement FROM @blog_comments_user_fk_validation_sql; EXECUTE blog_comments_user_fk_validation_statement; DEALLOCATE PREPARE blog_comments_user_fk_validation_statement;
+SET @blog_comments_user_fk_cleanup_sql = IF(@blog_comments_user_fk_present = 0, 'UPDATE comments c LEFT JOIN comment_users p ON p.id = c.user_id SET c.user_id = NULL WHERE c.user_id IS NOT NULL AND p.id IS NULL', 'SELECT 1');
+PREPARE blog_comments_user_fk_cleanup_statement FROM @blog_comments_user_fk_cleanup_sql; EXECUTE blog_comments_user_fk_cleanup_statement; DEALLOCATE PREPARE blog_comments_user_fk_cleanup_statement;
+SET @blog_comments_user_fk_add_sql = IF(@blog_comments_user_fk_present = 0, 'ALTER TABLE comments ADD CONSTRAINT fk_comments_user FOREIGN KEY (user_id) REFERENCES comment_users(id) ON DELETE SET NULL', 'SELECT 1');
+PREPARE blog_comments_user_fk_add_statement FROM @blog_comments_user_fk_add_sql; EXECUTE blog_comments_user_fk_add_statement; DEALLOCATE PREPARE blog_comments_user_fk_add_statement;
+SET @blog_comments_parent_fk_present = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.TABLE_NAME = k.TABLE_NAME AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.CONSTRAINT_SCHEMA = DATABASE() AND k.TABLE_NAME = 'comments' AND k.COLUMN_NAME = 'parent_id' AND k.REFERENCED_TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME = 'comments' AND k.REFERENCED_COLUMN_NAME = 'id' AND r.DELETE_RULE = 'SET NULL' AND (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE member WHERE member.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND member.TABLE_NAME = k.TABLE_NAME AND member.CONSTRAINT_NAME = k.CONSTRAINT_NAME) = 1);
+SET @blog_comments_parent_fk_count = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'parent_id' AND REFERENCED_TABLE_NAME IS NOT NULL);
+SET @blog_comments_parent_fixed_name_count = (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fk_comments_parent');
+SET @blog_comments_parent_fk_validation_sql = CASE WHEN @blog_comments_parent_fk_present > 1 THEN 'SELECT `ff_abort_comments_parent_multiple_fks`' WHEN @blog_comments_parent_fk_count > @blog_comments_parent_fk_present THEN 'SELECT `ff_abort_comments_parent_conflicting_fk`' WHEN @blog_comments_parent_fk_present = 0 AND @blog_comments_parent_fixed_name_count > 0 THEN 'SELECT `ff_abort_comments_parent_fk_name_occupied`' ELSE 'SELECT 1' END;
+PREPARE blog_comments_parent_fk_validation_statement FROM @blog_comments_parent_fk_validation_sql; EXECUTE blog_comments_parent_fk_validation_statement; DEALLOCATE PREPARE blog_comments_parent_fk_validation_statement;
+SET @blog_comments_parent_fk_cleanup_sql = IF(@blog_comments_parent_fk_present = 0, 'UPDATE comments c LEFT JOIN comments p ON p.id = c.parent_id SET c.parent_id = NULL WHERE c.parent_id IS NOT NULL AND p.id IS NULL', 'SELECT 1');
+PREPARE blog_comments_parent_fk_cleanup_statement FROM @blog_comments_parent_fk_cleanup_sql; EXECUTE blog_comments_parent_fk_cleanup_statement; DEALLOCATE PREPARE blog_comments_parent_fk_cleanup_statement;
+SET @blog_comments_parent_fk_add_sql = IF(@blog_comments_parent_fk_present = 0, 'ALTER TABLE comments ADD CONSTRAINT fk_comments_parent FOREIGN KEY (parent_id) REFERENCES comments(id) ON DELETE SET NULL', 'SELECT 1');
+PREPARE blog_comments_parent_fk_add_statement FROM @blog_comments_parent_fk_add_sql; EXECUTE blog_comments_parent_fk_add_statement; DEALLOCATE PREPARE blog_comments_parent_fk_add_statement;
+SET @blog_comments_sticker_fk_present = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.TABLE_NAME = k.TABLE_NAME AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.CONSTRAINT_SCHEMA = DATABASE() AND k.TABLE_NAME = 'comments' AND k.COLUMN_NAME = 'sticker_id' AND k.REFERENCED_TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME = 'comment_stickers' AND k.REFERENCED_COLUMN_NAME = 'id' AND r.DELETE_RULE = 'SET NULL' AND (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE member WHERE member.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND member.TABLE_NAME = k.TABLE_NAME AND member.CONSTRAINT_NAME = k.CONSTRAINT_NAME) = 1);
+SET @blog_comments_sticker_fk_count = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'sticker_id' AND REFERENCED_TABLE_NAME IS NOT NULL);
+SET @blog_comments_sticker_fixed_name_count = (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fk_comments_sticker');
+SET @blog_comments_sticker_fk_validation_sql = CASE WHEN @blog_comments_sticker_fk_present > 1 THEN 'SELECT `ff_abort_comments_sticker_multiple_fks`' WHEN @blog_comments_sticker_fk_count > @blog_comments_sticker_fk_present THEN 'SELECT `ff_abort_comments_sticker_conflicting_fk`' WHEN @blog_comments_sticker_fk_present = 0 AND @blog_comments_sticker_fixed_name_count > 0 THEN 'SELECT `ff_abort_comments_sticker_fk_name_occupied`' ELSE 'SELECT 1' END;
+PREPARE blog_comments_sticker_fk_validation_statement FROM @blog_comments_sticker_fk_validation_sql; EXECUTE blog_comments_sticker_fk_validation_statement; DEALLOCATE PREPARE blog_comments_sticker_fk_validation_statement;
+SET @blog_comments_sticker_fk_cleanup_sql = IF(@blog_comments_sticker_fk_present = 0, 'UPDATE comments c LEFT JOIN comment_stickers p ON p.id = c.sticker_id SET c.sticker_id = NULL WHERE c.sticker_id IS NOT NULL AND p.id IS NULL', 'SELECT 1');
+PREPARE blog_comments_sticker_fk_cleanup_statement FROM @blog_comments_sticker_fk_cleanup_sql; EXECUTE blog_comments_sticker_fk_cleanup_statement; DEALLOCATE PREPARE blog_comments_sticker_fk_cleanup_statement;
+SET @blog_comments_sticker_fk_add_sql = IF(@blog_comments_sticker_fk_present = 0, 'ALTER TABLE comments ADD CONSTRAINT fk_comments_sticker FOREIGN KEY (sticker_id) REFERENCES comment_stickers(id) ON DELETE SET NULL', 'SELECT 1');
+PREPARE blog_comments_sticker_fk_add_statement FROM @blog_comments_sticker_fk_add_sql; EXECUTE blog_comments_sticker_fk_add_statement; DEALLOCATE PREPARE blog_comments_sticker_fk_add_statement;
+SET @blog_comments_personal_sticker_fk_present = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.TABLE_NAME = k.TABLE_NAME AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.CONSTRAINT_SCHEMA = DATABASE() AND k.TABLE_NAME = 'comments' AND k.COLUMN_NAME = 'personal_sticker_id' AND k.REFERENCED_TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME = 'comment_user_stickers' AND k.REFERENCED_COLUMN_NAME = 'id' AND r.DELETE_RULE = 'SET NULL' AND (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE member WHERE member.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND member.TABLE_NAME = k.TABLE_NAME AND member.CONSTRAINT_NAME = k.CONSTRAINT_NAME) = 1);
+SET @blog_comments_personal_sticker_fk_count = (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND COLUMN_NAME = 'personal_sticker_id' AND REFERENCED_TABLE_NAME IS NOT NULL);
+SET @blog_comments_personal_sticker_fixed_name_count = (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fk_comments_personal_sticker');
+SET @blog_comments_personal_sticker_fk_validation_sql = CASE WHEN @blog_comments_personal_sticker_fk_present > 1 THEN 'SELECT `ff_abort_comments_personal_sticker_multiple_fks`' WHEN @blog_comments_personal_sticker_fk_count > @blog_comments_personal_sticker_fk_present THEN 'SELECT `ff_abort_comments_personal_sticker_conflicting_fk`' WHEN @blog_comments_personal_sticker_fk_present = 0 AND @blog_comments_personal_sticker_fixed_name_count > 0 THEN 'SELECT `ff_abort_comments_personal_sticker_fk_name_occupied`' ELSE 'SELECT 1' END;
+PREPARE blog_comments_personal_sticker_fk_validation_statement FROM @blog_comments_personal_sticker_fk_validation_sql; EXECUTE blog_comments_personal_sticker_fk_validation_statement; DEALLOCATE PREPARE blog_comments_personal_sticker_fk_validation_statement;
+SET @blog_comments_personal_sticker_fk_cleanup_sql = IF(@blog_comments_personal_sticker_fk_present = 0, 'UPDATE comments c LEFT JOIN comment_user_stickers p ON p.id = c.personal_sticker_id SET c.personal_sticker_id = NULL WHERE c.personal_sticker_id IS NOT NULL AND p.id IS NULL', 'SELECT 1');
+PREPARE blog_comments_personal_sticker_fk_cleanup_statement FROM @blog_comments_personal_sticker_fk_cleanup_sql; EXECUTE blog_comments_personal_sticker_fk_cleanup_statement; DEALLOCATE PREPARE blog_comments_personal_sticker_fk_cleanup_statement;
+SET @blog_comments_personal_sticker_fk_add_sql = IF(@blog_comments_personal_sticker_fk_present = 0, 'ALTER TABLE comments ADD CONSTRAINT fk_comments_personal_sticker FOREIGN KEY (personal_sticker_id) REFERENCES comment_user_stickers(id) ON DELETE SET NULL', 'SELECT 1');
+PREPARE blog_comments_personal_sticker_fk_add_statement FROM @blog_comments_personal_sticker_fk_add_sql; EXECUTE blog_comments_personal_sticker_fk_add_statement; DEALLOCATE PREPARE blog_comments_personal_sticker_fk_add_statement;
+SET @blog_comment_parent_index_sql = IF((SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND INDEX_NAME = 'idx_comments_parent') = 0, 'ALTER TABLE comments ADD INDEX idx_comments_parent (parent_id)', 'SELECT 1');
+PREPARE blog_comment_parent_index_statement FROM @blog_comment_parent_index_sql; EXECUTE blog_comment_parent_index_statement; DEALLOCATE PREPARE blog_comment_parent_index_statement;
+SET @blog_comment_user_index_sql = IF((SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'comments' AND INDEX_NAME = 'idx_comments_user') = 0, 'ALTER TABLE comments ADD INDEX idx_comments_user (user_id)', 'SELECT 1');
+PREPARE blog_comment_user_index_statement FROM @blog_comment_user_index_sql; EXECUTE blog_comment_user_index_statement; DEALLOCATE PREPARE blog_comment_user_index_statement;
 
 CREATE TABLE IF NOT EXISTS site_settings (
   setting_key VARCHAR(100) NOT NULL PRIMARY KEY,
@@ -565,23 +565,23 @@ CREATE TABLE IF NOT EXISTS admin_drive_files (
   CONSTRAINT fk_admin_drive_owner FOREIGN KEY (owner_admin_id) REFERENCES admin_users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-SET @firefly_drive_access_password_sql = IF(
+SET @blog_drive_access_password_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_drive_files' AND COLUMN_NAME = 'access_password_hash') = 0,
   'ALTER TABLE admin_drive_files ADD COLUMN access_password_hash VARCHAR(255) NULL AFTER public_token',
   'SELECT 1'
 );
-PREPARE firefly_drive_access_password_statement FROM @firefly_drive_access_password_sql;
-EXECUTE firefly_drive_access_password_statement;
-DEALLOCATE PREPARE firefly_drive_access_password_statement;
+PREPARE blog_drive_access_password_statement FROM @blog_drive_access_password_sql;
+EXECUTE blog_drive_access_password_statement;
+DEALLOCATE PREPARE blog_drive_access_password_statement;
 
-SET @firefly_drive_access_hint_sql = IF(
+SET @blog_drive_access_hint_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_drive_files' AND COLUMN_NAME = 'access_password_hint') = 0,
   'ALTER TABLE admin_drive_files ADD COLUMN access_password_hint VARCHAR(40) NULL AFTER access_password_hash',
   'SELECT 1'
 );
-PREPARE firefly_drive_access_hint_statement FROM @firefly_drive_access_hint_sql;
-EXECUTE firefly_drive_access_hint_statement;
-DEALLOCATE PREPARE firefly_drive_access_hint_statement;
+PREPARE blog_drive_access_hint_statement FROM @blog_drive_access_hint_sql;
+EXECUTE blog_drive_access_hint_statement;
+DEALLOCATE PREPARE blog_drive_access_hint_statement;
 
 -- An in-progress upload. The file is appended in chunks so the browser can
 -- advance progress only after this server has stored those bytes.

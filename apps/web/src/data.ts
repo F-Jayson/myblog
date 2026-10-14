@@ -2,7 +2,7 @@ import type { Paginated, Post, PostSummary, SiteData } from "./types";
 
 const tags = [
 	{ id: 6, name: "Markdown", slug: "markdown", postCount: 9 },
-	{ id: 7, name: "Firefly", slug: "firefly", postCount: 8 },
+	{ id: 7, name: "Jayson", slug: "journal", postCount: 8 },
 	{ id: 14, name: "示例", slug: "example", postCount: 7 },
 	{ id: 8, name: "博客", slug: "blog", postCount: 4 },
 	{ id: 11, name: "指南", slug: "guide", postCount: 2 },
@@ -24,7 +24,7 @@ const tags = [
 
 const categories = [
 	{ id: 4, name: "文章示例", slug: "examples", description: "Markdown、代码块和主题功能示例", postCount: 10 },
-	{ id: 1, name: "博客指南", slug: "guide", description: "Firefly 的使用指南与布局说明", postCount: 3 },
+	{ id: 1, name: "博客指南", slug: "guide", description: "Jayson's Blog 的使用指南与布局说明", postCount: 3 },
 ];
 
 const tag = (slug: string) => {
@@ -42,12 +42,12 @@ const category = (slug: string) => {
 const summaries: PostSummary[] = [
 	{
 		id: 4,
-		slug: "firefly",
-		title: "Firefly 一款清新美观的 Astro 博客主题模板",
-		excerpt: "Firefly 是一款基于 Astro 框架和 Fuwari 模板开发的清新美观且现代化个人博客主题模板，专为技术爱好者和内容创作者设计。",
-		cover: "/images/posts/firefly2.avif",
+		slug: "journal",
+		title: "Jayson's Blog 一款清新美观的 Astro 博客主题模板",
+		excerpt: "Jayson's Blog 是一款基于 Astro 框架和 Fuwari 模板开发的清新美观且现代化个人博客主题模板，专为技术爱好者和内容创作者设计。",
+		cover: "/images/posts/post-cover-2.avif",
 		category: category("examples"),
-		tags: [tag("markdown"), tag("firefly"), tag("blog"), tag("theme"), tag("template")],
+		tags: [tag("markdown"), tag("journal"), tag("blog"), tag("theme"), tag("template")],
 		pinned: true,
 		views: 128,
 		words: 640,
@@ -58,11 +58,11 @@ const summaries: PostSummary[] = [
 	{
 		id: 5,
 		slug: "guide/index",
-		title: "Firefly 简单使用指南",
-		excerpt: "如何使用 Firefly 博客模板。",
+		title: "Jayson's Blog 简单使用指南",
+		excerpt: "如何使用 Jayson's Blog 博客模板。",
 		cover: "/images/posts/guide-cover.avif",
 		category: category("guide"),
-		tags: [tag("markdown"), tag("firefly"), tag("blog"), tag("guide")],
+		tags: [tag("markdown"), tag("journal"), tag("blog"), tag("guide")],
 		pinned: true,
 		views: 96,
 		words: 430,
@@ -73,11 +73,11 @@ const summaries: PostSummary[] = [
 	{
 		id: 7,
 		slug: "code-examples",
-		title: "Firefly 代码块示例",
-		excerpt: "在 Firefly 中使用表达性代码块的 Markdown 示例。",
-		cover: "/images/posts/firefly3.avif",
+		title: "Jayson's Blog 代码块示例",
+		excerpt: "在 Jayson's Blog 中使用表达性代码块的 Markdown 示例。",
+		cover: "/images/posts/post-cover-3.avif",
 		category: category("examples"),
-		tags: [tag("markdown"), tag("firefly")],
+		tags: [tag("markdown"), tag("journal")],
 		pinned: false,
 		views: 64,
 		words: 780,
@@ -87,12 +87,12 @@ const summaries: PostSummary[] = [
 	},
 	{
 		id: 6,
-		slug: "guide/firefly-layout-system",
-		title: "Firefly 布局系统详解",
-		excerpt: "深入了解 Firefly 的布局系统，包括侧边栏布局（左侧/双侧）和文章列表布局（列表/网格），以及自适应网格列数。",
-		cover: "/images/posts/firefly1.avif",
+		slug: "guide/layout-system",
+		title: "Jayson's Blog 布局系统详解",
+		excerpt: "深入了解 Jayson's Blog 的布局系统，包括侧边栏布局（左侧/双侧）和文章列表布局（列表/网格），以及自适应网格列数。",
+		cover: "/images/posts/post-cover-1.avif",
 		category: category("guide"),
-		tags: [tag("astro"), tag("firefly"), tag("blog"), tag("guide"), tag("layout")],
+		tags: [tag("astro"), tag("journal"), tag("blog"), tag("guide"), tag("layout")],
 		pinned: false,
 		views: 91,
 		words: 900,
@@ -102,9 +102,9 @@ const summaries: PostSummary[] = [
 	},
 	{
 		id: 11,
-		slug: "guide/firefly-wiki-link",
-		title: "Firefly Wiki Link 内部链接示例",
-		excerpt: "在 Firefly 文章中使用 Obsidian 风格的 Wiki Link 内部链接，并自动生成文章链接卡片。",
+		slug: "guide/wiki-link",
+		title: "Jayson's Blog Wiki Link 内部链接示例",
+		excerpt: "在 Jayson's Blog 文章中使用 Obsidian 风格的 Wiki Link 内部链接，并自动生成文章链接卡片。",
 		cover: null,
 		category: category("guide"),
 		tags: [tag("markdown"), tag("example"), tag("obsidian"), tag("wiki-link")],
@@ -118,7 +118,7 @@ const summaries: PostSummary[] = [
 	{
 		id: 12,
 		slug: "encrypted-demo",
-		title: "Firefly 文章加密",
+		title: "Jayson's Blog 文章加密",
 		excerpt: "这是一篇密码保护的示例文章，用于演示文章加密功能。",
 		cover: null,
 		category: category("examples"),
@@ -134,7 +134,7 @@ const summaries: PostSummary[] = [
 		id: 13,
 		slug: "katex-math-example",
 		title: "KaTeX 数学公式示例",
-		excerpt: "展示 Firefly 主题对 KaTeX 数学公式的支持，包括行内公式、块级公式和复杂数学符号。",
+		excerpt: "展示 Jayson's Blog 主题对 KaTeX 数学公式的支持，包括行内公式、块级公式和复杂数学符号。",
 		cover: null,
 		category: category("examples"),
 		tags: [tag("example"), tag("katex"), tag("math")],
@@ -164,10 +164,10 @@ const summaries: PostSummary[] = [
 		id: 10,
 		slug: "markdown-extended",
 		title: "Markdown 扩展功能",
-		excerpt: "了解 Firefly 中的 Markdown 功能。",
+		excerpt: "了解 Jayson's Blog 中的 Markdown 功能。",
 		cover: null,
 		category: category("examples"),
-		tags: [tag("markdown"), tag("firefly"), tag("demo"), tag("example")],
+		tags: [tag("markdown"), tag("journal"), tag("demo"), tag("example")],
 		pinned: false,
 		views: 52,
 		words: 374,
@@ -182,7 +182,7 @@ const summaries: PostSummary[] = [
 		excerpt: "一个包含 Mermaid 的 Markdown 博客文章简单示例。",
 		cover: null,
 		category: category("examples"),
-		tags: [tag("markdown"), tag("firefly"), tag("blog"), tag("mermaid")],
+		tags: [tag("markdown"), tag("journal"), tag("blog"), tag("mermaid")],
 		pinned: false,
 		views: 20,
 		words: 280,
@@ -194,10 +194,10 @@ const summaries: PostSummary[] = [
 		id: 16,
 		slug: "markdown-plantuml",
 		title: "Markdown PlantUML 图表",
-		excerpt: "用于验证 Firefly 中 PlantUML 插件渲染、主题切换与交互能力的示例文章。",
+		excerpt: "用于验证 Jayson's Blog 中 PlantUML 插件渲染、主题切换与交互能力的示例文章。",
 		cover: null,
 		category: category("examples"),
-		tags: [tag("markdown"), tag("firefly"), tag("plantuml")],
+		tags: [tag("markdown"), tag("journal"), tag("plantuml")],
 		pinned: false,
 		views: 18,
 		words: 250,
@@ -227,7 +227,7 @@ const summaries: PostSummary[] = [
 		excerpt: "这篇文章演示如何在博客文章中嵌入视频。",
 		cover: null,
 		category: category("examples"),
-		tags: [tag("firefly"), tag("example"), tag("video")],
+		tags: [tag("journal"), tag("example"), tag("video")],
 		pinned: false,
 		views: 14,
 		words: 120,
@@ -238,11 +238,11 @@ const summaries: PostSummary[] = [
 ];
 
 const contentBySlug: Record<string, string> = {
-	firefly: `## 项目概述
+	journal: `## 项目概述
 
-Firefly 是一款基于 Astro 和 Fuwari 的清新美观博客主题模板，提供现代 Web 技术栈、响应式布局和高度可定制的界面。
+Jayson's Blog 是一款基于 Astro 和 Fuwari 的清新美观博客主题模板，提供现代 Web 技术栈、响应式布局和高度可定制的界面。
 
-**在线预览：** [Firefly Demo](https://firefly.cuteleaf.cn/)
+**在线预览：** [Jayson's Blog](https://blog.fjayson.com/)
 
 ## 技术架构
 
@@ -253,7 +253,7 @@ Firefly 是一款基于 Astro 和 Fuwari 的清新美观博客主题模板，提
 
 ## 配置说明
 
-详细配置可以参考 Firefly 使用文档。`,
+详细配置可以参考 Jayson's Blog 使用文档。`,
 	"guide/index": `## 开始使用
 
 这个博客模板基于 [Astro](https://astro.build/) 构建。文章内容放在 \`src/content/posts/\` 目录中，保存为 Markdown 文件即可。
@@ -273,9 +273,9 @@ category: 前端开发
 ## 自定义文章 URL
 
 可以通过 \`slug\` 字段为文章设置简洁、稳定的地址。更多配置请参考 Astro 文档。`,
-	"guide/firefly-layout-system": `## 概述
+	"guide/layout-system": `## 概述
 
-Firefly 提供灵活的布局系统，可以根据内容需求自定义侧边栏和文章列表。
+Jayson's Blog 提供灵活的布局系统，可以根据内容需求自定义侧边栏和文章列表。
 
 ## 侧边栏布局
 
@@ -288,14 +288,14 @@ Firefly 提供灵活的布局系统，可以根据内容需求自定义侧边栏
 ## 响应式行为
 
 屏幕变窄时网格列数会减少，双侧边栏会收起，页面自然变为单栏布局。`,
-	"guide/firefly-wiki-link": `## 文章链接卡片
+	"guide/wiki-link": `## 文章链接卡片
 
-Firefly 支持在 Markdown、MDX 文章中使用 Obsidian 风格的 Wiki Link 内部链接。
+Jayson's Blog 支持在 Markdown、MDX 文章中使用 Obsidian 风格的 Wiki Link 内部链接。
 
 \`[[slug]]\` 单独成段时，会读取目标文章信息并渲染为文章链接卡片；出现在正文中间时，则渲染为普通链接。`,
 	"code-examples": `## 表达性代码
 
-Firefly 支持在 Markdown 中展示带语法高亮的代码块。
+Jayson's Blog 支持在 Markdown 中展示带语法高亮的代码块。
 
 ### 语法高亮
 
@@ -319,7 +319,7 @@ export function greet(name) {
 这是密码保护文章的示例内容。文章内容在构建时加密，访客输入正确密码后才能查看。`,
 	"katex-math-example": `## 行内公式
 
-本文展示 Firefly 主题对数学公式的渲染支持。
+本文展示 Jayson's Blog 主题对数学公式的渲染支持。
 
 欧拉公式 $e^{i\\pi} + 1 = 0$ 是数学中最优美的公式之一。
 
@@ -330,7 +330,7 @@ $$
 $$`,
 	"mdx-example": `## MDX
 
-Firefly 支持 Markdown 和 MDX 两种类型的文章，可以在 Markdown 文档中混合使用 JSX 组件。
+Jayson's Blog 支持 Markdown 和 MDX 两种类型的文章，可以在 Markdown 文档中混合使用 JSX 组件。
 
 | 特性 | Markdown | MDX |
 | :--- | :--- | :--- |
@@ -384,7 +384,7 @@ export const fallbackPosts: Post[] = summaries.map((post) => ({
 }));
 
 export const fallbackSite: SiteData = {
-	title: "Firefly",
+	title: "Jayson's Blog",
 	subtitle: "Demo site",
 	description: "A calm personal blog built with React, Express and MySQL.",
 	siteFavicon: "",
@@ -394,7 +394,7 @@ export const fallbackSite: SiteData = {
 		position: "center 35%",
 	},
 	titleConfig: {
-		title: "Lovely firefly!",
+		title: "Jayson's Blog",
 		subtitle: "In Finalized Morrow, I Full Bloom",
 		subtitleMode: "text",
 		hitokotoApi: "https://v1.hitokoto.cn/?encode=json",
@@ -409,14 +409,14 @@ export const fallbackSite: SiteData = {
 		loop: false,
 	},
 	author: {
-		name: "Firefly",
-		bio: "Hello, I'm Firefly.",
+		name: "Jayson",
+		bio: "Hello, I'm Jayson.",
 		avatar: "/images/avatar.avif",
 		email: "hello@example.com",
 		githubUrl: "https://github.com/",
 		qqUrl: "https://wpa.qq.com/",
 		rssUrl: "/rss.xml",
-		links: [{ label: "Firefly 文档", url: "https://docs-firefly.cuteleaf.cn", icon: "book" }],
+		links: [{ label: "站点文档", url: "https://blog.fjayson.com/", icon: "book" }],
 	},
 	// Fallback posts are demonstration content with placeholder timestamps, so do
 	// not present their dates as a real deployment's activity history.
@@ -424,10 +424,10 @@ export const fallbackSite: SiteData = {
 	categories,
 	tags,
 	dynamics: [
-		{ id: 6, body: "飞萤之火自无梦的长夜亮起，绽放在终竟的明天。", images: ["/images/posts/firefly2.avif", "/images/posts/firefly3.avif"], publishedAt: "2026-07-15 16:15:29" },
+		{ id: 6, body: "记录技术与生活。", images: ["/images/posts/post-cover-2.avif", "/images/posts/post-cover-3.avif"], publishedAt: "2026-07-15 16:15:29" },
 		{ id: 5, body: "又是美好的一天！", publishedAt: "2026-07-15 02:11:27" },
 		{ id: 7, body: "这是一条测试动态！", publishedAt: "2026-07-15 02:06:13" },
-		{ id: 8, body: "今天天气真不错，流萤真可爱。", publishedAt: "2026-07-15 01:07:56" },
+		{ id: 8, body: "今天天气真不错。", publishedAt: "2026-07-15 01:07:56" },
 	],
 	hue: 165,
 };

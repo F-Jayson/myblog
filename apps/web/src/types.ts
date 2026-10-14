@@ -354,6 +354,9 @@ export type SiteData = {
 	description: string;
 	/** Optional public favicon configured from the site media settings. */
 	siteFavicon?: string;
+	/** Navigation mark beside the site title. Dark mode falls back to the light mark. */
+	siteLogo?: string;
+	siteLogoDark?: string;
 	hue: number;
 	author: {
 		name: string;

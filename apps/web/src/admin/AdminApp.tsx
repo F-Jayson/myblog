@@ -87,9 +87,56 @@ function resolveAdminMediaUrl(value: string | null | undefined) {
   if (/^\/api\/(?:uploads|public\/resources|user\/storage|admin\/user-space)(?:\/|$)/u.test(source)) return `${API_ORIGIN}${source}`;
   return source;
 }
-const ADMIN_REQUEST_ERROR_EVENT = "firefly-admin-request-error";
-const ADMIN_AUTH_EXPIRED_EVENT = "firefly-admin-auth-expired";
-const ADMIN_AUTH_MESSAGE_KEY = "firefly-admin-auth-message";
+
+const DEFAULT_BRAND_TITLE = "Jayson's Blog";
+const DEFAULT_BRAND_LOGO = "/images/logo/site-light.png";
+const DEFAULT_BRAND_LOGO_DARK = "/images/logo/site-dark.png";
+const SITE_BRAND_UPDATED_EVENT = "site-brand-updated";
+
+type SiteBrand = { title: string; logo: string };
+
+function brandFromSite(value: { title?: unknown; siteLogo?: unknown; siteLogoDark?: unknown } | null | undefined): SiteBrand {
+  const title = typeof value?.title === "string" && value.title.trim() ? value.title.trim() : DEFAULT_BRAND_TITLE;
+  const rawLogo = typeof value?.siteLogo === "string" && value.siteLogo.trim()
+    ? value.siteLogo
+    : typeof value?.siteLogoDark === "string"
+      ? value.siteLogoDark
+      : "";
+  const logo = resolveAdminMediaUrl(rawLogo);
+  return { title, logo: logo || DEFAULT_BRAND_LOGO };
+}
+
+function useSiteBrand() {
+  const [brand, setBrand] = useState<SiteBrand>({ title: DEFAULT_BRAND_TITLE, logo: DEFAULT_BRAND_LOGO });
+  useEffect(() => {
+    let active = true;
+    const apply = (value: { title?: unknown; siteLogo?: unknown; siteLogoDark?: unknown }) => {
+      if (active) setBrand(brandFromSite(value));
+    };
+    const load = () => {
+      void fetch(API_ORIGIN + "/api/site")
+        .then((response) => (response.ok ? response.json() : null))
+        .then((value) => {
+          if (value && typeof value === "object") apply(value as { title?: unknown; siteLogo?: unknown; siteLogoDark?: unknown });
+        })
+        .catch(() => undefined);
+    };
+    const onUpdate = (event: Event) => {
+      const detail = (event as CustomEvent<{ title?: unknown; siteLogo?: unknown; siteLogoDark?: unknown }>).detail;
+      if (detail) apply(detail);
+    };
+    load();
+    window.addEventListener(SITE_BRAND_UPDATED_EVENT, onUpdate);
+    return () => {
+      active = false;
+      window.removeEventListener(SITE_BRAND_UPDATED_EVENT, onUpdate);
+    };
+  }, []);
+  return brand;
+}
+const ADMIN_REQUEST_ERROR_EVENT = "site-admin-request-error";
+const ADMIN_AUTH_EXPIRED_EVENT = "site-admin-auth-expired";
+const ADMIN_AUTH_MESSAGE_KEY = "site-admin-auth-message";
 
 type AdminPost = Post & { status: "draft" | "published" };
 type AdminComment = {
@@ -193,6 +240,8 @@ type SiteSettingsForm = {
   hue: number;
   videoUploadMaxSizeMb: number;
   videoAutoTranscodeEnabled: boolean;
+  siteLogo: string;
+  siteLogoDark: string;
   siteFavicon: string;
   cover: {
     mode: "upload" | "url" | "api";
@@ -234,12 +283,14 @@ type SiteSettingsForm = {
 };
 
 const DEFAULT_SITE_SETTINGS: SiteSettingsForm = {
-  title: "Firefly",
-  subtitle: "飞萤之火，自无梦的长夜亮起。",
+  title: "Jayson's Blog",
+  subtitle: "记录技术与生活。",
   description: "",
   hue: 165,
   videoUploadMaxSizeMb: 1024,
   videoAutoTranscodeEnabled: false,
+  siteLogo: "",
+  siteLogoDark: "",
   siteFavicon: "",
   cover: {
     mode: "upload",
@@ -248,8 +299,8 @@ const DEFAULT_SITE_SETTINGS: SiteSettingsForm = {
     position: "50% 50%",
   },
   titleConfig: {
-    title: "Firefly",
-    subtitle: "飞萤之火，自无梦的长夜亮起。",
+    title: "Jayson's Blog",
+    subtitle: "记录技术与生活。",
     subtitleMode: "text",
     hitokotoApi: "https://v1.hitokoto.cn/?encode=json",
     titleFontUrl: "",
@@ -269,7 +320,7 @@ const DEFAULT_SITE_SETTINGS: SiteSettingsForm = {
     loop: true,
   },
   author: {
-    name: "Firefly",
+    name: "Jayson",
     bio: "记录生活与技术，也收藏沿途的光。",
     avatar: "",
     email: "",
@@ -311,7 +362,7 @@ async function adminRequest<T>(
   options: RequestInit = {},
   reportError = true,
 ): Promise<T> {
-  const token = sessionStorage.getItem("firefly-admin-token");
+  const token = sessionStorage.getItem("site-admin-token");
   const headers = new Headers(options.headers);
   if (
     options.body &&
@@ -335,8 +386,8 @@ async function adminRequest<T>(
     throw requestError;
   }
   if (response.status === 401) {
-    sessionStorage.removeItem("firefly-admin-token");
-    sessionStorage.removeItem("firefly-admin-username");
+    sessionStorage.removeItem("site-admin-token");
+    sessionStorage.removeItem("site-admin-username");
     sessionStorage.setItem(
       ADMIN_AUTH_MESSAGE_KEY,
       "登录状态已失效，请重新输入管理员账号和密码。",
@@ -643,8 +694,8 @@ function AdminLogin() {
         payload?.user?.username?.trim() || payload?.username?.trim() || username.trim();
       if (!sessionToken || !returnedUsername)
         throw new Error("登录响应无效，请联系系统管理员。");
-      sessionStorage.setItem("firefly-admin-token", sessionToken);
-      sessionStorage.setItem("firefly-admin-username", returnedUsername);
+      sessionStorage.setItem("site-admin-token", sessionToken);
+      sessionStorage.setItem("site-admin-username", returnedUsername);
       navigate("/admin");
     } catch (requestError) {
       setError(
@@ -659,7 +710,7 @@ function AdminLogin() {
       <div className="fa-login-visual">
         <div className="fa-login-orbit" />
         <div className="fa-login-copy">
-          <span className="fa-kicker">FIREFLY CONTENT STUDIO</span>
+          <span className="fa-kicker">JAYSON'S BLOG</span>
           <h1>让每一次记录，都有清晰的落点。</h1>
           <p>文章、公告、评论与站点设置，在一个安静而高效的工作区完成。</p>
         </div>
@@ -869,8 +920,9 @@ function pageMeta(path: string) {
 function AdminShell() {
   const location = useLocation();
   const navigate = useNavigate();
+  const brand = useSiteBrand();
   const administratorName =
-    sessionStorage.getItem("firefly-admin-username")?.trim() || "admin";
+    sessionStorage.getItem("site-admin-username")?.trim() || "admin";
   const [mobileMenu, setMobileMenu] = useState(false);
   const [licensesOpen, setLicensesOpen] = useState(false);
   const [requestError, setRequestError] = useState("");
@@ -890,7 +942,7 @@ function AdminShell() {
   }, [navigate]);
   const meta = pageMeta(location.pathname);
   const logout = () => {
-    const token = sessionStorage.getItem("firefly-admin-token");
+    const token = sessionStorage.getItem("site-admin-token");
     if (token) {
       void fetch(API_ORIGIN + "/api/admin/logout", {
         method: "POST",
@@ -898,8 +950,8 @@ function AdminShell() {
         keepalive: true,
       }).catch(() => undefined);
     }
-    sessionStorage.removeItem("firefly-admin-token");
-    sessionStorage.removeItem("firefly-admin-username");
+    sessionStorage.removeItem("site-admin-token");
+    sessionStorage.removeItem("site-admin-username");
     navigate("/admin/login");
   };
   let page: ReactNode = <AdminDashboard />;
@@ -930,7 +982,7 @@ function AdminShell() {
   else if (location.pathname !== "/admin")
     page = <AdminPlaceholder title={meta.label} description={meta.hint} />;
   return (
-    <div className="firefly-admin">
+    <div className="site-admin">
       {requestError ? (
         <div className="fa-request-error" role="alert">
           <span>{requestError}</span>
@@ -944,12 +996,20 @@ function AdminShell() {
         </div>
       ) : null}
       <aside className="fa-sidebar">
-        <Link to="/admin" className="fa-brand">
+        <Link to="/admin" className="fa-brand" aria-label={`${brand.title} 管理后台`}>
           <span className="fa-brand-mark">
-            <img src="/images/logo/firefly-light.png" alt="" />
+            <img
+              src={brand.logo}
+              alt=""
+              onError={(event) => {
+                if (event.currentTarget.dataset.fallback === "1") return;
+                event.currentTarget.dataset.fallback = "1";
+                event.currentTarget.src = DEFAULT_BRAND_LOGO;
+              }}
+            />
           </span>
           <span>
-            <strong>Firefly</strong>
+            <strong>{brand.title}</strong>
             <small>CONTENT STUDIO</small>
           </span>
         </Link>
@@ -1136,7 +1196,7 @@ function AdminDashboard() {
   }, []);
   const administratorName =
     dashboard?.administrator?.name ??
-    sessionStorage.getItem("firefly-admin-username")?.trim() ??
+    sessionStorage.getItem("site-admin-username")?.trim() ??
     "管理员";
   const database = dashboard?.database;
   const databaseDetails = database?.database;
@@ -2208,7 +2268,7 @@ function AdminDynamics() {
   const startEditing = (item: AdminDynamic) => {
     setEditingId(item.id);
     setImageSize(parseDynamicImageSize(item.body));
-    setBody(item.body.replace(/<!--\s*firefly:image-size=(small|medium|large)\s*-->/giu, "").trim());
+    setBody(item.body.replace(/<!--\s*image-size=(small|medium|large)\s*-->/giu, "").trim());
     setImages(item.images ?? []);
     setImageUrl("");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2421,7 +2481,7 @@ type AdminAuthorHeatmap = {
 };
 
 const EMPTY_AUTHOR_PROFILE: AdminAuthorProfileForm = {
-  name: "Firefly",
+  name: "Jayson",
   bio: "记录生活与技术，也收藏沿途的光。",
   avatar: "",
   email: "",
@@ -3283,7 +3343,7 @@ const DEFAULT_COMMENT_SETTINGS: CommentSettings = {
   smtpUsername: "",
   smtpPassword: "",
   senderEmail: "",
-  senderName: "Firefly",
+  senderName: "Jayson's Blog",
   notificationEmails: "",
   notifyNewUser: true,
   notifyNewComment: true,
@@ -3306,7 +3366,7 @@ function normalizeCommentSettings(value: unknown): CommentSettings {
     smtpHost: text("smtpHost", text("host", "")), smtpPort: Number(smtp.smtpPort ?? smtp.port ?? DEFAULT_COMMENT_SETTINGS.smtpPort) || DEFAULT_COMMENT_SETTINGS.smtpPort,
     smtpSecure: typeof smtp.smtpSecure === "boolean" ? smtp.smtpSecure : typeof smtp.secure === "boolean" ? smtp.secure : DEFAULT_COMMENT_SETTINGS.smtpSecure,
     smtpUsername: String(smtp.smtpUsername ?? smtp.username ?? ""), smtpPassword: String(smtp.smtpPassword ?? smtp.password ?? ""),
-    senderEmail: text("senderEmail", text("from", "")), senderName: text("senderName", "Firefly"),
+    senderEmail: text("senderEmail", text("from", "")), senderName: text("senderName", "Jayson's Blog"),
     notificationEmails: String(nested.notificationEmails ?? notifications.emails ?? ""),
     notifyNewUser: typeof notifications.notifyNewUser === "boolean" ? notifications.notifyNewUser : DEFAULT_COMMENT_SETTINGS.notifyNewUser,
     notifyNewComment: typeof notifications.notifyNewComment === "boolean" ? notifications.notifyNewComment : DEFAULT_COMMENT_SETTINGS.notifyNewComment,
@@ -3816,6 +3876,8 @@ function normalizeSiteSettings(value: unknown): SiteSettingsForm {
       DEFAULT_SITE_SETTINGS.videoAutoTranscodeEnabled,
       source.videoAutoTranscodeEnabled,
     ),
+    siteLogo: firstString("", source.siteLogo),
+    siteLogoDark: firstString("", source.siteLogoDark),
     siteFavicon: firstString("", source.siteFavicon, source.favicon),
     cover: {
       mode: coverMode === "url" || coverMode === "api" ? coverMode : "upload",
@@ -4135,7 +4197,7 @@ function MediaAssetPreview({
 }: {
   title: string;
   src: string;
-  kind: "avatar" | "favicon";
+  kind: "avatar" | "favicon" | "logo";
 }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [src]);
@@ -4251,7 +4313,7 @@ function normalizeAdminAccounts(value: unknown): AdminAccount[] {
 
 function AdminAccounts() {
   const administratorName =
-    sessionStorage.getItem("firefly-admin-username")?.trim() || "admin";
+    sessionStorage.getItem("site-admin-username")?.trim() || "admin";
   const [items, setItems] = useState<AdminAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState<AccountDialog | null>(null);
@@ -4620,6 +4682,8 @@ function AdminSiteSettings() {
         videoUploadMaxSizeMb: Math.round(
           boundedNumber(form.videoUploadMaxSizeMb, 1024, 1, 2048),
         ),
+        siteLogo: form.siteLogo.trim(),
+        siteLogoDark: form.siteLogoDark.trim(),
         siteFavicon: form.siteFavicon.trim(),
         indexImage: form.cover.value.trim(),
         topImageCropX: coverPosition(form.cover.position).x,
@@ -4642,6 +4706,13 @@ function AdminSiteSettings() {
         body: JSON.stringify(payload),
       });
       setForm(value ? normalizeSiteSettings(value) : payload);
+      window.dispatchEvent(new CustomEvent(SITE_BRAND_UPDATED_EVENT, {
+        detail: {
+          title: payload.title,
+          siteLogo: payload.siteLogo,
+          siteLogoDark: payload.siteLogoDark,
+        },
+      }));
       setSaved(true);
       window.setTimeout(() => setSaved(false), 1800);
     } catch (error) {
@@ -4923,6 +4994,22 @@ function AdminSiteSettings() {
                 </div>
 
                 <div className="fa-media-field-group">
+                  <label>浅色导航标志路径<input value={form.siteLogo} placeholder="/images/logo/site-light.png" onChange={(event) => setForm((current) => ({ ...current, siteLogo: event.target.value }))} /></label>
+                  <div className="fa-media-upload-row">
+                    <AdminMediaUpload kind="image" accept=".jpg,.jpeg,.png,.gif,.webp,.avif,.svg,image/jpeg,image/png,image/gif,image/webp,image/avif,image/svg+xml" label="上传浅色标志" disabled={mediaUploadsActive} onUploadingChange={handleMediaUploadingChange} onError={showUploadError} onUploaded={(url) => setForm((current) => ({ ...current, siteLogo: url }))} />
+                  </div>
+                  <small className="fa-field-note">显示在站点标题左侧。前台浅色模式和后台左上角共用这张图。留空则使用默认标志。</small>
+                </div>
+
+                <div className="fa-media-field-group">
+                  <label>深色导航标志路径<input value={form.siteLogoDark} placeholder="/images/logo/site-dark.png" onChange={(event) => setForm((current) => ({ ...current, siteLogoDark: event.target.value }))} /></label>
+                  <div className="fa-media-upload-row">
+                    <AdminMediaUpload kind="image" accept=".jpg,.jpeg,.png,.gif,.webp,.avif,.svg,image/jpeg,image/png,image/gif,image/webp,image/avif,image/svg+xml" label="上传深色标志" disabled={mediaUploadsActive} onUploadingChange={handleMediaUploadingChange} onError={showUploadError} onUploaded={(url) => setForm((current) => ({ ...current, siteLogoDark: url }))} />
+                  </div>
+                  <small className="fa-field-note">前台切换到深色模式时使用。留空时沿用浅色标志。</small>
+                </div>
+
+                <div className="fa-media-field-group">
                   <label>网站图标（Favicon）路径<input value={form.siteFavicon} placeholder="/images/favicon.ico" onChange={(event) => setForm((current) => ({ ...current, siteFavicon: event.target.value }))} /></label>
                   <div className="fa-media-upload-row">
                     <AdminMediaUpload kind="image" accept=".ico,.png,.svg,.webp,image/x-icon,image/vnd.microsoft.icon,image/png,image/svg+xml,image/webp" label="上传图标" disabled={mediaUploadsActive} onUploadingChange={handleMediaUploadingChange} onError={showUploadError} onUploaded={(url) => setForm((current) => ({ ...current, siteFavicon: url }))} />
@@ -4951,6 +5038,8 @@ function AdminSiteSettings() {
                 <div className="fa-media-asset-previews">
                   <MediaAssetPreview title="头像预览" src={resolveAdminMediaUrl(form.author.avatar)} kind="avatar" />
                   <MediaAssetPreview title="网站图标预览" src={resolveAdminMediaUrl(form.siteFavicon)} kind="favicon" />
+                  <MediaAssetPreview title="浅色导航标志" src={resolveAdminMediaUrl(form.siteLogo) || DEFAULT_BRAND_LOGO} kind="logo" />
+                  <MediaAssetPreview title="深色导航标志" src={resolveAdminMediaUrl(form.siteLogoDark) || DEFAULT_BRAND_LOGO_DARK} kind="logo" />
                 </div>
               </aside>
             </div>
@@ -5542,7 +5631,7 @@ function AdminPlaceholder({
 export default function AdminApp() {
   const location = useLocation();
   if (location.pathname === "/admin/login") return <AdminLogin />;
-  if (!sessionStorage.getItem("firefly-admin-token"))
+  if (!sessionStorage.getItem("site-admin-token"))
     return <Navigate to="/admin/login" replace />;
   return <AdminShell />;
 }

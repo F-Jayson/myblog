@@ -72,18 +72,18 @@ const languages: readonly CompilerLanguage[] = Object.freeze([
 	{ id: "python", name: "Python 3", extension: "py", mode: "python", image: "python:3.12-alpine", run: ["python3", "main.py"], debug: "python-trace" },
 	{ id: "javascript", name: "JavaScript (Node.js)", extension: "js", mode: "javascript", image: "node:22-alpine", run: ["node", "main.js"], debug: "node-inspector" },
 	{ id: "typescript", name: "TypeScript", extension: "ts", mode: "typescript", image: "node:22-alpine", run: ["node", "--experimental-strip-types", "main.ts"], debug: "node-inspector" },
-	{ id: "java", name: "Java", extension: "java", mode: "java", image: "eclipse-temurin:21-jdk-alpine", run: ["sh", "-c", "mkdir -p /tmp/firefly-java && javac -d /tmp/firefly-java Main.java && java -cp /tmp/firefly-java Main"] },
-	{ id: "c", name: "C (GCC)", extension: "c", mode: "c", image: "gcc:14-bookworm", run: ["sh", "-c", "gcc main.c -O2 -o /tmp/firefly-main && /tmp/firefly-main"] },
-	{ id: "cpp", name: "C++ (G++)", extension: "cpp", mode: "cpp", image: "gcc:14-bookworm", run: ["sh", "-c", "g++ main.cpp -O2 -std=c++20 -o /tmp/firefly-main && /tmp/firefly-main"] },
-	{ id: "csharp", name: "C# (.NET)", extension: "cs", mode: "csharp", image: "mcr.microsoft.com/dotnet/sdk:8.0-alpine", run: ["sh", "-c", "dotnet new console -o /tmp/firefly-app --force >/dev/null && cp /workspace/main.cs /tmp/firefly-app/Program.cs && dotnet run --project /tmp/firefly-app --nologo --property:UseAppHost=false"] },
+	{ id: "java", name: "Java", extension: "java", mode: "java", image: "eclipse-temurin:21-jdk-alpine", run: ["sh", "-c", "mkdir -p /tmp/blog-java && javac -d /tmp/blog-java Main.java && java -cp /tmp/blog-java Main"] },
+	{ id: "c", name: "C (GCC)", extension: "c", mode: "c", image: "gcc:14-bookworm", run: ["sh", "-c", "gcc main.c -O2 -o /tmp/blog-main && /tmp/blog-main"] },
+	{ id: "cpp", name: "C++ (G++)", extension: "cpp", mode: "cpp", image: "gcc:14-bookworm", run: ["sh", "-c", "g++ main.cpp -O2 -std=c++20 -o /tmp/blog-main && /tmp/blog-main"] },
+	{ id: "csharp", name: "C# (.NET)", extension: "cs", mode: "csharp", image: "mcr.microsoft.com/dotnet/sdk:8.0-alpine", run: ["sh", "-c", "dotnet new console -o /tmp/blog-app --force >/dev/null && cp /workspace/main.cs /tmp/blog-app/Program.cs && dotnet run --project /tmp/blog-app --nologo --property:UseAppHost=false"] },
 	{ id: "go", name: "Go", extension: "go", mode: "go", image: "golang:1.23-alpine", run: ["go", "run", "main.go"] },
-	{ id: "rust", name: "Rust", extension: "rs", mode: "rust", image: "rust:1.82-alpine", run: ["sh", "-c", "rustc main.rs -O -o /tmp/firefly-main && /tmp/firefly-main"] },
+	{ id: "rust", name: "Rust", extension: "rs", mode: "rust", image: "rust:1.82-alpine", run: ["sh", "-c", "rustc main.rs -O -o /tmp/blog-main && /tmp/blog-main"] },
 	{ id: "php", name: "PHP", extension: "php", mode: "php", image: "php:8.3-cli-alpine", run: ["php", "main.php"] },
 	{ id: "ruby", name: "Ruby", extension: "rb", mode: "ruby", image: "ruby:3.3-alpine", run: ["ruby", "main.rb"] },
-	{ id: "kotlin", name: "Kotlin", extension: "kt", mode: "kotlin", image: "zenika/kotlin:1.4.10-jdk12", run: ["sh", "-c", "kotlinc Main.kt -d /tmp/firefly-main.jar && kotlin -classpath /tmp/firefly-main.jar MainKt"] },
-	{ id: "swift", name: "Swift", extension: "swift", mode: "swift", image: "swift:5.10-jammy", run: ["sh", "-c", "swiftc main.swift -O -o /tmp/firefly-main && /tmp/firefly-main"] },
+	{ id: "kotlin", name: "Kotlin", extension: "kt", mode: "kotlin", image: "zenika/kotlin:1.4.10-jdk12", run: ["sh", "-c", "kotlinc Main.kt -d /tmp/blog-main.jar && kotlin -classpath /tmp/blog-main.jar MainKt"] },
+	{ id: "swift", name: "Swift", extension: "swift", mode: "swift", image: "swift:5.10-jammy", run: ["sh", "-c", "swiftc main.swift -O -o /tmp/blog-main && /tmp/blog-main"] },
 	{ id: "bash", name: "Bash", extension: "sh", mode: "shell", image: "bash:5.2", run: ["bash", "main.sh"] },
-	{ id: "sql", name: "SQL (SQLite)", extension: "sql", mode: "sql", image: "python:3.12-alpine", run: ["python3", "__firefly_sql.py"] },
+	{ id: "sql", name: "SQL (SQLite)", extension: "sql", mode: "sql", image: "python:3.12-alpine", run: ["python3", "__blog_sql.py"] },
 	{ id: "json", name: "JSON", extension: "json", mode: "json", image: "node:22-alpine", run: [], formatOnly: true },
 	{ id: "html", name: "HTML", extension: "html", mode: "html", image: "node:22-alpine", run: [], formatOnly: true },
 	{ id: "css", name: "CSS", extension: "css", mode: "css", image: "node:22-alpine", run: [], formatOnly: true },
@@ -91,7 +91,7 @@ const languages: readonly CompilerLanguage[] = Object.freeze([
 
 const languageMap = new Map(languages.map((language) => [language.id, language]));
 const outputLimit = 2 * 1024 * 1024;
-const markerPrefix = "@@FIREFLY_BREAKPOINT@@";
+const markerPrefix = "@@BLOG_BREAKPOINT@@";
 let activeJobs = 0;
 const jobWaiters: Array<() => void> = [];
 
@@ -394,7 +394,7 @@ export async function executeCompiler(options: CompilerRunOptions): Promise<Comp
 	try {
 		const workspaceRoot = resolve(config.compiler.workDirectory);
 		await mkdir(workspaceRoot, { recursive: true });
-		workDirectory = await mkdtemp(join(workspaceRoot, "firefly-compiler-"));
+		workDirectory = await mkdtemp(join(workspaceRoot, "blog-compiler-"));
 		// Docker runs as an unprivileged numeric user. The temporary directory is
 		// private to this request and removed in finally below.
 		// The container only needs directory traversal: the bind mount is
@@ -403,23 +403,23 @@ export async function executeCompiler(options: CompilerRunOptions): Promise<Comp
 		await writeWorkspaceFile(join(workDirectory, sourceFileName(language)), options.code);
 		let command = language.run;
 		if (language.id === "sql") {
-			await writeWorkspaceFile(join(workDirectory, "__firefly_sql.py"), sqlRunnerScript());
-			command = ["python3", "__firefly_sql.py"];
+			await writeWorkspaceFile(join(workDirectory, "__blog_sql.py"), sqlRunnerScript());
+			command = ["python3", "__blog_sql.py"];
 		}
 		const debugMarker = `${markerPrefix}${randomUUID()}@@`;
 		if (options.debug && language.debug === "python-trace") {
-			await writeWorkspaceFile(join(workDirectory, "__firefly_debug.py"), pythonDebugWrapper(validated.breakpoints, debugMarker));
-			command = ["python3", "__firefly_debug.py"];
+			await writeWorkspaceFile(join(workDirectory, "__blog_debug.py"), pythonDebugWrapper(validated.breakpoints, debugMarker));
+			command = ["python3", "__blog_debug.py"];
 		}
 		if (options.debug && language.debug === "node-inspector") {
 			const sourceFile = sourceFileName(language);
-			await writeWorkspaceFile(join(workDirectory, "__firefly_debug.cjs"), nodeDebugWrapper(sourceFile, validated.breakpoints, debugMarker));
+			await writeWorkspaceFile(join(workDirectory, "__blog_debug.cjs"), nodeDebugWrapper(sourceFile, validated.breakpoints, debugMarker));
 			command = language.id === "typescript"
-				? ["node", "--experimental-strip-types", "__firefly_debug.cjs"]
-				: ["node", "__firefly_debug.cjs"];
+				? ["node", "--experimental-strip-types", "__blog_debug.cjs"]
+				: ["node", "__blog_debug.cjs"];
 		}
 		const started = performance.now();
-		const containerName = `firefly-compiler-${randomUUID()}`;
+		const containerName = `blog-compiler-${randomUUID()}`;
 		const result = await runContainer(dockerArgs(workDirectory, containerName, language, command), containerName, options.stdin ?? "", validated.timeoutMs);
 		const markerResult = options.debug && language.debug ? pullMarkers(result.stdout, debugMarker) : { stdout: result.stdout, hitBreakpoints: [], stoppedAt: null };
 		const debug = options.debug ? {

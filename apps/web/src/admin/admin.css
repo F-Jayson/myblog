@@ -7,7 +7,7 @@
    The palette is split into raw colours and semantic aliases so a dark theme
    can later be added by re-declaring the aliases alone.
    ========================================================================== */
-.firefly-admin,
+.site-admin,
 .fa-login-page {
   /* --- Surfaces & text ------------------------------------------------- */
   --fa-bg: #f2f5f8;
@@ -82,25 +82,25 @@
   letter-spacing: 0;
 }
 
-.firefly-admin *,
+.site-admin *,
 .fa-login-page * {
   box-sizing: border-box;
 }
-.firefly-admin button,
-.firefly-admin input,
-.firefly-admin textarea,
-.firefly-admin select,
+.site-admin button,
+.site-admin input,
+.site-admin textarea,
+.site-admin select,
 .fa-login-page button,
 .fa-login-page input {
   font: inherit;
   letter-spacing: 0;
 }
-.firefly-admin button,
+.site-admin button,
 .fa-login-page button {
   border: 0;
 }
 
-.firefly-admin {
+.site-admin {
   min-height: 100vh;
   display: grid;
   grid-template-columns: var(--fa-sidebar-width) minmax(0, 1fr);
@@ -109,7 +109,7 @@
 }
 
 /* A single, shared focus ring for every interactive element. */
-.firefly-admin :is(a, button, input, select, textarea, [tabindex]):focus-visible,
+.site-admin :is(a, button, input, select, textarea, [tabindex]):focus-visible,
 .fa-login-page :is(a, button, input, select, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--fa-primary);
   outline-offset: 2px;
@@ -187,9 +187,12 @@
   gap: 0.05rem;
 }
 .fa-brand strong {
+  overflow: hidden;
   color: var(--fa-ink);
   font-family: "Space Grotesk", "Segoe UI", sans-serif;
   font-size: var(--fa-text-lg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .fa-brand small {
   color: var(--fa-soft);
@@ -788,7 +791,7 @@
    used almost everywhere, and a bordered one in the author-profile form) on
    top of eleven different control heights.
    -------------------------------------------------------------------------- */
-.firefly-admin :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea),
+.site-admin :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea),
 .fa-login-page input:not([type="checkbox"]) {
   width: 100%;
   min-width: 0;
@@ -806,36 +809,36 @@
     border-color 0.16s ease,
     box-shadow 0.16s ease;
 }
-.firefly-admin textarea,
+.site-admin textarea,
 .fa-login-page textarea {
   padding: var(--fa-space-3);
   line-height: 1.7;
   resize: vertical;
 }
-.firefly-admin select {
+.site-admin select {
   cursor: pointer;
 }
-.firefly-admin :is(input, select, textarea):hover:not(:disabled),
+.site-admin :is(input, select, textarea):hover:not(:disabled),
 .fa-login-page input:hover:not(:disabled) {
   border-color: var(--fa-line-strong);
 }
-.firefly-admin :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea):focus,
+.site-admin :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea):focus,
 .fa-login-page input:focus {
   border-color: var(--fa-primary);
   box-shadow: var(--fa-focus-ring);
   outline: 0;
 }
-.firefly-admin :is(input, textarea)::placeholder,
+.site-admin :is(input, textarea)::placeholder,
 .fa-login-page input::placeholder {
   color: var(--fa-soft);
   opacity: 1;
 }
-.firefly-admin :is(input, select, textarea):disabled {
+.site-admin :is(input, select, textarea):disabled {
   background: var(--fa-surface-sunken);
   cursor: not-allowed;
   opacity: 0.7;
 }
-.firefly-admin :is(input[type="checkbox"], input[type="radio"], input[type="range"]) {
+.site-admin :is(input[type="checkbox"], input[type="radio"], input[type="range"]) {
   accent-color: var(--fa-primary);
 }
 
@@ -868,14 +871,14 @@
   border-color: var(--fa-primary);
   box-shadow: var(--fa-focus-ring);
 }
-.firefly-admin :is(.fa-search, .fa-url-adder, .fa-history-search, .fa-audit-search) input {
+.site-admin :is(.fa-search, .fa-url-adder, .fa-history-search, .fa-audit-search) input {
   min-height: 0;
   padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
 }
-.firefly-admin :is(.fa-search, .fa-url-adder, .fa-history-search, .fa-audit-search) input:focus {
+.site-admin :is(.fa-search, .fa-url-adder, .fa-history-search, .fa-audit-search) input:focus {
   border: 0;
   box-shadow: none;
 }
@@ -2107,7 +2110,8 @@
   height: 6.75rem;
   border-radius: var(--fa-radius-full);
 }
-.fa-media-preview-asset.is-favicon {
+.fa-media-preview-asset.is-favicon,
+.fa-media-preview-asset.is-logo {
   width: 3.5rem;
   height: 3.5rem;
   padding: var(--fa-space-1);
@@ -2850,7 +2854,7 @@
 }
 
 @media (max-width: 1024px) {
-  .firefly-admin {
+  .site-admin {
     grid-template-columns: 1fr;
   }
   .fa-sidebar {
@@ -3241,7 +3245,7 @@
   .fa-spin {
     animation: none;
   }
-  .firefly-admin *,
+  .site-admin *,
   .fa-login-page * {
     scroll-behavior: auto !important;
     transition: none !important;
@@ -3497,7 +3501,7 @@
 .fa-audit-pagination > div { display: flex; align-items: center; flex: 0 1 auto; flex-wrap: wrap; gap: var(--fa-space-2); }
 .fa-audit-pagination button { flex: 0 0 auto; width: auto; min-height: var(--fa-control-h-sm); padding: 0 var(--fa-space-3); border: 1px solid var(--fa-line-strong); border-radius: var(--fa-radius-md); background: var(--fa-surface); color: var(--fa-muted); cursor: pointer; font-size: var(--fa-text-base); font-weight: 600; white-space: nowrap; writing-mode: horizontal-tb; }
 .fa-audit-pagination button:hover:not(:disabled) { border-color: var(--fa-primary); color: var(--fa-primary-strong); }
-.firefly-admin .fa-audit-pagination select {
+.site-admin .fa-audit-pagination select {
   flex: 0 0 auto;
   width: auto !important;
   min-width: 6.5rem !important;

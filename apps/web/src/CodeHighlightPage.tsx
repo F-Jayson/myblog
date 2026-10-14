@@ -24,7 +24,7 @@ const SAMPLE = `function greet(name) {
   return message;
 }
 
-greet("Firefly");
+greet("Jayson");
 `;
 
 function tokenStyle(strategyId: string, kind: string) {
