@@ -394,7 +394,7 @@ export const api = {
 		return payload.user;
 	},
 	async authEmailCode(email: string) {
-		return jsonRequest<{ ok?: boolean; sent?: boolean; debugCode?: string; expiresInSeconds?: number }>("/api/auth/email-code", "POST", { email });
+		return jsonRequest<{ ok?: boolean; sent?: boolean; error?: string; debugCode?: string; expiresInSeconds?: number }>("/api/auth/email-code", "POST", { email });
 	},
 	async authLogout() {
 		try { await request<void>("/api/auth/logout", { method: "POST" }); } finally { clearUserToken(); }
@@ -501,7 +501,7 @@ export const api = {
 	},
 	async userProfile(): Promise<PublicUser> { return request<PublicUser>("/api/user/profile"); },
 	async updateUserProfile(input: Record<string, unknown>) { return request<PublicUser>("/api/user/profile", { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
-	async userProfileEmailCode(email: string) { return jsonRequest<{ sent?: boolean; debugCode?: string }>("/api/user/profile/email-code", "POST", { email }); },
+	async userProfileEmailCode(email: string) { return jsonRequest<{ sent?: boolean; error?: string; debugCode?: string }>("/api/user/profile/email-code", "POST", { email }); },
 	publicResourceUrl(token: string) { return absoluteMediaUrl(`/api/public/resources/${encodeURIComponent(token)}`); },
 	async archive() {
 		return cachedRequest<Array<{ year: number; id: number; slug: string; title: string; publishedAt: string; category: string | null }>>("archive", "/api/archive").catch(() => fallbackPosts.map((post) => ({

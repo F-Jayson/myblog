@@ -30,30 +30,77 @@ type CommentMailSettings = {
 
 let commentMailer: { key: string; transport: nodemailer.Transporter } | null = null;
 
+function readMailFlag(value: unknown, fallback: boolean) {
+	if (typeof value === "boolean") return value;
+	if (typeof value === "number") return value !== 0;
+	if (typeof value === "string") {
+		const text = value.trim().toLowerCase();
+		if (["true", "1", "yes", "on"].includes(text)) return true;
+		if (["false", "0", "no", "off"].includes(text)) return false;
+	}
+	return fallback;
+}
+
+function isMailbox(value: string) {
+	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
+}
+
+// Port 465 speaks TLS immediately. Ports 25, 587 and 2525 start in cleartext and
+// upgrade with STARTTLS. The admin switch means "encrypt this connection".
+function smtpConnectionMode(port: number, secureRequested: boolean) {
+	if (port === 465) return { secure: true, requireTLS: false };
+	if (port === 25 || port === 587 || port === 2525) return { secure: false, requireTLS: secureRequested };
+	return { secure: secureRequested, requireTLS: false };
+}
+
+function describeCommentMailError(error: unknown, password: string) {
+	const err = error && typeof error === "object" ? error as { code?: unknown; responseCode?: unknown; response?: unknown; message?: unknown } : {};
+	const raw = String(err.response || err.message || error || "邮件发送失败");
+	const response = (password ? raw.split(password).join("******") : raw).replace(/\s+/g, " ").trim().slice(0, 280);
+	const code = String(err.code ?? "");
+	const responseCode = Number(err.responseCode);
+	if (code === "EAUTH" || responseCode === 535 || responseCode === 534) return `邮箱服务器拒绝了登录，请核对 SMTP 用户名和授权码。${response ? `（${response}）` : ""}`;
+	if (/certificate|self[- ]signed|UNABLE_TO_VERIFY|altnames/i.test(response)) return `连接邮箱服务器时证书校验失败。${response ? `（${response}）` : ""}`;
+	if (code === "ETLS" || /STARTTLS|wrong version number|ssl routines/i.test(response)) return `邮箱服务器的加密方式不匹配，请核对端口和 SSL / TLS 开关。${response ? `（${response}）` : ""}`;
+	if (["ETIMEDOUT", "ESOCKET", "ECONNECTION", "EDNS", "ECONNREFUSED", "ENOTFOUND"].includes(code)) return `无法连接邮箱服务器，请核对主机、端口和加密方式。${response ? `（${response}）` : ""}`;
+	return `验证码邮件发送失败：${response || "邮件服务器没有接受这封邮件"}`;
+}
+
 async function commentMailSettings(): Promise<CommentMailSettings> {
 	const stored = await getSiteSetting("comments");
 	const value = stored && typeof stored === "object" ? stored as Record<string, unknown> : {};
 	const env = process.env;
 	const host = String(value.smtpHost ?? env.SMTP_HOST ?? "").trim();
 	const port = Number(value.smtpPort ?? env.SMTP_PORT ?? 465) || 465;
-	const secure = typeof value.smtpSecure === "boolean" ? value.smtpSecure : String(env.SMTP_SECURE ?? (port === 465)).toLowerCase() !== "false";
+	const secure = readMailFlag(value.smtpSecure, readMailFlag(env.SMTP_SECURE, port === 465));
 	const user = String(value.smtpUsername ?? env.SMTP_USER ?? "").trim();
-	const password = String(value.smtpPassword ?? env.SMTP_PASSWORD ?? "");
-	const from = String(value.senderEmail ?? value.smtpFrom ?? env.SMTP_FROM ?? user).trim();
+	const password = String(value.smtpPassword ?? env.SMTP_PASSWORD ?? "").trim();
+	const configuredFrom = String(value.senderEmail ?? value.smtpFrom ?? env.SMTP_FROM ?? "").trim();
+	const from = isMailbox(configuredFrom) ? configuredFrom : user;
 	const notificationValue = value.notificationEmails ?? value.adminNotificationEmail ?? env.ADMIN_NOTIFICATION_EMAIL ?? "";
 	const notificationEmails = (Array.isArray(notificationValue) ? notificationValue : String(notificationValue).split(/[;,\n]/u)).map(String).map((item) => item.trim()).filter((item) => /^\S+@\S+\.\S+$/u.test(item)).slice(0, 30);
-	return { host, port, secure, user, password, from, siteName: String(value.senderName ?? env.SMTP_SITE_NAME ?? "Jayson's Blog"), notificationEmails };
+	return { host, port, secure, user, password, from, siteName: String(value.senderName ?? env.SMTP_SITE_NAME ?? "Jayson's Blog").replace(/[\r\n]+/g, " ").trim() || "Jayson's Blog", notificationEmails };
 }
 
 async function sendCommentMail(to: string | string[], subject: string, text: string) {
 	const settings = await commentMailSettings();
-	if (!settings.host || !settings.user || !settings.password || !settings.from) return false;
-	const key = [settings.host, settings.port, settings.secure, settings.user, settings.password, settings.from].join("|");
+	if (!settings.host || !settings.user || !settings.password || !isMailbox(settings.from)) return { sent: false, error: "邮箱服务还没有配置完整，请在后台填写 SMTP 主机、用户名、授权码和发件邮箱。" };
+	const mode = smtpConnectionMode(settings.port, settings.secure);
+	// Strict providers accept mail only when the visible sender is the authenticated mailbox.
+	const address = isMailbox(settings.user) ? settings.user : settings.from;
+	const recipients = (Array.isArray(to) ? to : [to]).map((item) => item.trim()).filter(Boolean);
+	const key = [settings.host, settings.port, mode.secure, mode.requireTLS, settings.user, settings.password, address].join("\n");
 	if (!commentMailer || commentMailer.key !== key) {
-		commentMailer = { key, transport: nodemailer.createTransport({ host: settings.host, port: settings.port, secure: settings.secure, auth: { user: settings.user, pass: settings.password }, connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000 }) };
+		commentMailer = { key, transport: nodemailer.createTransport({ host: settings.host, port: settings.port, secure: mode.secure, requireTLS: mode.requireTLS, auth: { user: settings.user, pass: settings.password }, connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000, tls: { servername: settings.host } }) };
 	}
-	await commentMailer.transport.sendMail({ from: settings.from, to, subject: `${settings.siteName} ${subject}`, text });
-	return true;
+	try {
+		await commentMailer.transport.sendMail({ from: { name: settings.siteName, address }, to: recipients, envelope: { from: address, to: recipients }, subject: `${settings.siteName} ${subject}`.trim(), text });
+		return { sent: true };
+	} catch (error) {
+		commentMailer = null;
+		console.warn("[comment-mail] send failed:", error instanceof Error ? error.message : error);
+		return { sent: false, error: describeCommentMailError(error, settings.password) };
+	}
 }
 
 async function notifyCommentAdmins(subject: string, lines: string[], enabledKey?: string) {
@@ -65,7 +112,8 @@ async function notifyCommentAdmins(subject: string, lines: string[], enabledKey?
 			if (value[enabledKey] === false) return;
 		}
 		if (!settings.notificationEmails.length) return;
-		await sendCommentMail(settings.notificationEmails, subject, lines.join("\n"));
+		const result = await sendCommentMail(settings.notificationEmails, subject, lines.join("\n"));
+		if (!result.sent) console.warn("[comment-mail] notification failed:", result.error);
 	} catch (error) {
 		console.warn("[comment-mail] notification failed:", error instanceof Error ? error.message : error);
 	}
@@ -748,10 +796,9 @@ export async function requestCommentEmailCode(email: string) {
 		[normalized, hash],
 	);
 	const settings = await commentMailSettings();
-	let sent = false;
-	try { sent = await sendCommentMail(normalized, "注册验证码", `你的注册验证码是 ${code}，${COMMENT_EMAIL_CODE_TTL_MINUTES} 分钟内有效。请勿将验证码提供给他人。`); }
-	catch (error) { console.warn("[comment-mail] verification code failed:", error instanceof Error ? error.message : error); }
-	return { ok: true, sent, expiresInSeconds: COMMENT_EMAIL_CODE_TTL_MINUTES * 60, debugCode: !sent && process.env.NODE_ENV !== "production" ? code : undefined, mailConfigured: Boolean(settings.host && settings.user && settings.password && settings.from) };
+	const delivery = await sendCommentMail(normalized, "注册验证码", `你的注册验证码是 ${code}，${COMMENT_EMAIL_CODE_TTL_MINUTES} 分钟内有效。请勿将验证码提供给他人。`);
+	const sent = delivery.sent;
+	return { ok: sent, sent, error: sent ? undefined : delivery.error, expiresInSeconds: COMMENT_EMAIL_CODE_TTL_MINUTES * 60, debugCode: !sent && process.env.NODE_ENV !== "production" ? code : undefined, mailConfigured: Boolean(settings.host && settings.user && settings.password && isMailbox(settings.from)) };
 }
 
 export async function verifyCommentEmailCode(email: string, code: string) {

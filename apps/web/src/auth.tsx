@@ -159,9 +159,9 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 		setCodeBusy(true); setError("");
 		try {
 			const result = await api.authEmailCode(email.trim());
-			setCodeCooldown(60);
 			if (result.debugCode) setEmailCode(result.debugCode);
-			if (!result.sent && !result.debugCode) setError("验证码发送失败，请检查邮箱服务配置");
+			if (result.sent) setCodeCooldown(60);
+			else setError(result.error || "验证码发送失败，请检查邮箱服务配置");
 		} catch (reason) { setError(reason instanceof Error ? reason.message : "验证码发送失败"); }
 		finally { setCodeBusy(false); }
 	};
