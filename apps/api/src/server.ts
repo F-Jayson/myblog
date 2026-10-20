@@ -2723,6 +2723,7 @@ const appScheduleReleaseInput = z.object({
 	fileName: z.string().trim().min(1, "文件名不能为空").max(255),
 	byteSize: z.number().int().nonnegative().default(0),
 	assets: z.array(appScheduleAssetInput).optional().default([]),
+	forceUpdate: z.boolean().optional().default(false),
 });
 
 type AppScheduleRelease = {
@@ -2737,12 +2738,13 @@ type AppScheduleRelease = {
 	publishedAt: string;
 	assets?: AppScheduleAsset[];
 	isActive?: boolean;
+	forceUpdate?: boolean;
 };
 
 async function getScheduleReleasesList(): Promise<AppScheduleRelease[]> {
 	const stored = (await getSiteSetting("app_releases_schedule")) as AppScheduleRelease[] | null;
 	if (Array.isArray(stored) && stored.length > 0) {
-		return stored;
+		return stored.map((r) => ({ ...r, forceUpdate: Boolean(r.forceUpdate) }));
 	}
 	// 兼容迁移：若尚未创建列表，检查是否有单个遗留版本
 	const legacy = (await getSiteSetting("app_release_schedule")) as (AppScheduleRelease & { id?: string }) | null;
@@ -2751,6 +2753,7 @@ async function getScheduleReleasesList(): Promise<AppScheduleRelease[]> {
 			...legacy,
 			id: legacy.id || `rel_${Date.now()}`,
 			isActive: true,
+			forceUpdate: Boolean(legacy.forceUpdate),
 		};
 		await saveSiteSetting("app_releases_schedule", [single]);
 		return [single];
@@ -2782,6 +2785,7 @@ app.get("/api/app/schedule/latest", async (_req, res, next) => {
 			apkFileName: release.fileName,
 			apkSize: release.byteSize,
 			publishedAt: release.publishedAt || new Date().toISOString(),
+			forceUpdate: Boolean(release.forceUpdate),
 			assets: (release.assets && release.assets.length > 0)
 				? release.assets.map((asset) => ({
 					abi: asset.abi,
@@ -2878,6 +2882,7 @@ app.post("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWi
 			publishedAt: new Date().toISOString(),
 			assets: input.assets || [],
 			isActive: true,
+			forceUpdate: Boolean(input.forceUpdate),
 		};
 
 		// 设新发布的版本为激活状态，历史所有旧版本保留在列表中

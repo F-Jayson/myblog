@@ -45,6 +45,7 @@ export type AppScheduleRelease = {
   publishedAt: string;
   assets?: AppScheduleAsset[];
   isActive?: boolean;
+  forceUpdate?: boolean;
 };
 
 export type DriveApkFile = {
@@ -178,6 +179,7 @@ export default function AdminAppRelease() {
   const [versionCode, setVersionCode] = useState<number | "">("");
   const [releaseNotes, setReleaseNotes] = useState("");
   const [selectedAssets, setSelectedAssets] = useState<SelectedAssetItem[]>([]);
+  const [forceUpdate, setForceUpdate] = useState(false);
 
   // 自定义单外链降级支持
   const [allowCustomFallback, setAllowCustomFallback] = useState(false);
@@ -396,6 +398,7 @@ export default function AdminAppRelease() {
           fileName: primaryFileName,
           byteSize: primaryByteSize,
           assets: assetsPayload,
+          forceUpdate: Boolean(forceUpdate),
         }),
       });
       setRelease(saved);
@@ -455,6 +458,7 @@ export default function AdminAppRelease() {
     setVersionName(target.versionName);
     setVersionCode(target.versionCode + 1);
     setReleaseNotes(target.releaseNotes);
+    setForceUpdate(Boolean(target.forceUpdate));
     if (target.assets && target.assets.length > 0) {
       const loadedAssets: SelectedAssetItem[] = target.assets.map((a, idx) => ({
         driveFileId: a.driveFileId || 0,
@@ -492,6 +496,7 @@ export default function AdminAppRelease() {
     setVersionCode("");
     setReleaseNotes("");
     setSelectedAssets([]);
+    setForceUpdate(false);
     setAllowCustomFallback(false);
     setCustomDownloadUrl("");
     setCustomFileName("");
@@ -613,6 +618,20 @@ export default function AdminAppRelease() {
                 <small style={{ color: "var(--fa-muted, #64748b)", display: "block", marginBottom: "0.2rem" }}>发布生效时间</small>
                 <div style={{ fontSize: "0.95rem", fontWeight: 500, color: "var(--fa-text, #1e293b)" }}>
                   {dateText(release.publishedAt)}
+                </div>
+              </div>
+              <div>
+                <small style={{ color: "var(--fa-muted, #64748b)", display: "block", marginBottom: "0.2rem" }}>更新策略</small>
+                <div style={{ fontSize: "0.95rem", fontWeight: 600 }}>
+                  {release.forceUpdate ? (
+                    <span style={{ color: "#dc2626", background: "#fef2f2", padding: "0.2rem 0.6rem", borderRadius: "6px", border: "1px solid #fca5a5", fontSize: "0.82rem" }}>
+                      ● 强制更新
+                    </span>
+                  ) : (
+                    <span style={{ color: "#059669", background: "#ecfdf5", padding: "0.2rem 0.6rem", borderRadius: "6px", border: "1px solid #a7f3d0", fontSize: "0.82rem" }}>
+                      普通更新
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -852,6 +871,11 @@ export default function AdminAppRelease() {
                         Code: {item.versionCode}
                       </span>
 
+                      {item.forceUpdate ? (
+                        <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#dc2626", background: "#fee2e2", padding: "0.15rem 0.45rem", borderRadius: "6px", border: "1px solid #fca5a5" }}>
+                          强制更新
+                        </span>
+                      ) : null}
                       {isItemActive ? (
                         <span
                           style={{
@@ -1468,6 +1492,54 @@ export default function AdminAppRelease() {
                 resize: "vertical",
               }}
             />
+          </div>
+
+          {/* 是否强制更新开关 */}
+          <div
+            style={{
+              padding: "1rem 1.25rem",
+              background: forceUpdate ? "#fef2f2" : "var(--fa-surface-sunken, #f8fafc)",
+              border: `1.5px solid ${forceUpdate ? "#fca5a5" : "var(--fa-line-strong, #cfdae3)"}`,
+              borderRadius: "10px",
+              display: "flex",
+              alignItems: "flex-start",
+              gap: "1rem",
+              transition: "all 0.2s ease",
+              cursor: "pointer",
+            }}
+            onClick={() => setForceUpdate(!forceUpdate)}
+          >
+            <input
+              type="checkbox"
+              checked={forceUpdate}
+              onChange={(e) => setForceUpdate(e.target.checked)}
+              style={{
+                marginTop: "0.2rem",
+                width: "18px",
+                height: "18px",
+                cursor: "pointer",
+                accentColor: "#dc2626",
+              }}
+            />
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <label style={{ fontWeight: 700, fontSize: "0.95rem", color: forceUpdate ? "#dc2626" : "var(--fa-text, #1e293b)", cursor: "pointer" }}>
+                  设为强制更新 (Force Update)
+                </label>
+                {forceUpdate ? (
+                  <span style={{ fontSize: "0.75rem", padding: "0.15rem 0.5rem", borderRadius: "999px", background: "#dc2626", color: "#ffffff", fontWeight: 700 }}>
+                    ● 必须升级
+                  </span>
+                ) : (
+                  <span style={{ fontSize: "0.75rem", padding: "0.15rem 0.5rem", borderRadius: "999px", background: "#f1f5f9", color: "#64748b", fontWeight: 500 }}>
+                    可选升级 (默认)
+                  </span>
+                )}
+              </div>
+              <small style={{ display: "block", marginTop: "0.25rem", color: forceUpdate ? "#991b1b" : "var(--fa-muted, #64748b)", lineHeight: 1.5 }}>
+                开启后，客户端启动或检测到新版本时将以强制弹窗提示升级，禁止跳过或取消，用户必须下载并安装该版本后方可继续使用应用。
+              </small>
+            </div>
           </div>
 
           {/* 操作按钮 */}
