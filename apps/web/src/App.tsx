@@ -32,6 +32,10 @@ import {
 	Music2,
 	Moon,
 	Palette,
+	PanelLeftClose,
+	PanelLeftOpen,
+	PanelRightClose,
+	PanelRightOpen,
 	Pause,
 	Pin,
 	Play,
@@ -64,7 +68,7 @@ import { api } from "./api";
 import AdminWorkspace from "./admin/AdminApp";
 import Comments from "./Comments";
 import { AccountMenu, AuthProvider, useAuth } from "./auth";
-import ToolsPage, { HomeToolsEntry } from "./ToolsPage";
+import ToolsPage from "./ToolsPage";
 import CompilerPage from "./CompilerPage";
 import GamesPage, { GameSidebarRank } from "./games/GamesPage";
 import { GameSidebarProvider } from "./games/sidebarSlot";
@@ -637,7 +641,7 @@ function LeftSidebar() {
 	const navigationUrl = (value: string | null | undefined) => isSafeNavigationUrl(value) ? value!.trim() : "#";
 	const displayAnnouncements = (site.announcement?.displayItems ?? []).filter((item) => item.isVisible).sort((left, right) => Number(right.isPinned) - Number(left.isPinned) || left.sortOrder - right.sortOrder || new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime() || right.id - left.id);
 	const announcement = (displayAnnouncements[0]?.content ?? site.announcement?.content ?? "欢迎来到我的博客！这是一则示例公告。").trim();
-	return <aside className="sidebar left-sidebar">
+	return <aside id="left-sidebar" className="sidebar left-sidebar">
 		<section className="card profile-card profile-card-large"><Link className="profile-avatar-link" to="/author" title={`查看 ${author.name} 的主页`}><img className="avatar" src={avatar} alt={`${author.name} 的头像`} width="256" height="256" loading="eager" decoding="async" /></Link><div className="profile-name-row"><h2>{author.name}</h2><span className="profile-status" title="正在记录生活" aria-label="正在记录生活" /></div><p>{author.bio || "记录技术与生活。"}</p><div className="profile-rule" aria-hidden="true" /><div className="profile-links"><a href={navigationUrl(author.qqUrl)} title="QQ"><MessageCircle size={18} /></a><a href={navigationUrl(author.githubUrl)} title="GitHub"><Github size={18} /></a><a href={author.email ? `mailto:${author.email}` : "#"} title="Email"><Mail size={18} /></a><a href={navigationUrl(author.rssUrl)} title="RSS"><Rss size={18} /></a>{(author.links ?? []).filter((link) => link.label.trim() && isSafeNavigationUrl(link.url)).map((link) => <a key={link.label + link.url} href={navigationUrl(link.url)} title={link.label} target={/^https?:\/\//u.test(link.url) ? "_blank" : undefined} rel={/^https?:\/\//u.test(link.url) ? "noreferrer" : undefined}><ExternalLink size={18} /></a>)}</div></section>
 		{announcement ? <section className="card widget announcement"><WidgetTitle icon={Info}>公告</WidgetTitle><p>{announcement}</p><Link className="widget-more" to="/about">了解更多 <ChevronRight size={14} /></Link></section> : null}
 		<div className="sidebar-sticky-section">
@@ -757,7 +761,7 @@ function RightSidebar() {
 		api.post(articleSlug).then((post) => { if (active) setToc(extractToc(post?.content ?? "")); });
 		return () => { active = false; };
 	}, [articleSlug]);
-	return <aside className="sidebar right-sidebar">
+	return <aside id="right-sidebar" className="sidebar right-sidebar">
 		<section className="card widget"><WidgetTitle icon={Quote}>最新动态</WidgetTitle><div className="dynamic-mini">{site.dynamics.slice(0, 2).map((dynamic) => { const parsed = parseDynamicBody(dynamic.body, dynamic.images); const image = parsed.images[0]?.src; return <Link to="/dynamic" key={dynamic.id}><p>{parsed.previewText || "查看动态"}</p>{image ? <img src={image} alt="" loading="lazy" decoding="async" /> : null}<time>{dateText(dynamic.publishedAt)}</time></Link>; })}<Link className="widget-more" to="/dynamic">更多动态 <ChevronRight size={14} /></Link></div></section>
 		{location.pathname === "/tools/games" || location.pathname.startsWith("/tools/games/") ? <GameSidebarRank /> : <>
 			<section className="card widget"><WidgetTitle icon={Library}>站点统计</WidgetTitle><div className="site-stats-list"><div><Library size={16} /><span>文章</span><strong>{numberText(site.stats.posts)}</strong></div><div><Folder size={16} /><span>分类</span><strong>{numberText(site.categories.length)}</strong></div><div><Tag size={16} /><span>标签</span><strong>{numberText(site.tags.length)}</strong></div><div><Code2 size={16} /><span>总字数</span><strong>{numberText(site.stats.totalWords)}</strong></div><div><Clock3 size={16} /><span>运行时长</span><strong>{runningDays === null ? (site.stats.posts ? "暂不可用" : "暂无文章") : runningDays > 3650 ? "较早" : `${runningDays} 天`}</strong></div><div><CalendarDays size={16} /><span>最后活动</span><strong>{relativeActivityText(site.stats.lastActivityAt)}</strong></div></div></section>
@@ -810,7 +814,7 @@ function PostsPanel({ query, category, tag, heading, initialPage = 1 }: { query?
 	</section>;
 }
 
-function HomePage() { return <><CategoryBar /><HomeToolsEntry /><PostsPanel /></>; }
+function HomePage() { return <><CategoryBar /><PostsPanel /></>; }
 
 function PageNumberPage() {
 	const { page: pageParam } = useParams();
@@ -1002,7 +1006,63 @@ function RssPage() { return <StaticPage title="RSS"><p>订阅 Jayson's Blog，�
 
 function EmptyState({ title, description }: { title: string; description: string }) { return <section className="card empty-state"><Search size={29} /><h2>{title}</h2><p>{description}</p><Link to="/">返回首页</Link></section>; }
 
-function ScrollTop() { const [visible, setVisible] = useState(false); useEffect(() => { const listener = () => setVisible(window.scrollY > 400); window.addEventListener("scroll", listener, { passive: true }); return () => window.removeEventListener("scroll", listener); }, []); if (!visible) return null; return <button className="scroll-top" type="button" title="回到顶部" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><ArrowUp size={20} /></button>; }
+const LEFT_SIDEBAR_KEY = "site-sidebar-left";
+const RIGHT_SIDEBAR_KEY = "site-sidebar-right";
+
+function storedSidebarOpen(key: string) {
+	const value = localStorage.getItem(key);
+	if (value === "open") return true;
+	if (value === "closed") return false;
+	return null;
+}
+
+function defaultSidebarOpen(side: "left" | "right") {
+	if (side === "left") return true;
+	const width = window.innerWidth;
+	return width < 768 || width >= 1280;
+}
+
+function useSidebarOpen(side: "left" | "right") {
+	const key = side === "left" ? LEFT_SIDEBAR_KEY : RIGHT_SIDEBAR_KEY;
+	const chosen = useRef(storedSidebarOpen(key) !== null);
+	const [open, setOpen] = useState(() => storedSidebarOpen(key) ?? defaultSidebarOpen(side));
+	useEffect(() => {
+		const onResize = () => {
+			if (chosen.current) return;
+			setOpen(defaultSidebarOpen(side));
+		};
+		window.addEventListener("resize", onResize);
+		return () => window.removeEventListener("resize", onResize);
+	}, [side]);
+	const toggle = () => {
+		setOpen((current) => {
+			const next = !current;
+			chosen.current = true;
+			localStorage.setItem(key, next ? "open" : "closed");
+			return next;
+		});
+	};
+	return { open, toggle };
+}
+
+function CornerActions({ leftOpen, rightOpen, onToggleLeft, onToggleRight }: { leftOpen: boolean; rightOpen: boolean; onToggleLeft: () => void; onToggleRight: () => void }) {
+	const [visible, setVisible] = useState(false);
+	useEffect(() => {
+		const listener = () => setVisible(window.scrollY > 400);
+		listener();
+		window.addEventListener("scroll", listener, { passive: true });
+		return () => window.removeEventListener("scroll", listener);
+	}, []);
+	const leftLabel = leftOpen ? "收起左侧栏" : "展开左侧栏";
+	const rightLabel = rightOpen ? "收起右侧栏" : "展开右侧栏";
+	const LeftIcon = leftOpen ? PanelLeftClose : PanelLeftOpen;
+	const RightIcon = rightOpen ? PanelRightClose : PanelRightOpen;
+	return <div className="corner-actions">
+		{visible ? <button className="scroll-top" type="button" title="回到顶部" aria-label="回到顶部" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><ArrowUp size={20} /></button> : null}
+		<button className="sidebar-toggle" type="button" title={leftLabel} aria-label={leftLabel} aria-expanded={leftOpen} aria-controls="left-sidebar" onClick={onToggleLeft}><LeftIcon size={20} /></button>
+		<button className="sidebar-toggle" type="button" title={rightLabel} aria-label={rightLabel} aria-expanded={rightOpen} aria-controls="right-sidebar" onClick={onToggleRight}><RightIcon size={20} /></button>
+	</div>;
+}
 
 function prefersReducedMotion() {
 	return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1185,7 +1245,10 @@ function SiteShell() {
 	fontVars["--font-post-content"] = fontVars["--site-post-content-font"];
 	fontVars["--font-tag"] = fontVars["--site-tag-font"];
 	const shellStyle = { "--overlay-opacity": overlayOpacity / 100, "--overlay-blur": `${overlayBlur}px`, "--overlay-card-opacity": overlayCardOpacity / 100, ...fontVars } as CSSProperties;
-	return <GameSidebarProvider><SiteContext.Provider value={site}><MusicPlaybackProvider><div className={shellClasses} style={shellStyle}><Header dark={dark} setDark={setDark} wallpaper={wallpaper} setWallpaper={setWallpaperState} settings={displaySettings} /><Hero wallpaper={wallpaper} showTitle={bannerTitle} carousel={carousel} carouselInterval={carouselInterval} wavesEnabled={wavesEnabled} gradientEnabled={gradientEnabled} onWallpaperDownloadChange={bindWallpaperDownload} />{sakuraEnabled ? <SakuraEffect /> : null}<main id="content" className="site-grid"><LeftSidebar /><div className="main-column"><Outlet context={site} /></div><RightSidebar /></main><footer className="site-footer"><span>Jayson's Blog</span><a href="/rss.xml">RSS</a><a href="/sitemap.xml">Sitemap</a></footer><ScrollTop /><WallpaperNavigationScroll wallpaper={wallpaper} /></div></MusicPlaybackProvider></SiteContext.Provider></GameSidebarProvider>;
+	const leftSidebar = useSidebarOpen("left");
+	const rightSidebar = useSidebarOpen("right");
+	const gridClass = ["site-grid", leftSidebar.open ? "" : "collapse-left", rightSidebar.open ? "" : "collapse-right"].filter(Boolean).join(" ");
+	return <GameSidebarProvider><SiteContext.Provider value={site}><MusicPlaybackProvider><div className={shellClasses} style={shellStyle}><Header dark={dark} setDark={setDark} wallpaper={wallpaper} setWallpaper={setWallpaperState} settings={displaySettings} /><Hero wallpaper={wallpaper} showTitle={bannerTitle} carousel={carousel} carouselInterval={carouselInterval} wavesEnabled={wavesEnabled} gradientEnabled={gradientEnabled} onWallpaperDownloadChange={bindWallpaperDownload} />{sakuraEnabled ? <SakuraEffect /> : null}<main id="content" className={gridClass}><LeftSidebar /><div className="main-column"><Outlet context={site} /></div><RightSidebar /></main><footer className="site-footer"><span>Jayson's Blog</span><a href="/rss.xml">RSS</a><a href="/sitemap.xml">Sitemap</a></footer><CornerActions leftOpen={leftSidebar.open} rightOpen={rightSidebar.open} onToggleLeft={leftSidebar.toggle} onToggleRight={rightSidebar.toggle} /><WallpaperNavigationScroll wallpaper={wallpaper} /></div></MusicPlaybackProvider></SiteContext.Provider></GameSidebarProvider>;
 }
 
 export default function App() { return <AuthProvider><Routes><Route path="/admin/*" element={<AdminWorkspace />} /><Route element={<SiteShell />}><Route path="/" element={<HomePage />} /><Route path="/tools" element={<ToolsPage />} /><Route path="/tools/games" element={<GamesPage />} /><Route path="/tools/games/:gameId" element={<GamesPage />} /><Route path="/tools/compiler" element={<CompilerPage />} /><Route path="/tools/image-host" element={<ImageHostPage />} /><Route path="/tools/clipboard" element={<ClipboardPage />} /><Route path="/tools/:toolId" element={<ToolsPage />} /><Route path="/share/:token" element={<ClipboardSharePage />} /><Route path="/user/center" element={<UserProfilePage />} /><Route path="/user/space" element={<UserSpacePage />} /><Route path="/page/:page" element={<PageNumberPage />} /><Route path="/archive" element={<ArchivePage />} /><Route path="/timeline" element={<ArchiveTimelinePage />} /><Route path="/archive/timeline" element={<ArchiveTimelinePage />} /><Route path="/categories" element={<TaxonomyPage type="categories" />} /><Route path="/tags" element={<TaxonomyPage type="tags" />} /><Route path="/search" element={<SearchPage />} /><Route path="/posts/*" element={<PostPage />} /><Route path="/author" element={<AuthorProfileRoute />} /><Route path="/about" element={<AboutContentPage />} /><Route path="/transfer" element={<TransferPage />} /><Route path="/friends" element={<TransferPage />} /><Route path="/issues" element={<IssuesPage />} /><Route path="/feedback" element={<FeedbackPage />} /><Route path="/changelog" element={<ChangelogPage />} /><Route path="/guestbook" element={<GuestbookPage />} /><Route path="/dynamic" element={<DynamicPage />} /><Route path="/dynamic/comments" element={<DynamicPage />} /><Route path="/gallery" element={<GalleryPage />} /><Route path="/gallery/:album" element={<GalleryPage />} /><Route path="/booknav" element={<BooknavPage />} /><Route path="/sponsor" element={<SponsorPage />} /><Route path="/rss" element={<RssPage />} /><Route path="/rss.xml" element={<RssPage />} /><Route path="/404" element={<EmptyState title="页面不存在" description="这个地址没有对应的页面。" />} /><Route path="*" element={<EmptyState title="页面不存在" description="这个地址没有对应的页面。" />} /></Route></Routes></AuthProvider>; }

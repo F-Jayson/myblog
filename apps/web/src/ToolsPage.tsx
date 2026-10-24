@@ -78,8 +78,6 @@ export const DEV_TOOLS: ToolItem[] = [
 	{ id: "highlight", title: "代码高亮", description: "识别语言并高亮代码，复制到 Word 时使用浅色斑马纹。", icon: Highlighter },
 ];
 
-const HOME_TOOL_IDS = ["picker", "color", "base64", "json", "timestamp", "hash", "uuid", "highlight"];
-
 const toolById = (id: string) => DEV_TOOLS.find((tool) => tool.id === id);
 
 type EyeDropperWindow = Window & { EyeDropper?: new () => { open: () => Promise<{ sRGBHex: string }> } };
@@ -120,26 +118,6 @@ function ResultBox({ label, value }: { label: string; value: string }) {
 		<div className="dev-tool-result-head"><span>{label}</span><CopyButton text={value} /></div>
 		<textarea className="dev-tool-textarea" readOnly value={value} spellCheck={false} />
 	</div>;
-}
-
-export function HomeToolsEntry() {
-	const items = HOME_TOOL_IDS.map((id) => toolById(id)).filter((tool): tool is ToolItem => Boolean(tool));
-	return <section className="card home-tools-entry">
-		<div className="home-tools-head">
-			<div>
-				<span className="tool-eyebrow">DEV TOOLS</span>
-				<h2>开发小工具</h2>
-				<p>取色、颜色转换、Base64、JSON、时间戳和代码高亮，都在浏览器里完成。</p>
-			</div>
-			<Link className="user-tool-button primary" to="/tools">全部工具</Link>
-		</div>
-		<div className="home-tools-grid">
-			{items.map((tool) => {
-				const Icon = tool.icon;
-				return <Link key={tool.id} to={`/tools/${tool.id}`}><Icon size={16} />{tool.title}</Link>;
-			})}
-		</div>
-	</section>;
 }
 
 function ToolSwitcher({ current }: { current: string }) {

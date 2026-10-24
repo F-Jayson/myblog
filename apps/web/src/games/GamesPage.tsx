@@ -36,7 +36,7 @@ import { useGameSidebar } from "./sidebarSlot";
 import "./games.css";
 
 const GAMES = [
-	{ id: "snake", title: "贪吃蛇", summary: "吃到食物得 10 分，撞墙或咬到自己就结束。", rules: "方向键、WASD、滑动或下方按键改变方向。不能直接掉头。简单棋盘更小、移动更慢，困难则相反。" },
+	{ id: "snake", title: "贪吃蛇", summary: "吃到食物得 10 分，撞墙或咬到自己就结束。", rules: "先点开始，蛇才会移动。方向键、WASD、滑动或下方按键改变方向。不能直接掉头。简单棋盘更小、移动更慢，困难则相反。" },
 	{ id: "minesweeper", title: "扫雷", summary: "翻开所有安全格。用时越短，排名越靠前。", rules: "第一次点击必定安全。右键或插旗模式会在旗子、问号和空白之间切换。初级、中级、高级之外可以自定义行列和雷数，自定义成绩不计入排行榜。" },
 	{ id: "2048", title: "2048", summary: "相同数字合并成它们的和，尽量拿到更高分。", rules: "相同数字撞在一起会合成它们的和。每次滑动后会出现一个新的 2 或 4，同一次滑动里不会连锁合并。" },
 	{ id: "fibonacci", title: "斐波那契 2048", summary: "相邻斐波那契数可以合并，两个 1 合并为 2。", rules: "例如 1+2=3，2+3=5。2 不能和 2 合并。新出现的数字是 1 或 2。" },
@@ -199,15 +199,16 @@ function useLeaveScore(read: () => { score: number; durationMs: number } | null,
 
 function SnakeGame({ onReport, onRestart, message, messageError, best, width, height, intervalMs }: GamePanelProps & { width: number; height: number; intervalMs: number }) {
 	const [state, setState] = useState<SnakeState>(() => createSnake(width, height));
+	const [running, setRunning] = useState(false);
 	const [paused, setPaused] = useState(false);
 	const [clock, setClock] = useState(0);
 	const hidden = usePageHidden();
 	const started = useRef(performance.now());
 	const held = useRef(0);
-	const holdFrom = useRef<number | null>(null);
+	const holdFrom = useRef<number | null>(performance.now());
 	const stateRef = useRef(state);
 	stateRef.current = state;
-	const frozen = paused || hidden || !state.alive;
+	const frozen = !running || paused || hidden || !state.alive;
 
 	const elapsed = useCallback(() => {
 		const extra = holdFrom.current == null ? 0 : performance.now() - holdFrom.current;
@@ -257,11 +258,12 @@ function SnakeGame({ onReport, onRestart, message, messageError, best, width, he
 	return <div className="game-stage">
 		<div className="game-status">
 			<span>得分 <b>{state.score}</b></span>
-			<span>用时 <b>{formatClock(elapsed())}</b></span>
+			<span>用时 <b>{formatClock(running ? elapsed() : 0)}</b></span>
 			{best ? <span>最好 <b>{best}</b></span> : null}
-			<button className="game-button" type="button" onClick={() => setPaused((value) => !value)}>{paused || hidden ? "继续" : "暂停"}</button>
+			{running ? <button className="game-button" type="button" onClick={() => setPaused((value) => !value)}>{paused || hidden ? "继续" : "暂停"}</button> : <button className="game-button primary" type="button" onClick={() => setRunning(true)}>开始</button>}
 			<button className="game-button" type="button" onClick={onRestart}><RotateCcw size={15} />再来一局</button>
 		</div>
+		{!running && state.alive ? <p className="game-note">点「开始」后蛇才会移动。</p> : null}
 		<div
 			className="snake-board"
 			role="application"
@@ -278,7 +280,7 @@ function SnakeGame({ onReport, onRestart, message, messageError, best, width, he
 			})}
 		</div>
 		{!state.alive ? <div className="game-overlay"><strong>{state.won ? "棋盘已经填满" : "游戏结束"}</strong><button className="game-button primary" type="button" onClick={onRestart}>再来一局</button></div> : null}
-		{paused || hidden ? <p className="game-note">游戏已暂停</p> : null}
+		{running && (paused || hidden) ? <p className="game-note">游戏已暂停</p> : null}
 		<ControlPad onDirection={turn} />
 		<GameMessage text={message} error={messageError} />
 	</div>;
