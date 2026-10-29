@@ -35,6 +35,7 @@ import {
   LayoutDashboard,
   Link2,
   List,
+  Lock,
   LogOut,
   Mail,
   Menu,
@@ -1830,6 +1831,12 @@ type PostForm = {
   status: "draft" | "published";
   pinned: boolean;
   publishedAt: string;
+  enablePassword: boolean;
+  accessPassword: string;
+  accessPasswordHint: string;
+  hasAccessPassword?: boolean;
+  enableLimitViews: boolean;
+  maxViewsPerClient: number | string;
 };
 const EMPTY_POST: PostForm = {
   slug: "",
@@ -1844,6 +1851,12 @@ const EMPTY_POST: PostForm = {
   status: "published",
   pinned: false,
   publishedAt: "",
+  enablePassword: false,
+  accessPassword: "",
+  accessPasswordHint: "",
+  hasAccessPassword: false,
+  enableLimitViews: false,
+  maxViewsPerClient: 5,
 };
 
 function excerptFromMarkdown(content: string, title: string) {
@@ -1981,6 +1994,16 @@ function AdminPosts() {
                         <strong>
                           {post.pinned ? "置顶 · " : ""}
                           {post.title}
+                          {post.hasAccessPassword ? (
+                            <span className="fa-post-lock-badge" title="受密码保护">
+                              <Lock size={12} /> 密码保护
+                            </span>
+                          ) : null}
+                          {post.limitViewsPerClient ? (
+                            <span className="fa-post-lock-badge" title={`限制单IP/账号查看（上限 ${post.maxViewsPerClient ?? 0} 次）`} style={{ marginLeft: "0.4rem", background: "rgba(59, 130, 246, 0.12)", color: "var(--primary)" }}>
+                              <Eye size={12} /> 限次 {post.maxViewsPerClient ? `(${post.maxViewsPerClient}次)` : ""}
+                            </span>
+                          ) : null}
                         </strong>
                         <small>/{post.slug}</small>
                       </div>
@@ -2077,6 +2100,12 @@ function AdminPostEditor({ editId }: { editId?: number }) {
             status: post.status,
             pinned: post.pinned,
             publishedAt: toDateTimeLocal(post.publishedAt),
+            enablePassword: Boolean(post.hasAccessPassword),
+            accessPassword: "",
+            accessPasswordHint: post.accessPasswordHint ?? "",
+            hasAccessPassword: Boolean(post.hasAccessPassword),
+            enableLimitViews: Boolean(post.limitViewsPerClient),
+            maxViewsPerClient: post.maxViewsPerClient ?? 5,
           });
           setCategoryInput((post.categories?.length ? post.categories : post.category ? [post.category] : []).map((item) => item.name).join(", "));
           setTagsInput(post.tags.map((tag) => tag.name).join(", "));
@@ -2096,6 +2125,24 @@ function AdminPostEditor({ editId }: { editId?: number }) {
       const slug = postSlug(form.slug || filenameSlug, form.title);
       const categoryNames = [...new Set(categoryInput.split(/[,，]/u).map((value) => value.trim()).filter(Boolean))].slice(0, 24);
       const tagNames = [...new Set(tagsInput.split(/[,，]/u).map((value) => value.trim()).filter(Boolean))].slice(0, 12);
+      if (form.enablePassword) {
+        if (form.accessPassword) {
+          if (form.accessPassword.length < 4 || form.accessPassword.length > 64) {
+            setMessage("访问密码长度必须在 4 到 64 位之间。");
+            setSaving(false);
+            return;
+          }
+          if (form.accessPasswordHint && form.accessPasswordHint.includes(form.accessPassword)) {
+            setMessage("密码提示内容不能包含密码本身。");
+            setSaving(false);
+            return;
+          }
+        } else if (!form.hasAccessPassword) {
+          setMessage("开启文章密码后，必须输入访问密码（至少4位）。");
+          setSaving(false);
+          return;
+        }
+      }
       const payload = {
         ...form,
         slug,
@@ -2109,6 +2156,11 @@ function AdminPostEditor({ editId }: { editId?: number }) {
         categorySlug: null,
         tagNames,
         tagSlugs: [],
+        accessPassword: form.enablePassword ? (form.accessPassword ? form.accessPassword : undefined) : null,
+        accessPasswordHint: form.enablePassword ? (form.accessPasswordHint.trim() || null) : null,
+        clearAccessPassword: !form.enablePassword,
+        limitViewsPerClient: form.enableLimitViews,
+        maxViewsPerClient: form.enableLimitViews ? (Number(form.maxViewsPerClient) > 0 ? Math.floor(Number(form.maxViewsPerClient)) : 1) : null,
         // New articles are always public. Existing drafts retain their state
         // unless the editor explicitly changes the switch below.
         status: editId ? form.status : "published",
@@ -2166,6 +2218,87 @@ function AdminPostEditor({ editId }: { editId?: number }) {
             <label>发布日期（可选）<input type="datetime-local" value={form.publishedAt} onChange={(event) => update("publishedAt", event.target.value)} /></label>
             <div className="fa-post-toggle-field"><span>草稿</span><div className="fa-post-switch-value"><button type="button" className={`fa-switch ${form.status === "draft" ? "is-on" : ""}`} disabled={!editId} aria-label={editId ? "切换草稿状态" : "新文章固定立即发布"} aria-pressed={form.status === "draft"} onClick={() => { if (editId) update("status", form.status === "draft" ? "published" : "draft"); }}><span /></button><small>{form.status === "draft" ? "是" : "否"}</small></div></div>
             <div className="fa-post-toggle-field"><span>文章置顶</span><div className="fa-post-switch-value"><button type="button" className={`fa-switch ${form.pinned ? "is-on" : ""}`} aria-label="切换文章置顶" aria-pressed={form.pinned} onClick={() => update("pinned", !form.pinned)}><span /></button><small>{form.pinned ? "开" : "关"}</small></div></div>
+          </div>
+          <div className="fa-post-password-card">
+            <div className="fa-post-toggle-field">
+              <span>文章访问密码</span>
+              <div className="fa-post-switch-value">
+                <button
+                  type="button"
+                  className={`fa-switch ${form.enablePassword ? "is-on" : ""}`}
+                  aria-label="切换文章访问密码"
+                  aria-pressed={form.enablePassword}
+                  onClick={() => update("enablePassword", !form.enablePassword)}
+                >
+                  <span />
+                </button>
+                <small>{form.enablePassword ? "已开启" : "未开启"}</small>
+                {form.hasAccessPassword && form.enablePassword ? (
+                  <span className="fa-badge-lock"><Lock size={12} /> 已设置密码</span>
+                ) : null}
+              </div>
+            </div>
+            {form.enablePassword ? (
+              <div className="fa-post-meta-grid" style={{ marginTop: "0.8rem" }}>
+                <label>
+                  {form.hasAccessPassword ? "新访问密码（留空保持原密码）" : "访问密码（至少4位）"}
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    maxLength={64}
+                    value={form.accessPassword}
+                    placeholder={form.hasAccessPassword ? "留空保持原密码不变" : (form.accessPasswordHint.trim() || "请输入 4-64 位访问密码")}
+                    onChange={(event) => update("accessPassword", event.target.value)}
+                  />
+                  <small>设置访问密码后，读者需验证密码方可查看正文。密码错误达3次将进入24小时冷却期。</small>
+                </label>
+                <label>
+                  密码提示内容（可选）
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    maxLength={40}
+                    value={form.accessPasswordHint}
+                    placeholder="例如：博主的生日、关注微信公众号回复关键字获取"
+                    onChange={(event) => update("accessPasswordHint", event.target.value)}
+                  />
+                  <small>在密码输入框呈现为提示或占位文字，不能包含密码本身。</small>
+                </label>
+              </div>
+            ) : null}
+          </div>
+          <div className="fa-post-password-card" style={{ marginTop: "0.8rem" }}>
+            <div className="fa-post-toggle-field">
+              <span>限制单IP/账号查看次数</span>
+              <div className="fa-post-switch-value">
+                <button
+                  type="button"
+                  className={`fa-switch ${form.enableLimitViews ? "is-on" : ""}`}
+                  aria-label="切换限制单IP/账号查看次数"
+                  aria-pressed={form.enableLimitViews}
+                  onClick={() => update("enableLimitViews", !form.enableLimitViews)}
+                >
+                  <span />
+                </button>
+                <small>{form.enableLimitViews ? "已开启" : "未开启"}</small>
+              </div>
+            </div>
+            {form.enableLimitViews ? (
+              <div className="fa-post-meta-grid" style={{ marginTop: "0.8rem" }}>
+                <label>
+                  单IP/账号最大查看次数
+                  <input
+                    type="number"
+                    min={1}
+                    max={100000}
+                    value={form.maxViewsPerClient}
+                    placeholder="例如：3"
+                    onChange={(event) => update("maxViewsPerClient", event.target.value)}
+                  />
+                  <small>开启后，同一个 IP 地址或已登录账号最多只能查看该文章设定的次数。超过后将禁止查看正文。</small>
+                </label>
+              </div>
+            ) : null}
           </div>
           <label className="fa-post-field-wide">文件名<input value={form.filename} onChange={(event) => update("filename", event.target.value)} placeholder="new-release-note.md" /><small>用于生成文章地址，留空将根据标题自动生成。</small></label>
           <div className="fa-post-content"><span className="fa-post-content-label">Markdown 内容</span><div className="fa-md-editor-wrap"><MdEditorBridge value={form.content} onChange={(value) => update("content", value)} onUploadImage={(file) => uploadAdminMedia(file, "image")} onUploadError={(error) => setMessage(errorText(error, "文章图片上传失败。"))} /></div></div>

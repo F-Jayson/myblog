@@ -1,4 +1,5 @@
 import { fallbackPosts, fallbackPostsFor, fallbackSite } from "./data";
+import { getBrowserFingerprint, getCachedFingerprint, getOrCreateDeviceId } from "./fingerprint";
 import { absoluteMediaUrl } from "./media";
 import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, ClipboardContentType, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, GameLeaderboard, GameScoreResult, GamesHome, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
 
@@ -18,7 +19,15 @@ export type PublicResourcePayload = {
 	mimeType?: string;
 	byteSize?: number;
 	viewCount?: number;
+	limitViews?: boolean;
+	maxViews?: number | null;
+	remainingViews?: number | null;
+	expired?: boolean;
 	updatedAt?: string;
+	inCooldown?: boolean;
+	remainingAttempts?: number;
+	cooldownSeconds?: number;
+	lockedUntil?: number;
 };
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -65,6 +74,10 @@ function authHeaders(headers?: HeadersInit) {
 	const result = new Headers(headers);
 	const token = userToken();
 	if (token && !result.has("authorization")) result.set("authorization", `Bearer ${token}`);
+	const deviceId = getOrCreateDeviceId();
+	if (deviceId && !result.has("x-device-id")) result.set("x-device-id", deviceId);
+	const fp = getCachedFingerprint();
+	if (fp && !result.has("x-client-fingerprint")) result.set("x-client-fingerprint", fp);
 	return result;
 }
 
@@ -92,7 +105,9 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = REQU
 			const message = payload && typeof payload === "object" && ("error" in payload || "message" in payload)
 				? String((payload as { error?: unknown; message?: unknown }).error ?? (payload as { message?: unknown }).message ?? "")
 				: "";
-			throw new Error(message || `${response.status} ${response.statusText}`);
+			const err = new Error(message || `${response.status} ${response.statusText}`);
+			Object.assign(err, { status: response.status, payload });
+			throw err;
 		}
 		return payload as T;
 	} catch (error) {
@@ -165,6 +180,8 @@ function mapClipboard(item: Record<string, unknown>): UserClipboard {
 		hasAccessPassword: Boolean(item.hasAccessPassword ?? item.has_access_password),
 		accessPasswordHint: typeof item.accessPasswordHint === "string" ? item.accessPasswordHint : typeof item.access_password_hint === "string" ? item.access_password_hint : "",
 		accessCount: Number(item.accessCount ?? item.viewCount ?? 0),
+		limitViews: Boolean(item.limitViews ?? item.limit_views),
+		maxViews: item.maxViews !== undefined && item.maxViews !== null ? Number(item.maxViews) : item.max_views !== undefined && item.max_views !== null ? Number(item.max_views) : null,
 		createdAt: typeof item.createdAt === "string" ? item.createdAt : typeof item.created_at === "string" ? item.created_at : undefined,
 		updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : typeof item.updated_at === "string" ? item.updated_at : undefined,
 	};
@@ -332,8 +349,33 @@ export const api = {
 		const cacheKey = search.toString();
 		return cachedRequest<Paginated<PostSummary>>(`posts:${cacheKey}`, `/api/posts?${cacheKey}`).catch(() => fallbackPostsFor(params));
 	},
-	async post(slug: string): Promise<Post | null> {
-		return cachedRequest<Post>(`post:${slug}`, `/api/posts/${encodeURIComponent(slug)}`).catch(() => fallbackPosts.find((post) => post.slug === slug) ?? null);
+	async post(slug: string, grant?: string): Promise<Post | null> {
+		const sessionGrant = typeof sessionStorage !== "undefined" ? (sessionStorage.getItem("post_grant_" + slug) ?? "") : "";
+		const effectiveGrant = grant || sessionGrant;
+		const headers = effectiveGrant ? { "x-access-grant": effectiveGrant } : undefined;
+		try {
+			return await request<Post>(`/api/posts/${encodeURIComponent(slug)}`, headers ? { headers } : {});
+		} catch (error: unknown) {
+			const status = (error as { status?: number })?.status;
+			const payload = (error as { payload?: { clientLimitReached?: boolean; error?: string } })?.payload;
+			if (status === 403 || payload?.clientLimitReached) {
+				throw error;
+			}
+			return fallbackPosts.find((item) => item.slug === slug) ?? null;
+		}
+	},
+	async unlockPost(slug: string, password: string): Promise<Post> {
+		const fp = await getBrowserFingerprint();
+		const deviceId = getOrCreateDeviceId();
+		const res = await request<Post>(`/api/posts/${encodeURIComponent(slug)}/unlock`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ password, fingerprint: fp, deviceId }),
+		});
+		if (res.accessGrant && typeof sessionStorage !== "undefined") {
+			sessionStorage.setItem("post_grant_" + slug, res.accessGrant);
+		}
+		return res;
 	},
 	async page(page: ManagedPageKey): Promise<ManagedPage | null> {
 		const key = encodeURIComponent(page);
@@ -456,13 +498,13 @@ export const api = {
 	async userStorage(): Promise<UserStorageItem[]> {
 		const payload = await request<unknown>("/api/user/storage"); const value = unwrapPayload(payload);
 		const list = Array.isArray(value) ? value : (value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).items) ? (value as Record<string, unknown>).items : []);
-		return (list as Record<string, unknown>[]).map((item) => ({ ...item, storageKey: typeof item.storageKey === "string" ? item.storageKey : undefined, url: String(item.url ?? item.publicUrl ?? "") || null, sizeBytes: Number(item.sizeBytes ?? item.byteSize ?? 0), accessCount: Number(item.accessCount ?? item.viewCount ?? 0), hasAccessPassword: Boolean(item.hasAccessPassword ?? item.has_access_password), accessPasswordHint: typeof item.accessPasswordHint === "string" ? item.accessPasswordHint : typeof item.access_password_hint === "string" ? item.access_password_hint : "" })) as UserStorageItem[];
+		return (list as Record<string, unknown>[]).map((item) => ({ ...item, storageKey: typeof item.storageKey === "string" ? item.storageKey : undefined, url: String(item.url ?? item.publicUrl ?? "") || null, sizeBytes: Number(item.sizeBytes ?? item.byteSize ?? 0), accessCount: Number(item.accessCount ?? item.viewCount ?? 0), hasAccessPassword: Boolean(item.hasAccessPassword ?? item.has_access_password), accessPasswordHint: typeof item.accessPasswordHint === "string" ? item.accessPasswordHint : typeof item.access_password_hint === "string" ? item.access_password_hint : "", limitViews: Boolean(item.limitViews ?? item.limit_views), maxViews: item.maxViews !== undefined && item.maxViews !== null ? Number(item.maxViews) : item.max_views !== undefined && item.max_views !== null ? Number(item.max_views) : null })) as UserStorageItem[];
 	},
-	async uploadUserStorage(file: File, name?: string, isPublic = true, accessPassword?: string, accessPasswordHint?: string): Promise<UserStorageItem> {
-		const form = new FormData(); form.append("file", file); if (name?.trim()) form.append("name", name.trim()); form.append("isPublic", String(isPublic)); if (accessPassword) form.append("accessPassword", accessPassword); if (accessPasswordHint) form.append("accessPasswordHint", accessPasswordHint);
+	async uploadUserStorage(file: File, name?: string, isPublic = true, accessPassword?: string, accessPasswordHint?: string, limitViews?: boolean, maxViews?: number): Promise<UserStorageItem> {
+		const form = new FormData(); form.append("file", file); if (name?.trim()) form.append("name", name.trim()); form.append("isPublic", String(isPublic)); if (accessPassword) form.append("accessPassword", accessPassword); if (accessPasswordHint) form.append("accessPasswordHint", accessPasswordHint); if (limitViews !== undefined) form.append("limitViews", String(limitViews)); if (maxViews !== undefined && maxViews !== null) form.append("maxViews", String(maxViews));
 		return request<UserStorageItem>("/api/user/storage", { method: "POST", body: form });
 	},
-	async updateUserStorage(id: number | string, input: { isPublic?: boolean; name?: string; accessPassword?: string; accessPasswordHint?: string | null; clearAccessPassword?: boolean }) { return request<UserStorageItem>(`/api/user/storage/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
+	async updateUserStorage(id: number | string, input: { isPublic?: boolean; name?: string; accessPassword?: string; accessPasswordHint?: string | null; clearAccessPassword?: boolean; limitViews?: boolean; maxViews?: number | null; regenerateShareToken?: boolean }) { return request<UserStorageItem>(`/api/user/storage/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
 	async deleteUserStorage(id: number | string) { return request<void>(`/api/user/storage/${encodeURIComponent(String(id))}`, { method: "DELETE" }); },
 	async userStorageFile(id: number | string) { return request<{ url?: string }>(`/api/user/storage/${encodeURIComponent(String(id))}/file`); },
 	async userClipboards(): Promise<UserClipboard[]> {
@@ -470,8 +512,8 @@ export const api = {
 		const list = Array.isArray(value) ? value : (value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).items) ? (value as Record<string, unknown>).items : []);
 		return (list as Record<string, unknown>[]).map(mapClipboard);
 	},
-	async createClipboard(input: { title: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string; accessPasswordHint?: string }) { return request<UserClipboard>("/api/user/clipboards", { method: "POST", body: JSON.stringify({ isPublic: true, ...input }), headers: { "content-type": "application/json" } }); },
-	async updateClipboard(id: number | string, input: Partial<{ title: string; content: string; contentType: ClipboardContentType; language: string; isPublic: boolean; accessPassword: string; accessPasswordHint: string | null; clearAccessPassword: boolean }>) { return request<UserClipboard>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
+	async createClipboard(input: { title: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string; accessPasswordHint?: string; limitViews?: boolean; maxViews?: number | null }) { return request<UserClipboard>("/api/user/clipboards", { method: "POST", body: JSON.stringify({ isPublic: true, ...input }), headers: { "content-type": "application/json" } }); },
+	async updateClipboard(id: number | string, input: Partial<{ title: string; content: string; contentType: ClipboardContentType; language: string; isPublic: boolean; accessPassword: string; accessPasswordHint: string | null; clearAccessPassword: boolean; limitViews: boolean; maxViews: number | null; regenerateShareToken: boolean }>) { return request<UserClipboard>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
 	async deleteClipboard(id: number | string) { return request<void>(`/api/user/clipboards/${encodeURIComponent(String(id))}`, { method: "DELETE" }); },
 	async publicClipboard(token: string) { return request<{ type?: string; id?: number; title?: string; content?: string; contentType?: ClipboardContentType; language?: string; byteSize?: number; viewCount?: number; updatedAt?: string }>(`/api/public/resources/${encodeURIComponent(token)}`); },
 	async inspectPublicResource(token: string) {
@@ -487,7 +529,13 @@ export const api = {
 		return { status: response.status, contentType, payload, blob: null as Blob | null };
 	},
 	async unlockPublicResource(token: string, password: string) {
-		return request<PublicResourcePayload>(`/api/public/resources/${encodeURIComponent(token)}/unlock`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) });
+		const fp = await getBrowserFingerprint();
+		const deviceId = getOrCreateDeviceId();
+		return request<PublicResourcePayload>(`/api/public/resources/${encodeURIComponent(token)}/unlock`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ password, fingerprint: fp, deviceId }),
+		});
 	},
 	async publicResourceFile(token: string, accessGrant: string) {
 		const response = await fetch(`${API_ORIGIN}/api/public/resources/${encodeURIComponent(token)}`, { headers: authHeaders({ "x-access-grant": accessGrant }) });

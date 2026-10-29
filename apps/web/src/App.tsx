@@ -1,4 +1,5 @@
 import {
+	AlertTriangle,
 	Archive,
 	ArrowUp,
 	BookOpen,
@@ -13,6 +14,7 @@ import {
 	Download,
 	Code2,
 	ExternalLink,
+	Eye,
 	Folder,
 	Gamepad2,
 	Flower2,
@@ -25,6 +27,7 @@ import {
 	Info,
 	Library,
 	List,
+	Lock,
 	Mail,
 	Menu,
 	MessageCircle,
@@ -783,7 +786,7 @@ function PostCard({ post }: { post: PostSummary }) {
 	return <article className={`post-card card ${cover ? "has-cover" : "no-cover"}`}>
 		<div className="post-copy">
 			<Link to={`/posts/${post.slug}`} className="post-title">{post.title}</Link>
-			<div className="post-meta">{post.pinned ? <span className="post-badge"><Pin size={14} />置顶</span> : null}<time><CalendarDays size={14} />{dateText(post.publishedAt)}</time>{post.category ? <Link to={`/archive?category=${post.category.slug}`}><Folder size={14} />{post.category.name}</Link> : null}</div>
+			<div className="post-meta">{post.pinned ? <span className="post-badge"><Pin size={14} />置顶</span> : null}{post.hasAccessPassword ? <span className="post-badge post-badge-lock" title="受密码保护"><Lock size={13} />密码</span> : null}{post.limitViewsPerClient ? <span className="post-badge post-badge-limit" title={`限制单IP/账号查看（上限 ${post.maxViewsPerClient ?? 0} 次）`}><Eye size={13} />限次{post.maxViewsPerClient ? ` (${post.maxViewsPerClient})` : ""}</span> : null}<time><CalendarDays size={14} />{dateText(post.publishedAt)}</time>{post.category ? <Link to={`/archive?category=${post.category.slug}`}><Folder size={14} />{post.category.name}</Link> : null}</div>
 			<p className="post-excerpt">{post.excerpt}</p>
 			<div className="post-bottom"><div className="post-tags">{post.tags.slice(0, 3).map((tag) => <Link key={tag.slug} to={`/archive?tag=${tag.slug}`}>#{tag.name}</Link>)}</div>{!post.cover ? <span className="reading-meta"><Code2 size={14} />{post.words} 字 <Clock3 size={14} />{post.minutes} 分钟</span> : null}</div>
 		</div>
@@ -852,16 +855,225 @@ function TaxonomyPage({ type }: { type: "categories" | "tags" }) {
 
 function Markdown({ content }: { content: string }) { return <Suspense fallback={<div className="markdown-body" aria-busy="true" />}><MarkdownContent content={content} /></Suspense>; }
 
+function formatPostCooldownSeconds(seconds: number): string {
+	if (seconds <= 0) return "0秒";
+	const h = Math.floor(seconds / 3600);
+	const m = Math.floor((seconds % 3600) / 60);
+	const s = seconds % 60;
+	if (h > 0) return `${h}小时${m.toString().padStart(2, "0")}分${s.toString().padStart(2, "0")}秒`;
+	if (m > 0) return `${m}分${s.toString().padStart(2, "0")}秒`;
+	return `${s}秒`;
+}
+
+function PostAccessGate({ post, onUnlocked, onLimitReached }: { post: Post; onUnlocked: (post: Post) => void; onLimitReached?: (msg: string) => void }) {
+	const [password, setPassword] = useState("");
+	const [unlocking, setUnlocking] = useState(false);
+	const [inCooldown, setInCooldown] = useState(Boolean(post.inCooldown));
+	const [cooldownSeconds, setCooldownSeconds] = useState(post.cooldownSeconds ?? 0);
+	const [remainingAttempts, setRemainingAttempts] = useState<number | null>(post.remainingAttempts ?? null);
+	const [error, setError] = useState(post.inCooldown ? "密码错误次数过多，已被限制访问 24 小时" : "");
+	const hint = post.passwordHint || post.accessPasswordHint || "";
+
+	useEffect(() => {
+		if (cooldownSeconds <= 0) return;
+		const timer = window.setInterval(() => {
+			setCooldownSeconds((prev) => {
+				if (prev <= 1) {
+					clearInterval(timer);
+					setInCooldown(false);
+					setError("");
+					return 0;
+				}
+				return prev - 1;
+			});
+		}, 1000);
+		return () => clearInterval(timer);
+	}, [cooldownSeconds]);
+
+	const handleSubmit = async (event: FormEvent) => {
+		event.preventDefault();
+		if (!password.trim() || inCooldown || unlocking) return;
+		setUnlocking(true);
+		setError("");
+		try {
+			const unlocked = await api.unlockPost(post.slug, password.trim());
+			onUnlocked(unlocked);
+		} catch (caught: unknown) {
+			const payload = (caught as { payload?: { error?: string; inCooldown?: boolean; cooldownSeconds?: number; remainingAttempts?: number; clientLimitReached?: boolean } })?.payload;
+			const status = (caught as { status?: number })?.status;
+			if (status === 403 || payload?.clientLimitReached) {
+				onLimitReached?.(payload?.error || "已达到作者设定的单 IP / 账号最大查看次数上限");
+				return;
+			}
+			if (payload?.inCooldown || status === 429) {
+				setInCooldown(true);
+				setCooldownSeconds(payload?.cooldownSeconds ?? 86400);
+				setError(payload?.error || (caught instanceof Error ? caught.message : "密码错误已达 3 次上限，进入 24 小时冷却期"));
+			} else if (payload?.remainingAttempts !== undefined) {
+				setRemainingAttempts(payload.remainingAttempts);
+				setError(payload.error || `密码不正确，还剩 ${payload.remainingAttempts} 次尝试机会`);
+			} else {
+				setError(caught instanceof Error ? caught.message : "访问密码不正确");
+			}
+		} finally {
+			setUnlocking(false);
+		}
+	};
+
+	return (
+		<div className="post-access-gate-card">
+			<div className="post-access-gate-icon">
+				<Lock size={32} />
+			</div>
+			<h2>此文章受访问密码保护</h2>
+			<p>输入正确的访问密码后即可阅读完整正文内容。若连续输错 3 次，将进入 24 小时严格冷却期。</p>
+			{hint ? (
+				<div className="access-gate-hint">
+					<Info size={16} />
+					<span>密码提示：{hint}</span>
+				</div>
+			) : null}
+			<form className="post-access-gate-form" onSubmit={(e) => void handleSubmit(e)}>
+				<input
+					type="password"
+					maxLength={64}
+					autoComplete="off"
+					disabled={inCooldown || unlocking}
+					placeholder={hint ? `提示：${hint}` : "请输入访问密码"}
+					title={hint || undefined}
+					value={password}
+					onChange={(e) => setPassword(e.target.value)}
+				/>
+				<button
+					type="submit"
+					className="user-tool-button primary"
+					disabled={inCooldown || unlocking || !password.trim()}
+				>
+					{unlocking ? "正在验证..." : "验证密码并阅读"}
+				</button>
+			</form>
+			{error ? (
+				<div className={`user-tool-error ${inCooldown ? "access-gate-cooldown" : ""}`}>
+					<span>{error}</span>
+					{inCooldown ? (
+						<strong className="cooldown-countdown">
+							冷却倒计时：{formatPostCooldownSeconds(cooldownSeconds)}
+						</strong>
+					) : (
+						remainingAttempts !== null && remainingAttempts < 3 ? (
+							<small style={{ color: "var(--muted-text)", marginTop: "0.2rem" }}>
+								注意：连续失败 3 次将自动锁定设备与网络 24 小时。
+							</small>
+						) : null
+					)}
+				</div>
+			) : null}
+		</div>
+	);
+}
+
 function PostPage() {
 	const params = useParams();
 	const routeSlug = (params["*"] ?? "").replace(/^\/+|\/+$/gu, "");
 	const slug = routeSlug === "guide" ? "guide/index" : routeSlug;
 	const [post, setPost] = useState<Post | null | undefined>(() => fallbackPosts.find((item) => item.slug === slug));
-	useEffect(() => { let active = true; setPost(fallbackPosts.find((item) => item.slug === slug)); api.post(slug).then((result) => { if (active) setPost(result); }); return () => { active = false; }; }, [slug]);
-	if (post === undefined) return <div className="card loading-card">正在载入文章...</div>;
+	const [limitReached, setLimitReached] = useState(false);
+	const [limitError, setLimitError] = useState("");
+	const [loading, setLoading] = useState(true);
+
+	useEffect(() => {
+		let active = true;
+		setLimitReached(false);
+		setLimitError("");
+		setLoading(true);
+		setPost(fallbackPosts.find((item) => item.slug === slug));
+		api.post(slug).then((result) => {
+			if (active) {
+				setPost(result);
+				setLoading(false);
+			}
+		}).catch((err: unknown) => {
+			if (active) {
+				const payload = (err as { payload?: { clientLimitReached?: boolean; error?: string } })?.payload;
+				const status = (err as { status?: number })?.status;
+				if (status === 403 || payload?.clientLimitReached) {
+					setLimitReached(true);
+					setLimitError(payload?.error || (err instanceof Error ? err.message : "已达到作者设定的单 IP / 账号最大查看次数上限"));
+					setPost(null);
+				}
+				setLoading(false);
+			}
+		});
+		return () => { active = false; };
+	}, [slug]);
+
+	if (limitReached) {
+		return (
+			<article className="card article-card post-limit-blocked-card">
+				<div className="post-access-gate-card">
+					<div className="post-access-gate-icon" style={{ background: "color-mix(in srgb, #dc2626 15%, transparent)", color: "#dc2626" }}>
+						<AlertTriangle size={32} />
+					</div>
+					<h2>已达查看次数上限</h2>
+					<p>{limitError || "作者为此文章设置了单 IP / 账号查看次数限制，您当前的查看次数已达到设定的上限，无法继续查看文章内容。"}</p>
+					<div style={{ marginTop: "1rem" }}>
+						<Link to="/" className="user-tool-button primary">返回首页</Link>
+					</div>
+				</div>
+			</article>
+		);
+	}
+
+	if (loading && post === undefined) return <div className="card loading-card">正在载入文章...</div>;
 	if (!post) return <EmptyState title="文章不存在" description="它可能已被移动或暂时不可访问。" />;
 	const cover = resolveMediaUrl(post.topImage || post.cover);
-	return <article className="card article-card"><header className="article-header"><h1>{post.title}</h1><div className="article-meta"><time><CalendarDays size={15} />发布于 {dateText(post.publishedAt)}</time><span><Code2 size={15} />{post.words} 字</span><span><Clock3 size={15} />{post.minutes} 分钟</span><span><BookOpen size={15} />{post.views} 阅读</span></div>{cover ? <img className="article-cover" src={cover} alt="" width="1200" height="675" loading="eager" decoding="async" /> : null}</header><Markdown content={post.content} /><footer className="article-footer"><div className="post-tags">{post.tags.map((tag) => <Link key={tag.slug} to={`/archive?tag=${tag.slug}`}>#{tag.name}</Link>)}</div><div className="license"><Info size={18} /><span>本文采用 CC BY-NC-SA 4.0 协议，转载请注明出处。</span></div></footer><Comments postId={post.id} /></article>;
+	return (
+		<article className="card article-card">
+			<header className="article-header">
+				<h1>{post.title}</h1>
+				<div className="article-meta">
+					{post.hasAccessPassword ? <span className="post-badge post-badge-lock"><Lock size={13} />受保护</span> : null}
+					{post.limitViewsPerClient ? (
+						<span className="post-badge post-badge-limit" title={`单IP/账号限${post.maxViewsPerClient ?? 0}次`}>
+							<Eye size={13} />限次{post.maxViewsPerClient ? ` (${post.maxViewsPerClient}次)` : ""}
+						</span>
+					) : null}
+					<time><CalendarDays size={15} />发布于 {dateText(post.publishedAt)}</time>
+					<span><Code2 size={15} />{post.words} 字</span>
+					<span><Clock3 size={15} />{post.minutes} 分钟</span>
+					<span><BookOpen size={15} />{post.views} 阅读</span>
+				</div>
+				{cover ? <img className="article-cover" src={cover} alt="" width="1200" height="675" loading="eager" decoding="async" /> : null}
+			</header>
+			{post.locked ? (
+				<PostAccessGate
+					post={post}
+					onUnlocked={(unlockedPost) => setPost(unlockedPost)}
+					onLimitReached={(msg) => {
+						setLimitReached(true);
+						setLimitError(msg);
+					}}
+				/>
+			) : (
+				<>
+					{post.limitViewsPerClient && typeof post.remainingClientViews === "number" ? (
+						<div className="post-client-limit-notice">
+							<Eye size={16} />
+							<span>
+								本文已开启单 IP / 账号查看限制：您已查看 {post.clientViewCount ?? 1} 次，剩余还可查看 {post.remainingClientViews} 次。
+							</span>
+						</div>
+					) : null}
+					<Markdown content={post.content} />
+					<footer className="article-footer">
+						<div className="post-tags">{post.tags.map((tag) => <Link key={tag.slug} to={`/archive?tag=${tag.slug}`}>#{tag.name}</Link>)}</div>
+						<div className="license"><Info size={18} /><span>本文采用 CC BY-NC-SA 4.0 协议，转载请注明出处。</span></div>
+					</footer>
+					<Comments postId={post.id} />
+				</>
+			)}
+		</article>
+	);
 }
 
 function StaticPage({ title, children }: { title: string; children: ReactNode }) { return <section className="card content-card"><div className="page-heading"><h2>{title}</h2></div><div className="static-content">{children}</div></section>; }

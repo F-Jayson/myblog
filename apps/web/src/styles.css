@@ -177,6 +177,14 @@ img { display: block; max-width: 100%; }
 .tool-password-row { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; margin-top:.5rem; }
 .tool-password-row input { flex:1 1 10rem; width:auto; }
 .tool-lock-mark { margin-left:.35rem; padding:.08rem .32rem; border-radius:.3rem; background:color-mix(in srgb, #c2410c 14%, transparent); color:#c2410c; font-style:normal; font-weight:750; }
+.tool-limit-mark { margin-left:.35rem; padding:.08rem .32rem; border-radius:.3rem; background:color-mix(in srgb, var(--primary) 14%, transparent); color:var(--primary); font-style:normal; font-weight:750; }
+.tool-expired-mark { margin-left:.35rem; padding:.08rem .32rem; border-radius:.3rem; background:color-mix(in srgb, #dc2626 14%, transparent); color:#dc2626; font-style:normal; font-weight:750; }
+.post-badge-limit { background:color-mix(in srgb, var(--primary) 14%, transparent); color:var(--primary); }
+.share-view-limit-banner { display:flex; align-items:center; gap:.5rem; padding:.65rem .9rem; margin-bottom:1rem; border-radius:.6rem; background:color-mix(in srgb, var(--primary) 12%, transparent); border:1px solid color-mix(in srgb, var(--primary) 25%, transparent); color:var(--deep-text); font-size:.82rem; }
+.share-view-limit-banner.expired { background:color-mix(in srgb, #dc2626 12%, transparent); border-color:color-mix(in srgb, #dc2626 25%, transparent); color:#dc2626; }
+.post-client-limit-notice { display:flex; align-items:center; gap:.5rem; padding:.65rem .9rem; margin-bottom:1.25rem; border-radius:.6rem; background:color-mix(in srgb, var(--primary) 12%, transparent); border:1px solid color-mix(in srgb, var(--primary) 25%, transparent); color:var(--deep-text); font-size:.84rem; }
+.share-expire-hint { color:var(--muted-text); font-size:.82rem; max-width:26rem; margin:.4rem auto 0; line-height:1.5; }
+.post-limit-blocked-card { padding:2.5rem 1.5rem; text-align:center; }
 .access-gate { display:grid; justify-items:center; gap:.7rem; max-width:24rem; margin:1.2rem auto; text-align:center; }
 .access-gate svg { color:var(--primary); }
 .access-gate h2, .access-gate p { margin:0; }
@@ -1183,3 +1191,18 @@ body { font-family: var(--site-body-font, system-ui, sans-serif); }
 	.dev-tool-output-row span { grid-column: 1 / -1; }
 	.dev-tool-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+
+/* Access gate & password protection styles */
+.post-badge-lock { display: inline-flex; align-items: center; gap: .25rem; padding: .15rem .45rem; border-radius: .35rem; background: color-mix(in srgb, #f59e0b 16%, transparent); color: #d97706; font-weight: 600; font-size: .75rem; }
+.access-gate-hint { display: inline-flex; align-items: center; gap: .45rem; max-width: 100%; padding: .45rem .85rem; border-radius: .5rem; background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); font-size: .84rem; font-weight: 500; text-align: left; }
+.access-gate-cooldown { display: flex; flex-direction: column; gap: .3rem; padding: .65rem .85rem; border: 1px solid color-mix(in srgb, #ef4444 30%, transparent); border-radius: .5rem; background: color-mix(in srgb, #ef4444 10%, transparent); color: #dc2626; font-size: .84rem; text-align: center; }
+.cooldown-countdown { display: block; font-size: .95rem; font-weight: 700; color: #b91c1c; font-variant-numeric: tabular-nums; }
+.post-access-gate-card { display: grid; justify-items: center; gap: 1rem; max-width: 28rem; margin: 2rem auto; padding: 2.2rem 1.8rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--card-bg); text-align: center; box-shadow: 0 4px 20px rgb(0 0 0 / .04); }
+.post-access-gate-icon { display: grid; place-items: center; width: 4rem; height: 4rem; border-radius: 50%; background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary); }
+.post-access-gate-card h2 { margin: 0; font-size: 1.35rem; color: var(--deep-text); }
+.post-access-gate-card p { margin: 0; color: var(--muted-text); font-size: .92rem; line-height: 1.55; }
+.post-access-gate-form { display: grid; gap: .85rem; width: 100%; margin-top: .5rem; }
+.post-access-gate-form input { width: 100%; min-height: 2.6rem; padding: 0 .85rem; border: 1px solid var(--line); border-radius: .55rem; outline: 0; background: var(--btn-bg); color: var(--deep-text); font-size: .92rem; text-align: center; transition: border-color .2s, box-shadow .2s; }
+.post-access-gate-form input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent); }
+.post-access-gate-form input:disabled { opacity: .6; cursor: not-allowed; }

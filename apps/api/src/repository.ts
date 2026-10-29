@@ -256,6 +256,10 @@ type RawPost = RowDataPacket & {
 	content?: string;
 	cover: string | null;
 	top_image: string | null;
+	access_password_hash: string | null;
+	access_password_hint: string | null;
+	limit_views_per_client?: number | boolean | null;
+	max_views_per_client?: number | null;
 	category_id: number | null;
 	category_name: string | null;
 	category_slug: string | null;
@@ -381,6 +385,7 @@ function mapPost(row: RawPost): Post {
 		? { id: Number(row.category_id), name: row.category_name, slug: row.category_slug }
 		: null;
 	const normalizedCategories = categories.length ? categories : (legacyCategory ? [legacyCategory] : []);
+	const hasAccessPassword = Boolean(row.access_password_hash);
 	return {
 		id: row.id,
 		slug: row.slug,
@@ -390,6 +395,11 @@ function mapPost(row: RawPost): Post {
 		content: row.content ?? "",
 		cover: row.cover,
 		topImage: row.top_image,
+		hasAccessPassword,
+		accessPasswordHint: hasAccessPassword ? (row.access_password_hint?.trim() || "") : "",
+		accessPasswordHash: row.access_password_hash ?? null,
+		limitViewsPerClient: Boolean(Number(row.limit_views_per_client)),
+		maxViewsPerClient: row.max_views_per_client !== null && row.max_views_per_client !== undefined ? Number(row.max_views_per_client) : null,
 		// Keep the legacy category_id projection stable for existing clients;
 		// categories carries the complete multi-category association.
 		category: legacyCategory ?? normalizedCategories[0] ?? null,
@@ -405,7 +415,7 @@ function mapPost(row: RawPost): Post {
 }
 
 function summary(post: Post): PostSummary {
-	const { content: _content, ...value } = post;
+	const { content: _content, accessPasswordHash: _hash, ...value } = post;
 	return value;
 }
 
@@ -447,7 +457,7 @@ export async function listPosts(filters: ListPostFilters): Promise<Paginated<Pos
 	const total = Number(count.total ?? 0);
 	const offset = (filters.page - 1) * filters.pageSize;
 	const [rows] = await pool.query<RawPost[]>(
-		`SELECT p.id, p.slug, p.filename, p.title, p.excerpt, p.cover, p.top_image, p.category_id, p.pinned, p.views, p.words, p.minutes,
+		`SELECT p.id, p.slug, p.filename, p.title, p.excerpt, p.cover, p.top_image, p.access_password_hash, p.access_password_hint, p.limit_views_per_client, p.max_views_per_client, p.category_id, p.pinned, p.views, p.words, p.minutes,
 			 p.published_at, p.updated_at, c.name AS category_name, c.slug AS category_slug, ${categoryProjection}, ${tagProjection}
 		 FROM posts p LEFT JOIN categories c ON c.id = p.category_id
 		 ${clause}
@@ -484,7 +494,7 @@ export async function listPosts(filters: ListPostFilters): Promise<Paginated<Pos
 
 export async function getPostBySlug(slug: string, countView = true) {
 	const [rows] = await pool.query<RawPost[]>(
-		`SELECT p.id, p.slug, p.filename, p.title, p.excerpt, p.content, p.cover, p.top_image, p.category_id, p.pinned, p.views, p.words, p.minutes,
+		`SELECT p.id, p.slug, p.filename, p.title, p.excerpt, p.content, p.cover, p.top_image, p.access_password_hash, p.access_password_hint, p.limit_views_per_client, p.max_views_per_client, p.category_id, p.pinned, p.views, p.words, p.minutes,
 			 p.published_at, p.updated_at, c.name AS category_name, c.slug AS category_slug, ${categoryProjection}, ${tagProjection}
 		 FROM posts p LEFT JOIN categories c ON c.id = p.category_id
 		 WHERE p.slug = ? AND p.status = 'published' LIMIT 1`,
@@ -531,7 +541,7 @@ export async function listTags(): Promise<Tag[]> {
 
 export async function archivePosts() {
 	const [rows] = await pool.query<RowDataPacket[]>(
-		`SELECT YEAR(p.published_at) AS year, p.id, p.slug, p.title, p.published_at, c.name AS category
+		`SELECT YEAR(p.published_at) AS year, p.id, p.slug, p.title, p.published_at, c.name AS category, p.access_password_hash
 		 FROM posts p LEFT JOIN categories c ON c.id = p.category_id
 		 WHERE p.status = 'published'
 		 ORDER BY CASE p.slug
@@ -558,6 +568,7 @@ export async function archivePosts() {
 		title: String(row.title),
 		publishedAt: String(row.published_at),
 		category: row.category ? String(row.category) : null,
+		hasAccessPassword: Boolean(row.access_password_hash),
 	}));
 }
 
@@ -839,7 +850,7 @@ function mapUserStorageItem(row: RowDataPacket): UserStorageItem {
 	const publicUrl = !token ? null : hasAccessPassword ? `/share/${encodeURIComponent(token)}` : `/api/public/resources/${encodeURIComponent(token)}`;
 	const storageKey = String(row.storage_key ?? "");
 	const ownerUrl = storageKey ? `/api/user/storage/${Number(row.id)}/file` : String(row.storage_url);
-	return { id: Number(row.id), userId: row.user_id === undefined ? undefined : Number(row.user_id), kind: String(row.kind), name: String(row.name ?? ""), url: Boolean(Number(row.is_public)) && publicUrl ? publicUrl : ownerUrl, storageKey, mimeType: String(row.mime_type ?? "application/octet-stream"), byteSize: Number(row.byte_size ?? 0), isPublic: Boolean(Number(row.is_public)), publicToken: token, publicUrl, hasAccessPassword, accessPasswordHint: hasAccessPassword ? String(row.access_password_hint ?? "").trim() : "", viewCount: Number(row.view_count ?? 0), createdAt: String(row.created_at), updatedAt: String(row.updated_at) };
+	return { id: Number(row.id), userId: row.user_id === undefined ? undefined : Number(row.user_id), kind: String(row.kind), name: String(row.name ?? ""), url: Boolean(Number(row.is_public)) && publicUrl ? publicUrl : ownerUrl, storageKey, mimeType: String(row.mime_type ?? "application/octet-stream"), byteSize: Number(row.byte_size ?? 0), isPublic: Boolean(Number(row.is_public)), publicToken: token, publicUrl, hasAccessPassword, accessPasswordHint: hasAccessPassword ? String(row.access_password_hint ?? "").trim() : "", viewCount: Number(row.view_count ?? 0), limitViews: Boolean(Number(row.limit_views)), maxViews: row.max_views !== null && row.max_views !== undefined ? Number(row.max_views) : null, createdAt: String(row.created_at), updatedAt: String(row.updated_at) };
 }
 
 export const CLIPBOARD_CONTENT_TYPES = ["text", "markdown", "code"] as const;
@@ -875,6 +886,8 @@ function mapUserClipboard(row: RowDataPacket): UserClipboard {
 		hasAccessPassword: Boolean(row.access_password_hash),
 		accessPasswordHint: row.access_password_hash ? String(row.access_password_hint ?? "").trim() : "",
 		viewCount: Number(row.view_count ?? 0),
+		limitViews: Boolean(Number(row.limit_views)),
+		maxViews: row.max_views !== null && row.max_views !== undefined ? Number(row.max_views) : null,
 		createdAt: String(row.created_at),
 		updatedAt: String(row.updated_at),
 	};
@@ -909,7 +922,7 @@ export async function getUserSpace(userId: number) {
 	return { limitBytes: USER_SPACE_LIMIT_BYTES, usedBytes, remainingBytes: Math.max(0, USER_SPACE_LIMIT_BYTES - usedBytes), categories };
 }
 
-export async function createUserStorageItem(input: { userId: number; kind?: string; name?: string; url: string; storageKey?: string; mimeType?: string; byteSize: number; isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null }) {
+export async function createUserStorageItem(input: { userId: number; kind?: string; name?: string; url: string; storageKey?: string; mimeType?: string; byteSize: number; isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null; limitViews?: boolean; maxViews?: number | null }) {
 	if (!Number.isFinite(input.byteSize) || input.byteSize < 0 || input.byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("文件大小无效");
 	const byteSize = Math.floor(input.byteSize);
 	const connection = await pool.getConnection();
@@ -919,7 +932,9 @@ export async function createUserStorageItem(input: { userId: number; kind?: stri
 		if (usage.total + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
 		const token = input.isPublic ? randomBytes(32).toString("base64url") : null;
 		const secret = resolveAccessSecret({ accessPassword: input.accessPassword ?? null, accessPasswordHint: input.accessPasswordHint ?? null });
-		const [result] = await connection.execute<ResultSetHeader>("INSERT INTO user_storage_items (user_id, kind, name, storage_url, storage_key, mime_type, byte_size, is_public, public_token, access_password_hash, access_password_hint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [input.userId, input.kind ?? "image_host", (input.name ?? "").slice(0, 255), input.url, input.storageKey ?? "", input.mimeType ?? "application/octet-stream", byteSize, Boolean(input.isPublic), token, secret.passwordHash, secret.hint]);
+		const limitViews = Boolean(input.limitViews);
+		const maxViews = limitViews && input.maxViews ? Math.max(1, Math.floor(input.maxViews)) : null;
+		const [result] = await connection.execute<ResultSetHeader>("INSERT INTO user_storage_items (user_id, kind, name, storage_url, storage_key, mime_type, byte_size, is_public, public_token, access_password_hash, access_password_hint, limit_views, max_views) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [input.userId, input.kind ?? "image_host", (input.name ?? "").slice(0, 255), input.url, input.storageKey ?? "", input.mimeType ?? "application/octet-stream", byteSize, Boolean(input.isPublic), token, secret.passwordHash, secret.hint, limitViews, maxViews]);
 		await connection.commit();
 		const [[row]] = await pool.query<RowDataPacket[]>("SELECT * FROM user_storage_items WHERE id = ?", [result.insertId]);
 		return row ? mapUserStorageItem(row) : null;
@@ -936,18 +951,28 @@ export async function getUserStorageItem(userId: number, id: number) {
 	return row ? mapUserStorageItem(row) : null;
 }
 
-export async function updateUserStorageSettings(userId: number, id: number, input: { isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null }) {
+export async function updateUserStorageSettings(userId: number, id: number, input: { isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null; limitViews?: boolean; maxViews?: number | null; regenerateShareToken?: boolean }) {
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
 		const [[row]] = await connection.query<RowDataPacket[]>("SELECT * FROM user_storage_items WHERE id = ? AND user_id = ? FOR UPDATE", [id, userId]);
 		if (!row) { await connection.rollback(); return null; }
-		const isPublic = input.isPublic === undefined ? Boolean(Number(row.is_public)) : input.isPublic;
-		const token = isPublic ? (row.public_token ? String(row.public_token) : randomBytes(32).toString("base64url")) : null;
+		const regenerate = Boolean(input.regenerateShareToken);
+		const isPublic = input.isPublic === undefined ? (regenerate ? true : Boolean(Number(row.is_public))) : input.isPublic;
+		const token = isPublic
+			? (regenerate || !row.public_token ? randomBytes(32).toString("base64url") : String(row.public_token))
+			: null;
 		const secret = resolveAccessSecret({ accessPassword: input.accessPassword, accessPasswordHint: input.accessPasswordHint, existingHash: row.access_password_hash ? String(row.access_password_hash) : null, existingHint: row.access_password_hint ? String(row.access_password_hint) : null });
-		await connection.execute("UPDATE user_storage_items SET is_public = ?, public_token = ?, access_password_hash = ?, access_password_hint = ? WHERE id = ? AND user_id = ?", [isPublic, token, secret.passwordHash, secret.hint, id, userId]);
+		const limitViews = input.limitViews !== undefined ? Boolean(input.limitViews) : Boolean(Number(row.limit_views));
+		const rawMaxViews = input.maxViews !== undefined ? input.maxViews : (row.max_views !== null ? Number(row.max_views) : null);
+		const maxViews = limitViews && rawMaxViews ? Math.max(1, Math.floor(rawMaxViews)) : null;
+		const wasExpired = Boolean(Number(row.limit_views)) && row.max_views !== null && Number(row.view_count ?? 0) >= Number(row.max_views);
+		const shouldResetViews = regenerate || (isPublic && (!Boolean(Number(row.is_public)) || wasExpired));
+		const resetViewSql = shouldResetViews ? ", view_count = 0" : "";
+		await connection.execute(`UPDATE user_storage_items SET is_public = ?, public_token = ?, access_password_hash = ?, access_password_hint = ?, limit_views = ?, max_views = ?${resetViewSql} WHERE id = ? AND user_id = ?`, [isPublic, token, secret.passwordHash, secret.hint, limitViews, maxViews, id, userId]);
 		await connection.commit();
-		return mapUserStorageItem({ ...row, is_public: isPublic ? 1 : 0, public_token: token, access_password_hash: secret.passwordHash, access_password_hint: secret.hint });
+		const [[updated]] = await pool.query<RowDataPacket[]>("SELECT * FROM user_storage_items WHERE id = ?", [id]);
+		return updated ? mapUserStorageItem(updated) : null;
 	} catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }
 
@@ -958,7 +983,7 @@ export async function deleteUserStorageItem(userId: number, id: number) {
 	return result.affectedRows ? { url: String(row.storage_url), storageKey: String(row.storage_key ?? "") } : null;
 }
 
-export async function createUserClipboard(input: { userId: number; title?: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null }) {
+export async function createUserClipboard(input: { userId: number; title?: string; content: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null; limitViews?: boolean; maxViews?: number | null }) {
 	const byteSize = Buffer.byteLength(input.content, "utf8");
 	const contentType = normalizeClipboardContentType(input.contentType);
 	const language = normalizeClipboardLanguage(contentType, input.language);
@@ -969,7 +994,9 @@ export async function createUserClipboard(input: { userId: number; title?: strin
 		if (usage.total + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
 		const token = input.isPublic ? randomBytes(32).toString("base64url") : null;
 		const secret = resolveAccessSecret({ accessPassword: input.accessPassword ?? null, accessPasswordHint: input.accessPasswordHint ?? null });
-		const [result] = await connection.execute<ResultSetHeader>("INSERT INTO user_clipboards (user_id, title, content, content_type, language, byte_size, is_public, public_token, access_password_hash, access_password_hint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [input.userId, (input.title ?? "未命名剪贴板").slice(0, 255), input.content, contentType, language, byteSize, Boolean(input.isPublic), token, secret.passwordHash, secret.hint]);
+		const limitViews = Boolean(input.limitViews);
+		const maxViews = limitViews && input.maxViews ? Math.max(1, Math.floor(input.maxViews)) : null;
+		const [result] = await connection.execute<ResultSetHeader>("INSERT INTO user_clipboards (user_id, title, content, content_type, language, byte_size, is_public, public_token, access_password_hash, access_password_hint, limit_views, max_views) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [input.userId, (input.title ?? "未命名剪贴板").slice(0, 255), input.content, contentType, language, byteSize, Boolean(input.isPublic), token, secret.passwordHash, secret.hint, limitViews, maxViews]);
 		await connection.commit();
 		const [[row]] = await pool.query<RowDataPacket[]>("SELECT * FROM user_clipboards WHERE id = ?", [result.insertId]);
 		return row ? mapUserClipboard(row) : null;
@@ -986,7 +1013,7 @@ export async function getUserClipboard(userId: number, id: number) {
 	return row ? mapUserClipboard(row) : null;
 }
 
-export async function updateUserClipboard(userId: number, id: number, input: { title?: string; content?: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null }) {
+export async function updateUserClipboard(userId: number, id: number, input: { title?: string; content?: string; contentType?: ClipboardContentType; language?: string; isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null; limitViews?: boolean; maxViews?: number | null; regenerateShareToken?: boolean }) {
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
@@ -999,9 +1026,17 @@ export async function updateUserClipboard(userId: number, id: number, input: { t
 		const language = normalizeClipboardLanguage(contentType, input.language === undefined ? existing.language : input.language);
 		const byteSize = Buffer.byteLength(content, "utf8");
 		if (usage.total - existing.byteSize + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
-		const token = input.isPublic === undefined ? existing.publicToken ?? null : input.isPublic ? existing.publicToken ?? randomBytes(32).toString("base64url") : null;
+		const regenerate = Boolean(input.regenerateShareToken);
+		const isPublic = input.isPublic === undefined ? (regenerate ? true : existing.isPublic) : input.isPublic;
+		const token = isPublic ? (regenerate || !existing.publicToken ? randomBytes(32).toString("base64url") : existing.publicToken) : null;
 		const secret = resolveAccessSecret({ accessPassword: input.accessPassword, accessPasswordHint: input.accessPasswordHint, existingHash: row.access_password_hash ? String(row.access_password_hash) : null, existingHint: row.access_password_hint ? String(row.access_password_hint) : null });
-		await connection.execute("UPDATE user_clipboards SET title = ?, content = ?, content_type = ?, language = ?, byte_size = ?, is_public = ?, public_token = ?, access_password_hash = ?, access_password_hint = ? WHERE id = ? AND user_id = ?", [input.title === undefined ? existing.title : input.title.slice(0, 255), content, contentType, language, byteSize, input.isPublic === undefined ? existing.isPublic : input.isPublic, token, secret.passwordHash, secret.hint, id, userId]);
+		const limitViews = input.limitViews !== undefined ? Boolean(input.limitViews) : existing.limitViews;
+		const rawMaxViews = input.maxViews !== undefined ? input.maxViews : existing.maxViews;
+		const maxViews = limitViews && rawMaxViews ? Math.max(1, Math.floor(rawMaxViews)) : null;
+		const wasExpired = Boolean(Number(row.limit_views)) && row.max_views !== null && Number(row.view_count ?? 0) >= Number(row.max_views);
+		const shouldResetViews = regenerate || (isPublic && (!existing.isPublic || wasExpired));
+		const resetViewSql = shouldResetViews ? ", view_count = 0" : "";
+		await connection.execute(`UPDATE user_clipboards SET title = ?, content = ?, content_type = ?, language = ?, byte_size = ?, is_public = ?, public_token = ?, access_password_hash = ?, access_password_hint = ?, limit_views = ?, max_views = ?${resetViewSql} WHERE id = ? AND user_id = ?`, [input.title === undefined ? existing.title : input.title.slice(0, 255), content, contentType, language, byteSize, isPublic, token, secret.passwordHash, secret.hint, limitViews, maxViews, id, userId]);
 		await connection.commit();
 		return getUserClipboard(userId, id);
 	} catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
@@ -1014,16 +1049,79 @@ export async function deleteUserClipboard(userId: number, id: number) {
 
 export async function findPublicUserResource(token: string) {
 	const [[image]] = await pool.query<RowDataPacket[]>("SELECT * FROM user_storage_items WHERE public_token = ? AND is_public <> 0 LIMIT 1", [token]);
-	if (image) return { type: "image" as const, accessPasswordHash: image.access_password_hash ? String(image.access_password_hash) : null, item: mapUserStorageItem(image) };
+	if (image) {
+		if (Boolean(Number(image.limit_views)) && image.max_views !== null && Number(image.view_count ?? 0) >= Number(image.max_views)) {
+			await pool.execute("UPDATE user_storage_items SET is_public = 0, public_token = NULL WHERE id = ?", [image.id]);
+			return null;
+		}
+		return { type: "image" as const, accessPasswordHash: image.access_password_hash ? String(image.access_password_hash) : null, item: mapUserStorageItem(image) };
+	}
 	const [[clipboard]] = await pool.query<RowDataPacket[]>("SELECT * FROM user_clipboards WHERE public_token = ? AND is_public <> 0 LIMIT 1", [token]);
-	if (clipboard) return { type: "clipboard" as const, accessPasswordHash: clipboard.access_password_hash ? String(clipboard.access_password_hash) : null, item: mapUserClipboard(clipboard) };
+	if (clipboard) {
+		if (Boolean(Number(clipboard.limit_views)) && clipboard.max_views !== null && Number(clipboard.view_count ?? 0) >= Number(clipboard.max_views)) {
+			await pool.execute("UPDATE user_clipboards SET is_public = 0, public_token = NULL WHERE id = ?", [clipboard.id]);
+			return null;
+		}
+		return { type: "clipboard" as const, accessPasswordHash: clipboard.access_password_hash ? String(clipboard.access_password_hash) : null, item: mapUserClipboard(clipboard) };
+	}
 	return null;
 }
 
-export async function incrementPublicResourceView(type: "image" | "clipboard", id: number) {
+export type PublicResourceIncrementResult = {
+	counted: boolean;
+	newViewCount: number;
+	expiredNow: boolean;
+	limitViews: boolean;
+	maxViews: number | null;
+	remainingViews: number | null;
+};
+
+export async function incrementPublicResourceView(type: "image" | "clipboard", id: number): Promise<PublicResourceIncrementResult> {
 	const table = type === "image" ? "user_storage_items" : "user_clipboards";
-	const [result] = await pool.execute<ResultSetHeader>(`UPDATE ${table} SET view_count = view_count + 1 WHERE id = ?`, [id]);
-	return result.affectedRows > 0;
+	await pool.execute(`UPDATE ${table} SET view_count = view_count + 1 WHERE id = ?`, [id]);
+	const [[row]] = await pool.query<RowDataPacket[]>(`SELECT view_count, limit_views, max_views FROM ${table} WHERE id = ?`, [id]);
+	if (!row) return { counted: false, newViewCount: 0, expiredNow: false, limitViews: false, maxViews: null, remainingViews: null };
+	const newViewCount = Number(row.view_count ?? 0);
+	const limitViews = Boolean(Number(row.limit_views));
+	const maxViews = row.max_views !== null && row.max_views !== undefined ? Number(row.max_views) : null;
+	const expiredNow = Boolean(limitViews && maxViews !== null && maxViews > 0 && newViewCount >= maxViews);
+	if (expiredNow) {
+		await pool.execute(`UPDATE ${table} SET is_public = 0, public_token = NULL WHERE id = ?`, [id]);
+	}
+	const remainingViews = limitViews && maxViews !== null ? Math.max(0, maxViews - newViewCount) : null;
+	return { counted: true, newViewCount, expiredNow, limitViews, maxViews, remainingViews };
+}
+
+export type PostClientIdentifier = { type: "user" | "ip"; id: string };
+
+export async function getPostClientViewCount(postId: number, identifiers: PostClientIdentifier[]): Promise<number> {
+	if (!identifiers.length) return 0;
+	let maxCount = 0;
+	for (const id of identifiers) {
+		const [[row]] = await pool.query<RowDataPacket[]>(
+			"SELECT view_count FROM post_client_views WHERE post_id = ? AND client_type = ? AND client_identifier = ? LIMIT 1",
+			[postId, id.type, id.id.slice(0, 128)],
+		);
+		if (row) {
+			maxCount = Math.max(maxCount, Number(row.view_count ?? 0));
+		}
+	}
+	return maxCount;
+}
+
+export async function recordPostClientView(postId: number, identifiers: PostClientIdentifier[]): Promise<number> {
+	if (!identifiers.length) return 0;
+	for (const id of identifiers) {
+		await pool.execute(
+			`INSERT INTO post_client_views (post_id, client_type, client_identifier, view_count, last_viewed_at)
+			 VALUES (?, ?, ?, 1, NOW())
+			 ON DUPLICATE KEY UPDATE
+			   view_count = IF(TIMESTAMPDIFF(SECOND, last_viewed_at, NOW()) > 3, view_count + 1, view_count),
+			   last_viewed_at = NOW()`,
+			[postId, id.type, id.id.slice(0, 128)],
+		);
+	}
+	return getPostClientViewCount(postId, identifiers);
 }
 
 export async function listAdminUserSpace() {
@@ -1098,7 +1196,7 @@ export async function deleteSharedCommentSticker(id: number) {
 	return result.affectedRows > 0;
 }
 
-export async function createPost(input: {
+export type AdminPostInput = {
 	slug: string;
 	filename?: string | null;
 	title: string;
@@ -1106,6 +1204,11 @@ export async function createPost(input: {
 	content: string;
 	cover?: string | null;
 	topImage?: string | null;
+	accessPassword?: string | null;
+	accessPasswordHint?: string | null;
+	clearAccessPassword?: boolean;
+	limitViewsPerClient?: boolean;
+	maxViewsPerClient?: number | null;
 	categorySlug?: string | null;
 	categoryName?: string | null;
 	categoryNames?: string[];
@@ -1114,7 +1217,9 @@ export async function createPost(input: {
 	publishedAt?: string | null;
 	pinned?: boolean;
 	status?: "draft" | "published";
-}) {
+};
+
+export async function createPost(input: AdminPostInput) {
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
@@ -1122,10 +1227,16 @@ export async function createPost(input: {
 		const categoryId = categoryIds[0] ?? null;
 		const words = input.content.trim() ? input.content.trim().split(/\s+/u).length : 0;
 		const status = input.status ?? "published";
+		const secret = resolveAccessSecret({
+			accessPassword: input.accessPassword,
+			accessPasswordHint: input.accessPasswordHint,
+		});
+		const limitViewsPerClient = Boolean(input.limitViewsPerClient);
+		const maxViewsPerClient = limitViewsPerClient && input.maxViewsPerClient ? Math.max(1, Math.floor(input.maxViewsPerClient)) : null;
 		const [result] = await connection.execute<ResultSetHeader>(
-			`INSERT INTO posts (slug, filename, title, excerpt, content, cover, top_image, category_id, status, pinned, words, minutes, published_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			[input.slug, input.filename?.trim() || input.slug, input.title, input.excerpt, input.content, input.cover ?? null, input.topImage ?? null, categoryId, status, Boolean(input.pinned), words, Math.max(1, Math.ceil(words / 200)), postPublishedDate(input.publishedAt, status)],
+			`INSERT INTO posts (slug, filename, title, excerpt, content, cover, top_image, access_password_hash, access_password_hint, limit_views_per_client, max_views_per_client, category_id, status, pinned, words, minutes, published_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[input.slug, input.filename?.trim() || input.slug, input.title, input.excerpt ?? "", input.content, input.cover ?? null, input.topImage ?? null, secret.passwordHash, secret.hint, limitViewsPerClient, maxViewsPerClient, categoryId, status, Boolean(input.pinned), words, Math.max(1, Math.ceil(words / 200)), postPublishedDate(input.publishedAt, status)],
 		);
 		await replacePostCategories(connection, result.insertId, categoryIds);
 		await replacePostTags(connection, result.insertId, input.tagSlugs, input.tagNames);
@@ -1143,24 +1254,6 @@ export async function deletePost(id: number) {
 	const [result] = await pool.execute<ResultSetHeader>("DELETE FROM posts WHERE id = ?", [id]);
 	return result.affectedRows > 0;
 }
-
-type AdminPostInput = {
-	slug: string;
-	filename?: string | null;
-	title: string;
-	excerpt: string;
-	content: string;
-	cover?: string | null;
-	topImage?: string | null;
-	categorySlug?: string | null;
-	categoryName?: string | null;
-	categoryNames?: string[];
-	tagSlugs?: string[];
-	tagNames?: string[];
-	publishedAt?: string | null;
-	pinned?: boolean;
-	status?: "draft" | "published";
-};
 
 function mapAdminPost(row: RawPost & { status?: string }) {
 	return { ...mapPost(row), status: row.status === "draft" ? "draft" : "published" };
@@ -1182,7 +1275,7 @@ export async function listAdminPosts(filters: { page: number; pageSize: number; 
 	const [[count]] = await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM posts p ${clause}`, params);
 	const offset = (filters.page - 1) * filters.pageSize;
 	const [rows] = await pool.query<(RawPost & { status: string })[]>(
-		`SELECT p.id, p.slug, p.filename, p.title, p.excerpt, p.content, p.cover, p.top_image, p.category_id, p.status, p.pinned, p.views, p.words, p.minutes,
+		`SELECT p.id, p.slug, p.filename, p.title, p.excerpt, p.content, p.cover, p.top_image, p.access_password_hash, p.access_password_hint, p.limit_views_per_client, p.max_views_per_client, p.category_id, p.status, p.pinned, p.views, p.words, p.minutes,
 			 p.published_at, p.updated_at, c.name AS category_name, c.slug AS category_slug, ${categoryProjection}, ${tagProjection}
 		 FROM posts p LEFT JOIN categories c ON c.id = p.category_id ${clause}
 		 ORDER BY p.pinned DESC, p.updated_at DESC, p.id DESC LIMIT ? OFFSET ?`,
@@ -1199,7 +1292,7 @@ export async function listAdminPosts(filters: { page: number; pageSize: number; 
 
 export async function getAdminPost(id: number) {
 	const [rows] = await pool.query<(RawPost & { status: string })[]>(
-		`SELECT p.id, p.slug, p.filename, p.title, p.excerpt, p.content, p.cover, p.top_image, p.category_id, p.status, p.pinned, p.views, p.words, p.minutes,
+		`SELECT p.id, p.slug, p.filename, p.title, p.excerpt, p.content, p.cover, p.top_image, p.access_password_hash, p.access_password_hint, p.limit_views_per_client, p.max_views_per_client, p.category_id, p.status, p.pinned, p.views, p.words, p.minutes,
 			 p.published_at, p.updated_at, c.name AS category_name, c.slug AS category_slug, ${categoryProjection}, ${tagProjection}
 		 FROM posts p LEFT JOIN categories c ON c.id = p.category_id WHERE p.id = ? LIMIT 1`,
 		[id],
@@ -1305,7 +1398,7 @@ export async function updatePost(id: number, input: AdminPostInput) {
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
-		const [existing] = await connection.query<RowDataPacket[]>("SELECT id FROM posts WHERE id = ? FOR UPDATE", [id]);
+		const [existing] = await connection.query<RowDataPacket[]>("SELECT id, access_password_hash, access_password_hint FROM posts WHERE id = ? FOR UPDATE", [id]);
 		if (!existing[0]) {
 			await connection.rollback();
 			return null;
@@ -1314,9 +1407,18 @@ export async function updatePost(id: number, input: AdminPostInput) {
 		const categoryId = categoryIds[0] ?? null;
 		const words = input.content.trim() ? input.content.trim().split(/\s+/u).length : 0;
 		const status = input.status ?? "published";
+		const accessPassword = input.clearAccessPassword && !input.accessPassword ? null : input.accessPassword;
+		const secret = resolveAccessSecret({
+			accessPassword,
+			accessPasswordHint: input.accessPasswordHint,
+			existingHash: existing[0].access_password_hash ? String(existing[0].access_password_hash) : null,
+			existingHint: existing[0].access_password_hint ? String(existing[0].access_password_hint) : null,
+		});
+		const limitViewsPerClient = input.limitViewsPerClient !== undefined ? Boolean(input.limitViewsPerClient) : false;
+		const maxViewsPerClient = limitViewsPerClient && input.maxViewsPerClient ? Math.max(1, Math.floor(input.maxViewsPerClient)) : null;
 		await connection.execute(
-			`UPDATE posts SET slug = ?, filename = ?, title = ?, excerpt = ?, content = ?, cover = ?, top_image = ?, category_id = ?, status = ?, pinned = ?, words = ?, minutes = ?, published_at = ? WHERE id = ?`,
-			[input.slug, input.filename?.trim() || input.slug, input.title, input.excerpt, input.content, input.cover ?? null, input.topImage ?? null, categoryId, status, Boolean(input.pinned), words, Math.max(1, Math.ceil(words / 200)), postPublishedDate(input.publishedAt, status), id],
+			`UPDATE posts SET slug = ?, filename = ?, title = ?, excerpt = ?, content = ?, cover = ?, top_image = ?, access_password_hash = ?, access_password_hint = ?, limit_views_per_client = ?, max_views_per_client = ?, category_id = ?, status = ?, pinned = ?, words = ?, minutes = ?, published_at = ? WHERE id = ?`,
+			[input.slug, input.filename?.trim() || input.slug, input.title, input.excerpt ?? "", input.content, input.cover ?? null, input.topImage ?? null, secret.passwordHash, secret.hint, limitViewsPerClient, maxViewsPerClient, categoryId, status, Boolean(input.pinned), words, Math.max(1, Math.ceil(words / 200)), postPublishedDate(input.publishedAt, status), id],
 		);
 		await replacePostCategories(connection, id, categoryIds);
 		await replacePostTags(connection, id, input.tagSlugs, input.tagNames);

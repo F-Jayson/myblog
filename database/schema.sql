@@ -40,6 +40,10 @@ CREATE TABLE IF NOT EXISTS posts (
   content LONGTEXT NOT NULL,
   cover VARCHAR(500) NULL,
   top_image VARCHAR(500) NULL,
+  access_password_hash VARCHAR(255) NULL,
+  access_password_hint VARCHAR(40) NULL,
+  limit_views_per_client BOOLEAN NOT NULL DEFAULT FALSE,
+  max_views_per_client INT UNSIGNED NULL DEFAULT NULL,
   category_id BIGINT UNSIGNED NULL,
   status ENUM('draft', 'published') NOT NULL DEFAULT 'draft',
   pinned BOOLEAN NOT NULL DEFAULT FALSE,
@@ -267,6 +271,8 @@ CREATE TABLE IF NOT EXISTS user_storage_items (
   access_password_hash VARCHAR(255) NULL,
   access_password_hint VARCHAR(40) NULL,
   view_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  limit_views BOOLEAN NOT NULL DEFAULT FALSE,
+  max_views INT UNSIGNED NULL DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_user_storage_items_user FOREIGN KEY (user_id) REFERENCES comment_users(id) ON DELETE CASCADE,
@@ -288,6 +294,8 @@ CREATE TABLE IF NOT EXISTS user_clipboards (
   access_password_hash VARCHAR(255) NULL,
   access_password_hint VARCHAR(40) NULL,
   view_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  limit_views BOOLEAN NOT NULL DEFAULT FALSE,
+  max_views INT UNSIGNED NULL DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_user_clipboards_user FOREIGN KEY (user_id) REFERENCES comment_users(id) ON DELETE CASCADE,
@@ -348,6 +356,24 @@ SET @blog_clipboard_access_hint_sql = IF(
 PREPARE blog_clipboard_access_hint_statement FROM @blog_clipboard_access_hint_sql;
 EXECUTE blog_clipboard_access_hint_statement;
 DEALLOCATE PREPARE blog_clipboard_access_hint_statement;
+
+SET @blog_storage_limit_views_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_storage_items' AND COLUMN_NAME = 'limit_views') = 0,
+  'ALTER TABLE user_storage_items ADD COLUMN limit_views BOOLEAN NOT NULL DEFAULT FALSE AFTER view_count, ADD COLUMN max_views INT UNSIGNED NULL AFTER limit_views',
+  'SELECT 1'
+);
+PREPARE blog_storage_limit_views_statement FROM @blog_storage_limit_views_sql;
+EXECUTE blog_storage_limit_views_statement;
+DEALLOCATE PREPARE blog_storage_limit_views_statement;
+
+SET @blog_clipboard_limit_views_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_clipboards' AND COLUMN_NAME = 'limit_views') = 0,
+  'ALTER TABLE user_clipboards ADD COLUMN limit_views BOOLEAN NOT NULL DEFAULT FALSE AFTER view_count, ADD COLUMN max_views INT UNSIGNED NULL AFTER limit_views',
+  'SELECT 1'
+);
+PREPARE blog_clipboard_limit_views_statement FROM @blog_clipboard_limit_views_sql;
+EXECUTE blog_clipboard_limit_views_statement;
+DEALLOCATE PREPARE blog_clipboard_limit_views_statement;
 
 -- The original comments table predates user sessions and threaded replies.
 -- Add the new columns only when they are missing so this file remains safe to
@@ -583,6 +609,33 @@ PREPARE blog_drive_access_hint_statement FROM @blog_drive_access_hint_sql;
 EXECUTE blog_drive_access_hint_statement;
 DEALLOCATE PREPARE blog_drive_access_hint_statement;
 
+SET @blog_post_access_password_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'posts' AND COLUMN_NAME = 'access_password_hash') = 0,
+  'ALTER TABLE posts ADD COLUMN access_password_hash VARCHAR(255) NULL AFTER cover',
+  'SELECT 1'
+);
+PREPARE blog_post_access_password_statement FROM @blog_post_access_password_sql;
+EXECUTE blog_post_access_password_statement;
+DEALLOCATE PREPARE blog_post_access_password_statement;
+
+SET @blog_post_access_hint_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'posts' AND COLUMN_NAME = 'access_password_hint') = 0,
+  'ALTER TABLE posts ADD COLUMN access_password_hint VARCHAR(40) NULL AFTER access_password_hash',
+  'SELECT 1'
+);
+PREPARE blog_post_access_hint_statement FROM @blog_post_access_hint_sql;
+EXECUTE blog_post_access_hint_statement;
+DEALLOCATE PREPARE blog_post_access_hint_statement;
+
+SET @blog_post_client_limit_views_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'posts' AND COLUMN_NAME = 'limit_views_per_client') = 0,
+  'ALTER TABLE posts ADD COLUMN limit_views_per_client BOOLEAN NOT NULL DEFAULT FALSE AFTER access_password_hint, ADD COLUMN max_views_per_client INT UNSIGNED NULL AFTER limit_views_per_client',
+  'SELECT 1'
+);
+PREPARE blog_post_client_limit_views_stmt FROM @blog_post_client_limit_views_sql;
+EXECUTE blog_post_client_limit_views_stmt;
+DEALLOCATE PREPARE blog_post_client_limit_views_stmt;
+
 -- An in-progress upload. The file is appended in chunks so the browser can
 -- advance progress only after this server has stored those bytes.
 CREATE TABLE IF NOT EXISTS admin_drive_uploads (
@@ -629,3 +682,37 @@ CREATE TABLE IF NOT EXISTS game_records (
   CONSTRAINT fk_game_records_user FOREIGN KEY (user_id) REFERENCES comment_users(id) ON DELETE CASCADE,
   CONSTRAINT fk_game_records_guest FOREIGN KEY (guest_id) REFERENCES game_guests(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Persistent attempt tracking and strict 24-hour cooldown for protected resources
+-- (blog posts, online clipboards, user image hosting, admin drive files) across
+-- IP, subnet, browser fingerprint, device ID, and user-agent.
+CREATE TABLE IF NOT EXISTS access_cooldown_logs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  target_key VARCHAR(120) NOT NULL,
+  identifier_type VARCHAR(32) NOT NULL,
+  identifier_value VARCHAR(180) NOT NULL,
+  failed_count INT UNSIGNED NOT NULL DEFAULT 1,
+  locked_until DATETIME NULL,
+  last_failed_at DATETIME NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_target_identifier (target_key, identifier_type, identifier_value),
+  INDEX idx_cooldown_lookup (target_key, identifier_value),
+  INDEX idx_locked_until (locked_until)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- View limits per single IP or logged-in account for blog posts
+CREATE TABLE IF NOT EXISTS post_client_views (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  post_id BIGINT UNSIGNED NOT NULL,
+  client_type ENUM('user', 'ip') NOT NULL,
+  client_identifier VARCHAR(128) NOT NULL,
+  view_count INT UNSIGNED NOT NULL DEFAULT 1,
+  last_viewed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_post_client (post_id, client_type, client_identifier),
+  INDEX idx_post_views (post_id),
+  CONSTRAINT fk_post_client_views_post FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+

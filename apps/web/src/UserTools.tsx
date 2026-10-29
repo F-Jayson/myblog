@@ -1,4 +1,4 @@
-import { Code2, Copy, Eye, FileCode2, FileImage, FileText, Gamepad2, Highlighter, KeyRound, Link as LinkIcon, Pencil, Save, Trash2, Upload, UserRound, Wrench } from "lucide-react";
+import { Code2, Copy, Eye, FileCode2, FileImage, FileText, Gamepad2, Highlighter, KeyRound, Link as LinkIcon, Pencil, RefreshCw, Save, Trash2, Upload, UserRound, Wrench } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { api } from "./api";
@@ -62,9 +62,13 @@ export function ImageHostPage() {
 	const [error, setError] = useState("");
 	const [uploadPassword, setUploadPassword] = useState("");
 	const [uploadHint, setUploadHint] = useState("");
+	const [uploadLimitViews, setUploadLimitViews] = useState(false);
+	const [uploadMaxViews, setUploadMaxViews] = useState<number | string>(5);
 	const [passwordFor, setPasswordFor] = useState("");
 	const [passwordDraft, setPasswordDraft] = useState("");
 	const [hintDraft, setHintDraft] = useState("");
+	const [limitDraft, setLimitDraft] = useState(false);
+	const [maxViewsDraft, setMaxViewsDraft] = useState<number | string>(5);
 	const fileRef = useRef<HTMLInputElement>(null);
 	const allowed = Boolean(user && !authLoading && features.userCenterEnabled && features.imageHostingEnabled);
 	const canPublish = features.publicResourcesEnabled;
@@ -95,10 +99,11 @@ export function ImageHostPage() {
 		const invalidHint = hintProblem(uploadHint, uploadPassword);
 		if (invalidHint) { setError(invalidHint); return; }
 		if (uploadHint.trim() && !uploadPassword) { setError("请先设置访问密码"); return; }
+		if (uploadLimitViews && (!uploadMaxViews || Number(uploadMaxViews) < 1)) { setError("最大查看次数必须至少为 1"); return; }
 		setBusy(true);
 		setError("");
 		try {
-			await api.uploadUserStorage(file, file.name, true, uploadPassword || undefined, uploadHint.trim() || undefined);
+			await api.uploadUserStorage(file, file.name, true, uploadPassword || undefined, uploadHint.trim() || undefined, uploadLimitViews, uploadLimitViews ? Number(uploadMaxViews) || 5 : undefined);
 			setUploadPassword("");
 			setUploadHint("");
 			await load();
@@ -126,27 +131,60 @@ export function ImageHostPage() {
 			setError(e instanceof Error ? e.message : "删除失败");
 		}
 	};
-	const saveImagePassword = async (item: UserStorageItem, clear: boolean) => {
+	const saveImageSettings = async (item: UserStorageItem, clearPassword = false) => {
 		const hint = hintDraft.trim();
-		const invalidPassword = clear ? "" : passwordProblem(passwordDraft);
-		const invalidHint = clear ? "" : hintProblem(hint, passwordDraft);
+		const invalidPassword = clearPassword ? "" : passwordProblem(passwordDraft);
+		const invalidHint = clearPassword ? "" : hintProblem(hint, passwordDraft);
 		if (invalidPassword) { setError(invalidPassword); return; }
 		if (invalidHint) { setError(invalidHint); return; }
-		if (!clear && !passwordDraft && !item.hasAccessPassword) { setError(hint ? "请先设置访问密码" : "请输入访问密码"); return; }
+		if (!clearPassword && !passwordDraft && !item.hasAccessPassword && hint) { setError("请先设置访问密码"); return; }
+		if (limitDraft && (!maxViewsDraft || Number(maxViewsDraft) < 1)) { setError("最大查看次数必须至少为 1"); return; }
 		setError("");
 		try {
-			if (clear) await api.updateUserStorage(item.id, { clearAccessPassword: true });
-			else if (passwordDraft) await api.updateUserStorage(item.id, { accessPassword: passwordDraft, accessPasswordHint: hint });
-			else await api.updateUserStorage(item.id, { accessPasswordHint: hint });
+			const updateData: Parameters<typeof api.updateUserStorage>[1] = {
+				limitViews: limitDraft,
+				maxViews: limitDraft ? Number(maxViewsDraft) || 5 : null,
+			};
+			if (clearPassword) {
+				updateData.clearAccessPassword = true;
+			} else if (passwordDraft) {
+				updateData.accessPassword = passwordDraft;
+				updateData.accessPasswordHint = hint;
+			} else if (hint !== (item.accessPasswordHint ?? "")) {
+				updateData.accessPasswordHint = hint;
+			}
+			await api.updateUserStorage(item.id, updateData);
 			setPasswordDraft("");
 			setHintDraft("");
 			setPasswordFor("");
 			await load();
 		} catch (e) {
-			setError(e instanceof Error ? e.message : "访问密码更新失败");
+			setError(e instanceof Error ? e.message : "保存设置失败");
 		}
 	};
-	return <RequireLogin requires={["userCenterEnabled", "imageHostingEnabled"]} featureLabel="图床"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">USER TOOLS</span><h2><FileImage size={22}/> 图床</h2><p>图片与头像等数据共享 30MB 用户空间。新上传默认公开。设置访问密码后，别人必须输入正确密码才能看到图片。</p></div><Link to="/user/space" className="user-tool-link">空间管理</Link></header>{space ? <SpaceBar stats={space}/> : null}<div className="tool-upload"><input ref={fileRef} hidden type="file" accept="image/*" onChange={e => { void upload(e.target.files?.[0]); e.currentTarget.value=""; }}/><label className="tool-password-field">访问密码<input type="password" value={uploadPassword} maxLength={64} autoComplete="new-password" placeholder={uploadHint.trim() || "可选，至少 4 位"} title={uploadHint.trim() || undefined} onChange={(event) => setUploadPassword(event.target.value)} /></label><label className="tool-password-field">密码提示<input type="text" value={uploadHint} maxLength={40} autoComplete="off" placeholder="可选，显示在密码框中" onChange={(event) => setUploadHint(event.target.value)} /></label><button type="button" className="user-tool-button primary" disabled={busy} onClick={() => fileRef.current?.click()}><Upload size={16}/> {busy ? "上传中..." : "选择图片上传"}</button></div>{error ? <p className="user-tool-error">{error}</p> : null}<div className="tool-list">{items.length ? items.map(item => { const link = imageShareLink(item, canPublish); const preview = storagePreviewUrl(item); const editingPassword = passwordFor === String(item.id); return <article className="tool-item" key={item.id}><div className="tool-item-preview">{preview ? <AuthImage src={preview} alt={item.name || "图片"} fallback={<FileImage/>} /> : <FileImage/>}</div><div className="tool-item-main"><strong>{item.name || "未命名图片"}</strong><small>{formatBytes(item.sizeBytes)} · <Eye size={13}/> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}{item.hasAccessPassword ? <em className="tool-lock-mark">已设置访问密码</em> : null}</small>{link ? <div className="tool-public-link"><input readOnly value={link} /></div> : null}{editingPassword ? <div className="tool-password-row"><input type="password" value={passwordDraft} maxLength={64} autoComplete="new-password" placeholder={hintDraft.trim() || (item.hasAccessPassword ? "输入新的访问密码" : "设置访问密码")} title={hintDraft.trim() || undefined} onChange={(event) => setPasswordDraft(event.target.value)} /><input type="text" value={hintDraft} maxLength={40} autoComplete="off" placeholder="密码提示，可选" aria-label="密码提示" onChange={(event) => setHintDraft(event.target.value)} /><button type="button" className="user-tool-button" onClick={() => void saveImagePassword(item, false)}>保存</button>{item.hasAccessPassword ? <button type="button" className="user-tool-button" onClick={() => void saveImagePassword(item, true)}>清除</button> : null}</div> : null}</div><div className="tool-item-actions"><button type="button" title={link ? "复制公开链接" : "公开后可复制链接"} disabled={!link} onClick={() => { if (link) void navigator.clipboard?.writeText(link); }}><Copy size={15}/></button><button type="button" title="访问密码" onClick={() => { if (editingPassword) { setPasswordFor(""); setPasswordDraft(""); setHintDraft(""); } else { setPasswordFor(String(item.id)); setPasswordDraft(""); setHintDraft(item.accessPasswordHint ?? ""); } }}><KeyRound size={15}/></button><button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : item.isPublic ? "设为私有" : "公开访问"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15}/></button><button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15}/></button></div></article>; }) : <p className="tool-empty">还没有上传图片。</p>}</div></section></RequireLogin>;
+	const regenerateImageShare = async (item: UserStorageItem) => {
+		if (!canPublish) { setError("公开资源访问当前已关闭"); return; }
+		setBusy(true);
+		setError("");
+		try {
+			const updated = await api.updateUserStorage(item.id, {
+				regenerateShareToken: true,
+				isPublic: true,
+				limitViews: item.limitViews,
+				maxViews: item.maxViews,
+			});
+			await load();
+			const newLink = imageShareLink(updated, canPublish);
+			if (newLink && navigator.clipboard) {
+				void navigator.clipboard.writeText(newLink);
+			}
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "重新生成链接失败");
+		} finally {
+			setBusy(false);
+		}
+	};
+	return <RequireLogin requires={["userCenterEnabled", "imageHostingEnabled"]} featureLabel="图床"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">USER TOOLS</span><h2><FileImage size={22}/> 图床</h2><p>图片与头像等数据共享 30MB 用户空间。新上传默认公开。设置访问密码后，别人必须输入正确密码才能看到图片。</p></div><Link to="/user/space" className="user-tool-link">空间管理</Link></header>{space ? <SpaceBar stats={space}/> : null}<div className="tool-upload"><input ref={fileRef} hidden type="file" accept="image/*" onChange={e => { void upload(e.target.files?.[0]); e.currentTarget.value=""; }}/><label className="tool-password-field">访问密码<input type="password" value={uploadPassword} maxLength={64} autoComplete="new-password" placeholder={uploadHint.trim() || "可选，至少 4 位"} title={uploadHint.trim() || undefined} onChange={(event) => setUploadPassword(event.target.value)} /></label><label className="tool-password-field">密码提示<input type="text" value={uploadHint} maxLength={40} autoComplete="off" placeholder="可选，显示在密码框中" onChange={(event) => setUploadHint(event.target.value)} /></label><label className="tool-check"><input type="checkbox" checked={uploadLimitViews} onChange={(e) => setUploadLimitViews(e.target.checked)} />限制查看次数</label>{uploadLimitViews ? <label className="tool-password-field" style={{ minWidth: "7rem", width: "7rem" }}>最大次数<input type="number" min={1} max={999999} value={uploadMaxViews} onChange={(e) => setUploadMaxViews(Math.max(1, parseInt(e.target.value, 10) || 1))} placeholder="5" /></label> : null}<button type="button" className="user-tool-button primary" disabled={busy} onClick={() => fileRef.current?.click()}><Upload size={16}/> {busy ? "上传中..." : "选择图片上传"}</button></div>{error ? <p className="user-tool-error">{error}</p> : null}<div className="tool-list">{items.length ? items.map(item => { const link = imageShareLink(item, canPublish); const preview = storagePreviewUrl(item); const editingPassword = passwordFor === String(item.id); return <article className="tool-item" key={item.id}><div className="tool-item-preview">{preview ? <AuthImage src={preview} alt={item.name || "图片"} fallback={<FileImage/>} /> : <FileImage/>}</div><div className="tool-item-main"><strong>{item.name || "未命名图片"}</strong><small>{formatBytes(item.sizeBytes)} · <Eye size={13}/> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}{item.hasAccessPassword ? <em className="tool-lock-mark">已设置访问密码</em> : null}{item.limitViews && typeof item.maxViews === "number" ? ((item.accessCount ?? 0) >= item.maxViews ? <em className="tool-expired-mark">已达上限（{item.accessCount}/{item.maxViews}次已转私密）</em> : <em className="tool-limit-mark">限{item.maxViews}次（剩{Math.max(0, item.maxViews - (item.accessCount ?? 0))}次）</em>) : null}</small>{link ? <div className="tool-public-link"><input readOnly value={link} /><a href={link} target="_blank" rel="noreferrer" className="user-tool-link">打开</a></div> : (item.limitViews && typeof item.maxViews === "number" && (item.accessCount ?? 0) >= item.maxViews) ? <div className="tool-public-link" style={{ fontSize: "0.75rem", color: "#dc2626" }}><span>已达查看次数上限（{item.maxViews}次），链接已自动失效转为私密。可点击右侧「重新生成分享链接」重新开放。</span></div> : null}{editingPassword ? <div className="tool-password-row"><input type="password" value={passwordDraft} maxLength={64} autoComplete="new-password" placeholder={hintDraft.trim() || (item.hasAccessPassword ? "输入新的访问密码（留空不变）" : "设置访问密码（可选）")} title={hintDraft.trim() || undefined} onChange={(event) => setPasswordDraft(event.target.value)} /><input type="text" value={hintDraft} maxLength={40} autoComplete="off" placeholder="密码提示，可选" aria-label="密码提示" onChange={(event) => setHintDraft(event.target.value)} /><label className="tool-check"><input type="checkbox" checked={limitDraft} onChange={(e) => setLimitDraft(e.target.checked)} />限制查看次数</label>{limitDraft ? <input type="number" min={1} max={999999} style={{ width: "6rem", flex: "0 0 6rem" }} value={maxViewsDraft} placeholder="次数" onChange={(e) => setMaxViewsDraft(Math.max(1, parseInt(e.target.value, 10) || 1))} /> : null}<button type="button" className="user-tool-button primary" onClick={() => void saveImageSettings(item, false)}>保存设置</button>{item.hasAccessPassword ? <button type="button" className="user-tool-button" onClick={() => void saveImageSettings(item, true)}>清除密码</button> : null}</div> : null}</div><div className="tool-item-actions"><button type="button" title={link ? "复制公开链接" : "公开后可复制链接"} disabled={!link} onClick={() => { if (link) void navigator.clipboard?.writeText(link); }}><Copy size={15}/></button><button type="button" title="设置密码与查看限制" onClick={() => { if (editingPassword) { setPasswordFor(""); setPasswordDraft(""); setHintDraft(""); } else { setPasswordFor(String(item.id)); setPasswordDraft(""); setHintDraft(item.accessPasswordHint ?? ""); setLimitDraft(Boolean(item.limitViews)); setMaxViewsDraft(item.maxViews ?? 5); } }}><KeyRound size={15}/></button><button type="button" title="重新生成分享链接（重置次数并重新公开）" onClick={() => void regenerateImageShare(item)}><RefreshCw size={15}/></button><button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : item.isPublic ? "设为私有" : "公开访问"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15}/></button><button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15}/></button></div></article>; }) : <p className="tool-empty">还没有上传图片。</p>}</div></section></RequireLogin>;
 }
 
 function SpaceBar({ stats }: { stats: UserSpaceStats }) { const percent = Math.min(100, stats.limitBytes ? stats.usedBytes / stats.limitBytes * 100 : 0); return <div className="space-summary"><div><strong>{formatBytes(stats.usedBytes)}</strong><span> / {formatBytes(stats.limitBytes)} 已使用</span></div><div className="space-progress"><i style={{ width: `${percent}%` }}/></div><small>剩余 {formatBytes(stats.remainingBytes)}</small></div>; }
@@ -175,6 +213,8 @@ export function ClipboardPage() {
 	const [accessPassword, setAccessPassword] = useState("");
 	const [accessPasswordHint, setAccessPasswordHint] = useState("");
 	const [clearAccessPassword, setClearAccessPassword] = useState(false);
+	const [limitViews, setLimitViews] = useState(false);
+	const [maxViews, setMaxViews] = useState<number | string>(5);
 	const [error, setError] = useState("");
 	const allowed = Boolean(user && !authLoading && features.userCenterEnabled && features.clipboardEnabled);
 	const canPublish = features.publicResourcesEnabled;
@@ -201,6 +241,8 @@ export function ClipboardPage() {
 		setAccessPassword("");
 		setAccessPasswordHint("");
 		setClearAccessPassword(false);
+		setLimitViews(false);
+		setMaxViews(5);
 	};
 	const submit = async (e: FormEvent) => {
 		e.preventDefault();
@@ -211,17 +253,31 @@ export function ClipboardPage() {
 		const invalidHint = hintProblem(hint, accessPassword);
 		if (invalidHint) { setError(invalidHint); return; }
 		if (hint && !accessPassword && !(editing?.hasAccessPassword && !clearAccessPassword)) { setError("请先设置访问密码"); return; }
+		if (limitViews && (!maxViews || Number(maxViews) < 1)) { setError("最大查看次数必须至少为 1"); return; }
 		try {
-			const payload = { title, content, contentType, language: contentType === "code" ? language : "" };
+			const payload = {
+				title,
+				content,
+				contentType,
+				language: contentType === "code" ? language : "",
+				limitViews,
+				maxViews: limitViews ? Number(maxViews) || 5 : null,
+			};
 			if (editing) {
-				const update: { title: string; content: string; contentType: ClipboardContentType; language: string; accessPassword?: string; accessPasswordHint?: string; clearAccessPassword?: boolean } = payload;
+				const update: Parameters<typeof api.updateClipboard>[1] = { ...payload };
 				if (clearAccessPassword && !accessPassword) update.clearAccessPassword = true;
 				else {
 					if (accessPassword) update.accessPassword = accessPassword;
 					update.accessPasswordHint = hint;
 				}
 				await api.updateClipboard(editing.id, update);
-			} else await api.createClipboard({ ...payload, isPublic: true, ...(accessPassword ? { accessPassword, ...(hint ? { accessPasswordHint: hint } : {}) } : {}) });
+			} else {
+				await api.createClipboard({
+					...payload,
+					isPublic: true,
+					...(accessPassword ? { accessPassword, ...(hint ? { accessPasswordHint: hint } : {}) } : {}),
+				});
+			}
 			resetForm();
 			await load();
 		} catch (caught) {
@@ -244,6 +300,25 @@ export function ClipboardPage() {
 			await load();
 		} catch (caught) {
 			setError(caught instanceof Error ? caught.message : "删除失败");
+		}
+	};
+	const regenerateClipboardShare = async (item: UserClipboard) => {
+		if (!canPublish) { setError("公开资源访问当前已关闭"); return; }
+		setError("");
+		try {
+			const updated = await api.updateClipboard(item.id, {
+				regenerateShareToken: true,
+				isPublic: true,
+				limitViews: item.limitViews,
+				maxViews: item.maxViews,
+			});
+			await load();
+			if (updated.publicToken && navigator.clipboard) {
+				const newLink = api.clipboardShareUrl(updated.publicToken);
+				void navigator.clipboard.writeText(newLink);
+			}
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : "重新生成链接失败");
 		}
 	};
 	const placeholder = contentType === "markdown" ? "输入 Markdown 内容，例如 ## 标题" : contentType === "code" ? "粘贴代码片段" : "输入纯文本内容";
@@ -283,6 +358,19 @@ export function ClipboardPage() {
 				</label>
 				{editing?.hasAccessPassword ? <label className="tool-check"><input type="checkbox" checked={clearAccessPassword} onChange={(event) => { setClearAccessPassword(event.target.checked); if (event.target.checked) setAccessPassword(""); }} />清除访问密码</label> : null}
 				<p className="clipboard-type-hint">{editing?.hasAccessPassword && !clearAccessPassword ? "当前已设置访问密码。留空表示保持不变。密码提示会显示在密码框里。" : "设置后，没有正确密码就看不到正文。密码提示会显示在密码框里。"}</p>
+				<div style={{ display: "flex", flexWrap: "wrap", gap: "0.8rem", alignItems: "center" }}>
+					<label className="tool-check">
+						<input type="checkbox" checked={limitViews} onChange={(event) => setLimitViews(event.target.checked)} />
+						限制查看次数
+					</label>
+					{limitViews ? (
+						<label className="tool-password-field" style={{ minWidth: "7rem", width: "7rem" }}>
+							最大次数
+							<input type="number" min={1} max={999999} value={maxViews} onChange={(e) => setMaxViews(Math.max(1, parseInt(e.target.value, 10) || 1))} placeholder="5" />
+						</label>
+					) : null}
+				</div>
+				<p className="clipboard-type-hint">{limitViews ? `开启后，该分享被查看达到 ${maxViews || 5} 次后将自动失效并转为私密状态。发布者可随时重新生成新的分享链接。` : "未开启限制，公开后所有人均可随时查看。"}</p>
 				<div className="tool-form-row">
 					<button className="user-tool-button primary" type="submit"><Save size={16} /> {editing ? "更新剪贴板" : "保存剪贴板"}</button>
 					{editing ? <button className="user-tool-button" type="button" onClick={resetForm}>取消</button> : null}
@@ -295,13 +383,14 @@ export function ClipboardPage() {
 				return <article className="tool-item clipboard-item" key={item.id}>
 					<div className="tool-item-main">
 						<strong>{item.title}</strong>
-						<small><em>{clipboardTypeLabel(item)}</em> · {formatBytes(item.sizeBytes)} · <Eye size={13} /> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}{item.hasAccessPassword ? <em className="tool-lock-mark">已设置访问密码</em> : null}</small>
+						<small><em>{clipboardTypeLabel(item)}</em> · {formatBytes(item.sizeBytes)} · <Eye size={13} /> {item.accessCount ?? 0} 次查看 · {item.isPublic ? canPublish ? "公开" : "公开（暂时不可访问）" : "私有"}{item.hasAccessPassword ? <em className="tool-lock-mark">已设置访问密码</em> : null}{item.limitViews && typeof item.maxViews === "number" ? ((item.accessCount ?? 0) >= item.maxViews ? <em className="tool-expired-mark">已达上限（{item.accessCount}/{item.maxViews}次已转私密）</em> : <em className="tool-limit-mark">限{item.maxViews}次（剩{Math.max(0, item.maxViews - (item.accessCount ?? 0))}次）</em>) : null}</small>
 						<pre>{snippet.slice(0, 220)}{snippet.length > 220 ? "…" : ""}</pre>
-						{link ? <div className="tool-public-link"><input readOnly value={link} /><Link to={`/share/${encodeURIComponent(item.publicToken ?? "")}`} className="user-tool-link" target="_blank" rel="noreferrer">预览</Link></div> : null}
+						{link ? <div className="tool-public-link"><input readOnly value={link} /><Link to={`/share/${encodeURIComponent(item.publicToken ?? "")}`} className="user-tool-link" target="_blank" rel="noreferrer">预览</Link></div> : (item.limitViews && typeof item.maxViews === "number" && (item.accessCount ?? 0) >= item.maxViews) ? <div className="tool-public-link" style={{ fontSize: "0.75rem", color: "#dc2626" }}><span>已达查看次数上限（{item.maxViews}次），链接已自动失效转为私密。可点击右侧「重新生成分享链接」重新开放。</span></div> : null}
 					</div>
 					<div className="tool-item-actions">
 						<button type="button" title={link ? "复制公开链接" : "公开后可复制链接"} disabled={!link} onClick={() => { if (link) void navigator.clipboard?.writeText(link); }}><Copy size={15} /></button>
-						<button type="button" title="编辑" onClick={() => { setEditing(item); setTitle(item.title); setContent(item.content ?? ""); setContentType(item.contentType === "markdown" || item.contentType === "code" ? item.contentType : "text"); setLanguage(item.language || "javascript"); setPreview(false); setAccessPassword(""); setAccessPasswordHint(item.accessPasswordHint ?? ""); setClearAccessPassword(false); }}><Pencil size={15} /></button>
+						<button type="button" title="重新生成分享链接（重置次数并重新公开）" onClick={() => void regenerateClipboardShare(item)}><RefreshCw size={15} /></button>
+						<button type="button" title="编辑" onClick={() => { setEditing(item); setTitle(item.title); setContent(item.content ?? ""); setContentType(item.contentType === "markdown" || item.contentType === "code" ? item.contentType : "text"); setLanguage(item.language || "javascript"); setPreview(false); setAccessPassword(""); setAccessPasswordHint(item.accessPasswordHint ?? ""); setClearAccessPassword(false); setLimitViews(Boolean(item.limitViews)); setMaxViews(item.maxViews ?? 5); }}><Pencil size={15} /></button>
 						<button type="button" title={!canPublish && !item.isPublic ? "公开访问已关闭" : item.isPublic ? "设为私有" : "公开访问"} disabled={!canPublish && !item.isPublic} onClick={() => void togglePublic(item)}><LinkIcon size={15} /></button>
 						<button type="button" title="删除" onClick={() => void remove(item)}><Trash2 size={15} /></button>
 					</div>

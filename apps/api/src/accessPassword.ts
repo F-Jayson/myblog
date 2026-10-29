@@ -1,4 +1,7 @@
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import type { Request } from "express";
+import type { RowDataPacket } from "mysql2";
+import { pool } from "./db.js";
 
 export const ACCESS_PASSWORD_MIN = 4;
 export const ACCESS_PASSWORD_MAX = 64;
@@ -6,15 +9,26 @@ export const ACCESS_PASSWORD_HINT_MAX = 40;
 const ACCESS_PASSWORD_KEYLEN = 64;
 const GRANT_TTL_MS = 30 * 60 * 1000;
 
+export const STRICT_COOLDOWN_MAX_FAILURES = 3;
+export const STRICT_COOLDOWN_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
+
 const grantSecret = randomBytes(32);
 const recentAttempts = new Map<string, number[]>();
 
 export class AccessPasswordError extends Error {
 	statusCode: number;
-	constructor(message: string, statusCode = 400) {
+	remainingAttempts?: number;
+	cooldownSeconds?: number;
+	lockedUntil?: number;
+	constructor(message: string, statusCode = 400, details?: { remainingAttempts?: number; cooldownSeconds?: number; lockedUntil?: number }) {
 		super(message);
 		this.name = "AccessPasswordError";
 		this.statusCode = statusCode;
+		if (details) {
+			this.remainingAttempts = details.remainingAttempts;
+			this.cooldownSeconds = details.cooldownSeconds;
+			this.lockedUntil = details.lockedUntil;
+		}
 	}
 }
 
@@ -170,6 +184,326 @@ export function accessGrantsFromRequest(cookieHeader: string | undefined, header
 	return grants;
 }
 
+// -------------------------------------------------------------
+// Strict Multi-Vector Cooldown Engine (IP, Subnet, Fingerprint, DeviceId, UA)
+// -------------------------------------------------------------
+
+export type ClientIdentifierRecord = {
+	type: "ip" | "subnet" | "fingerprint" | "deviceId" | "ua";
+	value: string;
+};
+
+export function extractClientIp(req: { header: (name: string) => string | undefined; ip?: string; socket?: { remoteAddress?: string } }): string {
+	const forwarded = req.header("x-forwarded-for")?.split(",")[0]?.trim();
+	return forwarded || req.ip || req.socket?.remoteAddress || "";
+}
+
+function calculateSubnet(ip: string): string {
+	if (!ip) return "";
+	if (ip.includes(".")) {
+		const parts = ip.split(".");
+		if (parts.length === 4) return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+	}
+	if (ip.includes(":")) {
+		const parts = ip.split(":");
+		if (parts.length >= 3) return `${parts.slice(0, 3).join(":")}::/48`;
+	}
+	return ip;
+}
+
+function parseHeaderCookie(cookieHeader: string | undefined, name: string): string | null {
+	if (!cookieHeader) return null;
+	for (const part of cookieHeader.split(";")) {
+		const eq = part.indexOf("=");
+		if (eq > 0 && part.slice(0, eq).trim() === name) {
+			try {
+				return decodeURIComponent(part.slice(eq + 1).trim());
+			} catch {
+				return part.slice(eq + 1).trim();
+			}
+		}
+	}
+	return null;
+}
+
+export function extractClientIdentifiers(req: Request): ClientIdentifierRecord[] {
+	const records: ClientIdentifierRecord[] = [];
+	const ip = extractClientIp(req).trim().slice(0, 128);
+	if (ip) {
+		records.push({ type: "ip", value: ip });
+		const subnet = calculateSubnet(ip);
+		if (subnet && subnet !== ip) {
+			records.push({ type: "subnet", value: subnet.slice(0, 128) });
+		}
+	}
+
+	const bodyFp = typeof req.body === "object" && req.body && typeof req.body.fingerprint === "string" ? req.body.fingerprint : "";
+	const fpHeader = (req.header("x-client-fingerprint") ?? bodyFp)?.trim();
+	if (fpHeader && /^[A-Za-z0-9_-]{8,128}$/u.test(fpHeader)) {
+		records.push({ type: "fingerprint", value: fpHeader });
+	}
+
+	const bodyDev = typeof req.body === "object" && req.body && typeof req.body.deviceId === "string" ? req.body.deviceId : "";
+	const devHeader = (req.header("x-device-id") ?? parseHeaderCookie(req.header("cookie"), "blog_device_id") ?? bodyDev)?.trim();
+	if (devHeader && /^[A-Za-z0-9_-]{8,128}$/u.test(devHeader)) {
+		records.push({ type: "deviceId", value: devHeader });
+	}
+
+	const ua = (req.header("user-agent") ?? "").trim();
+	const lang = (req.header("accept-language") ?? "").trim();
+	if (ua || lang) {
+		const uaHash = createHash("sha256").update(`${ua}#${lang}`).digest("hex").slice(0, 32);
+		records.push({ type: "ua", value: uaHash });
+	}
+
+	return records;
+}
+
+export function formatCooldownTime(seconds: number): string {
+	if (seconds <= 0) return "0秒";
+	const hours = Math.floor(seconds / 3600);
+	const minutes = Math.floor((seconds % 3600) / 60);
+	const secs = seconds % 60;
+	const parts: string[] = [];
+	if (hours > 0) parts.push(`${hours}小时`);
+	if (minutes > 0) parts.push(`${minutes}分钟`);
+	if (secs > 0 && hours === 0) parts.push(`${secs}秒`);
+	return parts.join("") || "1秒";
+}
+
+type MemoryCooldown = {
+	failedCount: number;
+	lockedUntil: number | null;
+	lastFailedAt: number;
+};
+
+const memoryCooldownMap = new Map<string, MemoryCooldown>();
+
+function memoryKey(targetKey: string, type: string, value: string) {
+	return `${targetKey}##${type}:${value}`;
+}
+
+export type CooldownCheckResult = {
+	allowed: boolean;
+	remainingAttempts: number;
+	lockedUntil?: number;
+	cooldownSeconds?: number;
+};
+
+export async function checkAccessCooldown(targetKey: string, req: Request): Promise<CooldownCheckResult> {
+	const identifiers = extractClientIdentifiers(req);
+	if (!identifiers.length) return { allowed: true, remainingAttempts: STRICT_COOLDOWN_MAX_FAILURES };
+
+	const now = Date.now();
+	let maxFailures = 0;
+	let maxLockedUntil: number | null = null;
+
+	// Check memory cache
+	for (const id of identifiers) {
+		const key = memoryKey(targetKey, id.type, id.value);
+		const cached = memoryCooldownMap.get(key);
+		if (cached) {
+			if (cached.lockedUntil && cached.lockedUntil > now) {
+				maxLockedUntil = Math.max(maxLockedUntil ?? 0, cached.lockedUntil);
+			} else if (now - cached.lastFailedAt < STRICT_COOLDOWN_DURATION_MS) {
+				maxFailures = Math.max(maxFailures, cached.failedCount);
+			}
+		}
+	}
+
+	// Check DB persistence
+	try {
+		const values = identifiers.map((item) => item.value);
+		const [rows] = await pool.query<RowDataPacket[]>(
+			`SELECT identifier_type, identifier_value, failed_count, locked_until, last_failed_at
+			 FROM access_cooldown_logs
+			 WHERE target_key = ? AND identifier_value IN (?)`,
+			[targetKey, values],
+		);
+		for (const row of rows) {
+			const lockedTime = row.locked_until ? new Date(row.locked_until).getTime() : null;
+			const lastFailed = row.last_failed_at ? new Date(row.last_failed_at).getTime() : 0;
+			if (lockedTime && lockedTime > now) {
+				maxLockedUntil = Math.max(maxLockedUntil ?? 0, lockedTime);
+			} else if (now - lastFailed < STRICT_COOLDOWN_DURATION_MS) {
+				maxFailures = Math.max(maxFailures, Number(row.failed_count || 0));
+			}
+		}
+	} catch {
+		// Ignore DB read failure; in-memory cache acts as fallback
+	}
+
+	if (maxLockedUntil && maxLockedUntil > now) {
+		const cooldownSeconds = Math.max(1, Math.ceil((maxLockedUntil - now) / 1000));
+		// Cross-bind lockout to all current identifiers in memory so changes to IP/device during lockout inherit the ban
+		for (const id of identifiers) {
+			memoryCooldownMap.set(memoryKey(targetKey, id.type, id.value), {
+				failedCount: Math.max(3, maxFailures),
+				lockedUntil: maxLockedUntil,
+				lastFailedAt: now,
+			});
+		}
+		return { allowed: false, remainingAttempts: 0, lockedUntil: maxLockedUntil, cooldownSeconds };
+	}
+
+	if (maxFailures >= STRICT_COOLDOWN_MAX_FAILURES) {
+		const lockedUntil = now + STRICT_COOLDOWN_DURATION_MS;
+		const cooldownSeconds = Math.ceil(STRICT_COOLDOWN_DURATION_MS / 1000);
+		for (const id of identifiers) {
+			memoryCooldownMap.set(memoryKey(targetKey, id.type, id.value), {
+				failedCount: maxFailures,
+				lockedUntil,
+				lastFailedAt: now,
+			});
+		}
+		return { allowed: false, remainingAttempts: 0, lockedUntil, cooldownSeconds };
+	}
+
+	return { allowed: true, remainingAttempts: Math.max(0, STRICT_COOLDOWN_MAX_FAILURES - maxFailures) };
+}
+
+export async function recordAccessFailure(targetKey: string, req: Request): Promise<{
+	inCooldown: boolean;
+	remainingAttempts: number;
+	lockedUntil?: number;
+	cooldownSeconds?: number;
+}> {
+	const identifiers = extractClientIdentifiers(req);
+	const now = Date.now();
+	let currentMaxFailures = 0;
+
+	for (const id of identifiers) {
+		const cached = memoryCooldownMap.get(memoryKey(targetKey, id.type, id.value));
+		if (cached && now - cached.lastFailedAt < STRICT_COOLDOWN_DURATION_MS) {
+			currentMaxFailures = Math.max(currentMaxFailures, cached.failedCount);
+		}
+	}
+
+	try {
+		if (identifiers.length) {
+			const values = identifiers.map((item) => item.value);
+			const [rows] = await pool.query<RowDataPacket[]>(
+				`SELECT failed_count, last_failed_at FROM access_cooldown_logs WHERE target_key = ? AND identifier_value IN (?)`,
+				[targetKey, values],
+			);
+			for (const row of rows) {
+				const lastFailed = row.last_failed_at ? new Date(row.last_failed_at).getTime() : 0;
+				if (now - lastFailed < STRICT_COOLDOWN_DURATION_MS) {
+					currentMaxFailures = Math.max(currentMaxFailures, Number(row.failed_count || 0));
+				}
+			}
+		}
+	} catch {
+		// Ignore DB error
+	}
+
+	const newCount = currentMaxFailures + 1;
+	const enteredCooldown = newCount >= STRICT_COOLDOWN_MAX_FAILURES;
+	const lockedUntil = enteredCooldown ? now + STRICT_COOLDOWN_DURATION_MS : null;
+	const cooldownSeconds = enteredCooldown ? Math.ceil(STRICT_COOLDOWN_DURATION_MS / 1000) : undefined;
+
+	for (const id of identifiers) {
+		memoryCooldownMap.set(memoryKey(targetKey, id.type, id.value), {
+			failedCount: newCount,
+			lockedUntil,
+			lastFailedAt: now,
+		});
+	}
+
+	try {
+		for (const id of identifiers) {
+			if (lockedUntil) {
+				await pool.execute(
+					`INSERT INTO access_cooldown_logs (target_key, identifier_type, identifier_value, failed_count, locked_until, last_failed_at)
+					 VALUES (?, ?, ?, ?, FROM_UNIXTIME(? / 1000), NOW())
+					 ON DUPLICATE KEY UPDATE failed_count = VALUES(failed_count), locked_until = VALUES(locked_until), last_failed_at = NOW()`,
+					[targetKey, id.type, id.value, newCount, lockedUntil],
+				);
+			} else {
+				await pool.execute(
+					`INSERT INTO access_cooldown_logs (target_key, identifier_type, identifier_value, failed_count, locked_until, last_failed_at)
+					 VALUES (?, ?, ?, ?, NULL, NOW())
+					 ON DUPLICATE KEY UPDATE failed_count = VALUES(failed_count), locked_until = NULL, last_failed_at = NOW()`,
+					[targetKey, id.type, id.value, newCount],
+				);
+			}
+		}
+	} catch {
+		// Ignore DB persistence error
+	}
+
+	return {
+		inCooldown: enteredCooldown,
+		remainingAttempts: Math.max(0, STRICT_COOLDOWN_MAX_FAILURES - newCount),
+		lockedUntil: lockedUntil ?? undefined,
+		cooldownSeconds,
+	};
+}
+
+export async function recordAccessSuccess(targetKey: string, req: Request): Promise<void> {
+	const identifiers = extractClientIdentifiers(req);
+	for (const id of identifiers) {
+		memoryCooldownMap.delete(memoryKey(targetKey, id.type, id.value));
+	}
+	try {
+		if (identifiers.length) {
+			const values = identifiers.map((item) => item.value);
+			await pool.query(
+				`DELETE FROM access_cooldown_logs WHERE target_key = ? AND identifier_value IN (?)`,
+				[targetKey, values],
+			);
+		}
+	} catch {
+		// Ignore DB error
+	}
+}
+
+export function clearCooldownForTest(targetKey: string): void {
+	for (const key of memoryCooldownMap.keys()) {
+		if (key.startsWith(`${targetKey}:`)) {
+			memoryCooldownMap.delete(key);
+		}
+	}
+}
+
+export async function verifyAndApplyAccessPassword(
+	targetKey: string,
+	submittedPassword: unknown,
+	expectedHash: string,
+	req: Request,
+): Promise<string> {
+	const cooldownCheck = await checkAccessCooldown(targetKey, req);
+	if (!cooldownCheck.allowed) {
+		const durationText = formatCooldownTime(cooldownCheck.cooldownSeconds ?? 86400);
+		throw new AccessPasswordError(
+			`密码错误次数过多，已被限制访问 24 小时（剩余 ${durationText}）`,
+			429,
+			{ remainingAttempts: 0, cooldownSeconds: cooldownCheck.cooldownSeconds, lockedUntil: cooldownCheck.lockedUntil },
+		);
+	}
+
+	const submitted = readSubmittedAccessPassword(submittedPassword);
+	if (!submitted || !verifyAccessPassword(submitted, expectedHash)) {
+		const failure = await recordAccessFailure(targetKey, req);
+		if (failure.inCooldown) {
+			const durationText = formatCooldownTime(failure.cooldownSeconds ?? 86400);
+			throw new AccessPasswordError(
+				`密码错误已达 3 次上限，进入 24 小时冷却期（剩余 ${durationText}）`,
+				429,
+				{ remainingAttempts: 0, cooldownSeconds: failure.cooldownSeconds, lockedUntil: failure.lockedUntil },
+			);
+		}
+		throw new AccessPasswordError(
+			`访问密码不正确，还剩 ${failure.remainingAttempts} 次尝试机会`,
+			401,
+			{ remainingAttempts: failure.remainingAttempts },
+		);
+	}
+
+	await recordAccessSuccess(targetKey, req);
+	return issueAccessGrant(targetKey, expectedHash);
+}
+
 function escapeHtmlText(value: string) {
 	return value.replace(/[&<>"']/g, (char) => {
 		if (char === "&") return "&amp;";
@@ -204,7 +538,7 @@ export function drivePasswordPage(hint = "") {
 <body>
   <form id="gate">
     <h1>此文件需要访问密码</h1>
-    <p>只有输入正确的密码才能下载。密码错误时不会提供文件内容。</p>
+    <p>只有输入正确的密码才能下载。密码错误达到3次将锁定24小时。</p>
     <input type="password" name="password" autocomplete="off" required maxlength="64" placeholder="${placeholder}" title="${placeholder}">
     <p class="error" id="error"></p>
     <button type="submit">打开文件</button>

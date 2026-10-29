@@ -10,7 +10,22 @@ import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
-import { AccessPasswordError, accessGrantsFromRequest, allowAccessAttempt, driveAccessCookie, drivePasswordPage, issueAccessGrant, parseAccessPassword, parseAccessPasswordHint, readAccessGrant, readSubmittedAccessPassword, verifyAccessPassword } from "./accessPassword.js";
+import {
+	AccessPasswordError,
+	accessGrantsFromRequest,
+	allowAccessAttempt,
+	checkAccessCooldown,
+	driveAccessCookie,
+	drivePasswordPage,
+	formatCooldownTime,
+	issueAccessGrant,
+	parseAccessPassword,
+	parseAccessPasswordHint,
+	readAccessGrant,
+	readSubmittedAccessPassword,
+	verifyAccessPassword,
+	verifyAndApplyAccessPassword,
+} from "./accessPassword.js";
 import { ADMIN_DRIVE_CHUNK_BYTES, ADMIN_DRIVE_MAX_BYTES, adminDriveFilePath, contentDispositionAttachment, countsAsDriveDownload, driveDownloadUrl, isDriveToken, normalizeDriveFileName, parseSingleByteRange, safeDriveMimeType } from "./adminDrive.js";
 import { config } from "./config.js";
 import { pool } from "./db.js";
@@ -47,6 +62,8 @@ import {
 	normalizeClipboardLanguage,
 	findPublicUserResource,
 	incrementPublicResourceView,
+	getPostClientViewCount,
+	recordPostClientView,
 	listAdminUserSpace,
 	listAdminUserResources,
 	deleteUserSticker,
@@ -377,7 +394,10 @@ function userImageUploadRoute(kind: UserStorageKind, defaultPublic: boolean) {
 			try {
 				const accessPassword = parseAccessPassword(req.body?.accessPassword);
 				const accessPasswordHint = parseAccessPasswordHint(req.body?.accessPasswordHint);
-				const item = await createUserStorageItem({ userId: req.commentUser.id, kind, name, url: "", storageKey: req.file.filename, mimeType: req.file.mimetype, byteSize: req.file.size, isPublic, accessPassword: accessPassword ?? null, accessPasswordHint: accessPasswordHint ?? null });
+				const limitViews = parseBooleanInput(req.body?.limitViews, false);
+				const rawMaxViews = req.body?.maxViews !== undefined ? Number(req.body.maxViews) : null;
+				const maxViews = limitViews && rawMaxViews && Number.isFinite(rawMaxViews) ? Math.max(1, Math.floor(rawMaxViews)) : null;
+				const item = await createUserStorageItem({ userId: req.commentUser.id, kind, name, url: "", storageKey: req.file.filename, mimeType: req.file.mimetype, byteSize: req.file.size, isPublic, accessPassword: accessPassword ?? null, accessPasswordHint: accessPasswordHint ?? null, limitViews, maxViews });
 				if (!item) throw new Error("图片记录创建失败");
 				res.status(201).json(item);
 			} catch (error) {
@@ -680,7 +700,11 @@ app.patch("/api/user/storage/:id", requireFeature("userCenterEnabled", "用户�
 		if (body.isPublic !== undefined && isPublic === undefined) { res.status(400).json({ error: "公开状态无效" }); return; }
 		const accessPassword = body.clearAccessPassword === true && !body.accessPassword ? null : parseAccessPassword(body.accessPassword);
 		const accessPasswordHint = hasHint ? parseAccessPasswordHint(body.accessPasswordHint) : undefined;
-		const item = await updateUserStorageSettings(req.commentUser!.id, id, { isPublic, accessPassword, accessPasswordHint });
+		const limitViews = typeof body.limitViews === "boolean" ? body.limitViews : undefined;
+		const rawMaxViews = body.maxViews !== undefined ? Number(body.maxViews) : undefined;
+		const maxViews = rawMaxViews !== undefined && Number.isFinite(rawMaxViews) && rawMaxViews > 0 ? Math.max(1, Math.floor(rawMaxViews)) : rawMaxViews === null ? null : undefined;
+		const regenerateShareToken = body.regenerateShareToken === true;
+		const item = await updateUserStorageSettings(req.commentUser!.id, id, { isPublic, accessPassword, accessPasswordHint, limitViews, maxViews, regenerateShareToken });
 		if (!item) { res.status(404).json({ error: "资源不存在" }); return; }
 		res.json(item);
 	} catch (error) { next(error); }
@@ -701,11 +725,33 @@ app.get("/api/user/clipboards", requireFeature("userCenterEnabled", "用户中�
 });
 app.post("/api/user/clipboards", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("clipboardEnabled", "在线剪贴板功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try {
-		const input = z.object({ title: z.string().trim().max(255).optional(), content: z.string().max(USER_SPACE_QUOTA_BYTES).default(""), contentType: z.string().trim().max(16).optional(), language: z.string().trim().max(32).optional(), isPublic: z.boolean().optional(), accessPassword: z.string().max(64).optional(), accessPasswordHint: z.string().max(80).nullable().optional(), clearAccessPassword: z.boolean().optional() }).parse(req.body);
+		const input = z.object({
+			title: z.string().trim().max(255).optional(),
+			content: z.string().max(USER_SPACE_QUOTA_BYTES).default(""),
+			contentType: z.string().trim().max(16).optional(),
+			language: z.string().trim().max(32).optional(),
+			isPublic: z.boolean().optional(),
+			accessPassword: z.string().max(64).optional(),
+			accessPasswordHint: z.string().max(80).nullable().optional(),
+			clearAccessPassword: z.boolean().optional(),
+			limitViews: z.boolean().optional(),
+			maxViews: z.number().int().min(1).nullable().optional(),
+		}).parse(req.body);
 		const contentType = normalizeClipboardContentType(input.contentType);
 		const accessPassword = input.clearAccessPassword && !input.accessPassword ? null : parseAccessPassword(input.accessPassword);
 		const accessPasswordHint = parseAccessPasswordHint(input.accessPasswordHint);
-		res.status(201).json(await createUserClipboard({ userId: req.commentUser!.id, title: input.title, content: input.content, contentType, language: normalizeClipboardLanguage(contentType, input.language), isPublic: input.isPublic ?? true, accessPassword: accessPassword ?? null, accessPasswordHint: accessPasswordHint ?? null }));
+		res.status(201).json(await createUserClipboard({
+			userId: req.commentUser!.id,
+			title: input.title,
+			content: input.content,
+			contentType,
+			language: normalizeClipboardLanguage(contentType, input.language),
+			isPublic: input.isPublic ?? true,
+			accessPassword: accessPassword ?? null,
+			accessPasswordHint: accessPasswordHint ?? null,
+			limitViews: input.limitViews,
+			maxViews: input.maxViews,
+		}));
 	} catch (error) { next(error); }
 });
 app.get("/api/user/clipboards/:id", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("clipboardEnabled", "在线剪贴板功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
@@ -721,11 +767,34 @@ app.patch("/api/user/clipboards/:id", requireFeature("userCenterEnabled", "用�
 	try {
 		const id = parseCommentUserId(String(req.params.id));
 		if (!id) { res.status(400).json({ error: "剪贴板编号无效" }); return; }
-		const input = z.object({ title: z.string().trim().max(255).optional(), content: z.string().max(USER_SPACE_QUOTA_BYTES).optional(), contentType: z.string().trim().max(16).optional(), language: z.string().trim().max(32).optional(), isPublic: z.boolean().optional(), accessPassword: z.string().max(64).optional(), accessPasswordHint: z.string().max(80).nullable().optional(), clearAccessPassword: z.boolean().optional() }).parse(req.body);
+		const input = z.object({
+			title: z.string().trim().max(255).optional(),
+			content: z.string().max(USER_SPACE_QUOTA_BYTES).optional(),
+			contentType: z.string().trim().max(16).optional(),
+			language: z.string().trim().max(32).optional(),
+			isPublic: z.boolean().optional(),
+			accessPassword: z.string().max(64).optional(),
+			accessPasswordHint: z.string().max(80).nullable().optional(),
+			clearAccessPassword: z.boolean().optional(),
+			limitViews: z.boolean().optional(),
+			maxViews: z.number().int().min(1).nullable().optional(),
+			regenerateShareToken: z.boolean().optional(),
+		}).parse(req.body);
 		const contentType = input.contentType === undefined ? undefined : normalizeClipboardContentType(input.contentType);
 		const accessPassword = input.clearAccessPassword && !input.accessPassword ? null : parseAccessPassword(input.accessPassword);
 		const accessPasswordHint = input.accessPasswordHint === undefined ? undefined : parseAccessPasswordHint(input.accessPasswordHint);
-		const item = await updateUserClipboard(req.commentUser!.id, id, { title: input.title, content: input.content, contentType, language: contentType ? normalizeClipboardLanguage(contentType, input.language) : input.language, isPublic: input.isPublic, accessPassword, accessPasswordHint });
+		const item = await updateUserClipboard(req.commentUser!.id, id, {
+			title: input.title,
+			content: input.content,
+			contentType,
+			language: contentType ? normalizeClipboardLanguage(contentType, input.language) : input.language,
+			isPublic: input.isPublic,
+			accessPassword,
+			accessPasswordHint,
+			limitViews: input.limitViews,
+			maxViews: input.maxViews,
+			regenerateShareToken: input.regenerateShareToken,
+		});
 		if (!item) { res.status(404).json({ error: "剪贴板不存在" }); return; }
 		res.json(item);
 	} catch (error) { next(error); }
@@ -747,14 +816,13 @@ async function revealPublicResource(req: Request, token: string, password: strin
 	const found = await findPublicUserResource(token);
 	if (!found) return null;
 	if (!found.accessPasswordHash) return { found, locked: false, grant: "" };
+	const resourceKey = publicResourceKey(found);
 	if (password !== undefined) {
-		if (!allowAccessAttempt(`public:${requestClientIp(req)}:${token}`)) throw new AccessPasswordError("尝试过于频繁，请稍后再试", 429);
-		const submitted = readSubmittedAccessPassword(password);
-		if (!submitted || !verifyAccessPassword(submitted, found.accessPasswordHash)) throw new AccessPasswordError("访问密码不正确", 401);
-		return { found, locked: false, grant: issueAccessGrant(publicResourceKey(found), found.accessPasswordHash) };
+		const grant = await verifyAndApplyAccessPassword(resourceKey, password, found.accessPasswordHash, req);
+		return { found, locked: false, grant };
 	}
 	const grant = req.header("x-access-grant")?.trim() ?? "";
-	if (grant && readAccessGrant(grant, publicResourceKey(found), found.accessPasswordHash)) return { found, locked: false, grant };
+	if (grant && readAccessGrant(grant, resourceKey, found.accessPasswordHash)) return { found, locked: false, grant };
 	return { found, locked: true, grant: "" };
 }
 
@@ -763,13 +831,34 @@ async function deliverPublicResource(req: Request, res: Response, next: NextFunc
 	if (!opened) { res.status(404).json({ error: "公开资源不存在或已关闭" }); return; }
 	if (opened.locked) {
 		const passwordHint = opened.found.item.accessPasswordHint.trim();
-		res.status(401).json({ locked: true, type: opened.found.type, error: "需要访问密码", ...(passwordHint ? { passwordHint } : {}) });
+		const cooldown = await checkAccessCooldown(publicResourceKey(opened.found), req);
+		res.status(401).json({
+			locked: true,
+			type: opened.found.type,
+			error: cooldown.allowed ? "需要访问密码" : `密码错误次数过多，已被限制访问 24 小时（剩余 ${formatCooldownTime(cooldown.cooldownSeconds ?? 86400)}）`,
+			...(passwordHint ? { passwordHint } : {}),
+			inCooldown: !cooldown.allowed,
+			remainingAttempts: cooldown.remainingAttempts,
+			cooldownSeconds: cooldown.cooldownSeconds,
+			lockedUntil: cooldown.lockedUntil,
+		});
 		return;
 	}
 	const protectedResource = Boolean(opened.found.accessPasswordHash);
 	if (opened.found.type === "image") {
 		if (password !== undefined) {
-			res.json({ locked: false, type: "image", hasAccessPassword: protectedResource, name: opened.found.item.name, mimeType: opened.found.item.mimeType, byteSize: opened.found.item.byteSize, accessGrant: opened.grant || undefined });
+			res.json({
+				locked: false,
+				type: "image",
+				hasAccessPassword: protectedResource,
+				name: opened.found.item.name,
+				mimeType: opened.found.item.mimeType,
+				byteSize: opened.found.item.byteSize,
+				viewCount: opened.found.item.viewCount,
+				limitViews: opened.found.item.limitViews,
+				maxViews: opened.found.item.maxViews,
+				accessGrant: opened.grant || undefined,
+			});
 			return;
 		}
 		const filePath = safeUserStoragePath(opened.found.item.storageKey ?? "");
@@ -787,7 +876,24 @@ async function deliverPublicResource(req: Request, res: Response, next: NextFunc
 	if (clipboard.content === undefined) { res.status(404).json({ error: "公开资源不存在或已关闭" }); return; }
 	const counted = await incrementPublicResourceView("clipboard", clipboard.id);
 	res.setHeader("Cache-Control", protectedResource ? "private, no-store" : "no-store");
-	res.json({ locked: false, type: "clipboard", hasAccessPassword: protectedResource, id: clipboard.id, title: clipboard.title, content: clipboard.content, contentType: clipboard.contentType, language: clipboard.language, byteSize: clipboard.byteSize, viewCount: clipboard.viewCount + (counted ? 1 : 0), updatedAt: clipboard.updatedAt, ...(opened.grant ? { accessGrant: opened.grant } : {}) });
+	res.json({
+		locked: false,
+		type: "clipboard",
+		hasAccessPassword: protectedResource,
+		id: clipboard.id,
+		title: clipboard.title,
+		content: clipboard.content,
+		contentType: clipboard.contentType,
+		language: clipboard.language,
+		byteSize: clipboard.byteSize,
+		viewCount: counted.newViewCount,
+		limitViews: clipboard.limitViews,
+		maxViews: clipboard.maxViews,
+		remainingViews: counted.remainingViews,
+		expired: counted.expiredNow,
+		updatedAt: clipboard.updatedAt,
+		...(opened.grant ? { accessGrant: opened.grant } : {}),
+	});
 }
 
 app.get("/api/public/resources/:token", requireFeature("publicResourcesEnabled", "公开资源访问当前已关闭"), async (req, res, next) => {
@@ -1354,14 +1460,163 @@ app.get("/api/posts", async (req, res, next) => {
 	}
 });
 
+async function isRequestAdmin(req: Request): Promise<boolean> {
+	const token = req.header("authorization")?.replace(/^Bearer\s+/iu, "").trim() ?? "";
+	if (config.adminToken && token === config.adminToken) return true;
+	if (token) {
+		try {
+			const user = await getAdminSession(token);
+			if (user?.isActive) return true;
+		} catch {
+			// ignore
+		}
+	}
+	return false;
+}
+
+async function extractPostClientIdentifiers(req: Request): Promise<Array<{ type: "user" | "ip"; id: string }>> {
+	const list: Array<{ type: "user" | "ip"; id: string }> = [];
+	const token = req.header("authorization")?.replace(/^Bearer\s+/iu, "").trim() ?? "";
+	if (token) {
+		try {
+			const commentUser = await getCommentSession(token);
+			if (commentUser?.id) {
+				list.push({ type: "user", id: String(commentUser.id) });
+			}
+		} catch {
+			// ignore
+		}
+	}
+	const ip = requestClientIp(req);
+	if (ip) {
+		list.push({ type: "ip", id: ip });
+	}
+	return list;
+}
+
 app.get("/api/posts/:slug", async (req, res, next) => {
 	try {
-		const post = await getPostBySlug(req.params.slug);
+		const slug = String(req.params.slug ?? "").trim();
+		const post = await getPostBySlug(slug, false);
 		if (!post) {
 			res.status(404).json({ error: "Post not found" });
 			return;
 		}
-		res.json(post);
+		const isAdmin = await isRequestAdmin(req);
+		const clientIdentifiers = await extractPostClientIdentifiers(req);
+		const currentClientViews = await getPostClientViewCount(post.id, clientIdentifiers);
+		const clientLimitEnabled = Boolean(post.limitViewsPerClient && post.maxViewsPerClient && post.maxViewsPerClient > 0);
+
+		if (!isAdmin && clientLimitEnabled && currentClientViews >= post.maxViewsPerClient!) {
+			res.status(403).json({
+				error: `您已达到该文章的单IP/账号最大查看次数限制（已查看 ${currentClientViews} 次）`,
+				clientLimitReached: true,
+				clientViewCount: currentClientViews,
+				maxViewsPerClient: post.maxViewsPerClient,
+			});
+			return;
+		}
+
+		if (post.accessPasswordHash) {
+			const grants = accessGrantsFromRequest(req.header("cookie"), req.header("x-access-grant"), typeof req.query.grant === "string" ? req.query.grant : undefined);
+			const unlocked = grants.some((grant) => readAccessGrant(grant, `post:${post.id}`, post.accessPasswordHash!));
+			if (unlocked) {
+				const recordedViews = isAdmin ? currentClientViews : await recordPostClientView(post.id, clientIdentifiers);
+				await pool.execute("UPDATE posts SET views = views + 1 WHERE id = ?", [post.id]);
+				post.views += 1;
+				const { accessPasswordHash: _hash, ...safePost } = post;
+				res.json({
+					...safePost,
+					locked: false,
+					hasAccessPassword: true,
+					clientViewCount: recordedViews,
+					remainingClientViews: clientLimitEnabled ? Math.max(0, post.maxViewsPerClient! - recordedViews) : null,
+				});
+				return;
+			}
+			const cooldown = await checkAccessCooldown(`post:${post.id}`, req);
+			const { content: _content, accessPasswordHash: _hash, ...safePost } = post;
+			res.json({
+				...safePost,
+				content: "",
+				locked: true,
+				hasAccessPassword: true,
+				passwordHint: post.accessPasswordHint || undefined,
+				clientViewCount: currentClientViews,
+				remainingClientViews: clientLimitEnabled ? Math.max(0, post.maxViewsPerClient! - currentClientViews) : null,
+				inCooldown: !cooldown.allowed,
+				remainingAttempts: cooldown.remainingAttempts,
+				cooldownSeconds: cooldown.cooldownSeconds,
+				lockedUntil: cooldown.lockedUntil,
+			});
+			return;
+		}
+
+		const recordedViews = isAdmin ? currentClientViews : await recordPostClientView(post.id, clientIdentifiers);
+		await pool.execute("UPDATE posts SET views = views + 1 WHERE id = ?", [post.id]);
+		post.views += 1;
+		const { accessPasswordHash: _hash, ...safePost } = post;
+		res.json({
+			...safePost,
+			locked: false,
+			hasAccessPassword: false,
+			clientViewCount: recordedViews,
+			remainingClientViews: clientLimitEnabled ? Math.max(0, post.maxViewsPerClient! - recordedViews) : null,
+		});
+	} catch (error) {
+		next(error);
+	}
+});
+
+app.post("/api/posts/:slug/unlock", async (req, res, next) => {
+	try {
+		const slug = String(req.params.slug ?? "").trim();
+		const post = await getPostBySlug(slug, false);
+		if (!post) {
+			res.status(404).json({ error: "Post not found" });
+			return;
+		}
+		const isAdmin = await isRequestAdmin(req);
+		const clientIdentifiers = await extractPostClientIdentifiers(req);
+		const currentClientViews = await getPostClientViewCount(post.id, clientIdentifiers);
+		const clientLimitEnabled = Boolean(post.limitViewsPerClient && post.maxViewsPerClient && post.maxViewsPerClient > 0);
+
+		if (!isAdmin && clientLimitEnabled && currentClientViews >= post.maxViewsPerClient!) {
+			res.status(403).json({
+				error: `您已达到该文章的单IP/账号最大查看次数限制（已查看 ${currentClientViews} 次）`,
+				clientLimitReached: true,
+				clientViewCount: currentClientViews,
+				maxViewsPerClient: post.maxViewsPerClient,
+			});
+			return;
+		}
+
+		if (!post.accessPasswordHash) {
+			const recordedViews = isAdmin ? currentClientViews : await recordPostClientView(post.id, clientIdentifiers);
+			const { accessPasswordHash: _hash, ...safePost } = post;
+			res.json({
+				...safePost,
+				locked: false,
+				hasAccessPassword: false,
+				clientViewCount: recordedViews,
+				remainingClientViews: clientLimitEnabled ? Math.max(0, post.maxViewsPerClient! - recordedViews) : null,
+			});
+			return;
+		}
+
+		const grant = await verifyAndApplyAccessPassword(`post:${post.id}`, req.body?.password, post.accessPasswordHash, req);
+		const recordedViews = isAdmin ? currentClientViews : await recordPostClientView(post.id, clientIdentifiers);
+		await pool.execute("UPDATE posts SET views = views + 1 WHERE id = ?", [post.id]);
+		post.views += 1;
+		const { accessPasswordHash: _hash, ...safePost } = post;
+		res.json({
+			...safePost,
+			locked: false,
+			hasAccessPassword: true,
+			accessGrant: grant,
+			clientViewCount: recordedViews,
+			remainingClientViews: clientLimitEnabled ? Math.max(0, post.maxViewsPerClient! - recordedViews) : null,
+		});
 	} catch (error) {
 		next(error);
 	}
@@ -1509,6 +1764,11 @@ const postInput = z.object({
 	publishedAt: z.string().datetime({ offset: true }).nullable().optional(),
 	pinned: z.boolean().optional(),
 	status: z.enum(["draft", "published"]).optional(),
+	accessPassword: z.string().max(64).nullable().optional(),
+	accessPasswordHint: z.string().max(40).nullable().optional(),
+	clearAccessPassword: z.boolean().optional(),
+	limitViewsPerClient: z.boolean().optional(),
+	maxViewsPerClient: z.number().int().min(1).nullable().optional(),
 });
 
 const taxonomyInput = z.object({
@@ -1530,7 +1790,10 @@ const announcementDisplayInput = z.object({ isVisible: z.boolean().optional(), i
 
 app.post("/api/admin/posts", requireAdmin, async (req, res, next) => {
 	try {
-		const id = await createPost(postInput.parse(req.body));
+		const raw = postInput.parse(req.body);
+		const accessPassword = parseAccessPassword(raw.accessPassword);
+		const accessPasswordHint = parseAccessPasswordHint(raw.accessPasswordHint);
+		const id = await createPost({ ...raw, accessPassword, accessPasswordHint });
 		res.status(201).json({ id });
 	} catch (error) {
 		next(error);
@@ -1561,7 +1824,10 @@ app.put("/api/admin/posts/:id", requireAdmin, async (req, res, next) => {
 	try {
 		const id = Number(req.params.id);
 		if (!Number.isInteger(id) || id < 1) { res.status(400).json({ error: "Invalid post id" }); return; }
-		const post = await updatePost(id, postInput.parse(req.body));
+		const raw = postInput.parse(req.body);
+		const accessPassword = raw.clearAccessPassword && !raw.accessPassword ? null : parseAccessPassword(raw.accessPassword);
+		const accessPasswordHint = raw.accessPasswordHint !== undefined ? parseAccessPasswordHint(raw.accessPasswordHint) : undefined;
+		const post = await updatePost(id, { ...raw, accessPassword, accessPasswordHint, clearAccessPassword: raw.clearAccessPassword });
 		if (!post) { res.status(404).json({ error: "Post not found" }); return; }
 		res.json(post);
 	} catch (error) { next(error); }
@@ -2684,14 +2950,7 @@ app.post("/api/files/:token/unlock", async (req, res, next) => {
 		const file = await getAdminDriveFileByToken(token);
 		if (!file) { res.status(404).json({ error: "文件不存在或链接已失效" }); return; }
 		if (!file.accessPasswordHash) { res.json({ ok: true, locked: false }); return; }
-		if (!allowAccessAttempt(`drive:${requestClientIp(req)}:${token}`)) { res.status(429).json({ error: "尝试过于频繁，请稍后再试" }); return; }
-		const password = readSubmittedAccessPassword(req.body?.password);
-		if (!password || !verifyAccessPassword(password, file.accessPasswordHash)) {
-			const passwordHint = file.accessPasswordHint?.trim() ?? "";
-			res.status(401).json({ locked: true, error: "访问密码不正确", ...(passwordHint ? { passwordHint } : {}) });
-			return;
-		}
-		const grant = issueAccessGrant(`drive:${file.id}`, file.accessPasswordHash);
+		const grant = await verifyAndApplyAccessPassword(`drive:${file.id}`, req.body?.password, file.accessPasswordHash, req);
 		const secure = req.header("x-forwarded-proto") === "https" || req.secure;
 		res.setHeader("Cache-Control", "no-store");
 		res.setHeader("Set-Cookie", driveAccessCookie(token, grant, secure));
@@ -2970,7 +3229,14 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 		return;
 	}
 	if (error instanceof AccessPasswordError) {
-		res.status(error.statusCode).json({ error: error.message, locked: error.statusCode === 401 });
+		res.status(error.statusCode).json({
+			error: error.message,
+			locked: error.statusCode === 401 || error.statusCode === 429,
+			inCooldown: error.statusCode === 429,
+			remainingAttempts: error.remainingAttempts,
+			cooldownSeconds: error.cooldownSeconds,
+			lockedUntil: error.lockedUntil,
+		});
 		return;
 	}
 	if (error instanceof z.ZodError) {

@@ -30,10 +30,25 @@ export type PostSummary = {
 	minutes: number;
 	publishedAt: string | null;
 	updatedAt: string;
+	hasAccessPassword?: boolean;
+	accessPasswordHint?: string;
+	passwordHint?: string;
+	limitViewsPerClient?: boolean;
+	maxViewsPerClient?: number | null;
+	clientViewCount?: number;
+	remainingClientViews?: number | null;
+	clientLimitReached?: boolean;
+	locked?: boolean;
+	inCooldown?: boolean;
+	remainingAttempts?: number;
+	cooldownSeconds?: number;
+	lockedUntil?: number;
+	accessGrant?: string;
 };
 
 export type Post = PostSummary & {
 	content: string;
+	accessPasswordHash?: string | null;
 };
 
 export type Paginated<T> = {
@@ -102,6 +117,8 @@ export type UserStorageItem = {
 	hasAccessPassword: boolean;
 	accessPasswordHint: string;
 	viewCount: number;
+	limitViews: boolean;
+	maxViews: number | null;
 	createdAt: string;
 	updatedAt: string;
 };
@@ -122,6 +139,8 @@ export type UserClipboard = {
 	hasAccessPassword: boolean;
 	accessPasswordHint: string;
 	viewCount: number;
+	limitViews: boolean;
+	maxViews: number | null;
 	createdAt: string;
 	updatedAt: string;
 };
