@@ -1,6 +1,7 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import nodemailer from "nodemailer";
+import { renderVerificationCodeEmail, renderNotificationEmail } from "./mailTemplates.js";
 import { resolveAccessSecret } from "./accessPassword.js";
 import { pool } from "./db.js";
 import { displayIpLocation, locateIp } from "./ipLocation.js";
@@ -82,7 +83,7 @@ async function commentMailSettings(): Promise<CommentMailSettings> {
 	return { host, port, secure, user, password, from, siteName: String(value.senderName ?? env.SMTP_SITE_NAME ?? "Jayson's Blog").replace(/[\r\n]+/g, " ").trim() || "Jayson's Blog", notificationEmails };
 }
 
-async function sendCommentMail(to: string | string[], subject: string, text: string) {
+async function sendCommentMail(to: string | string[], subject: string, text: string, html?: string) {
 	const settings = await commentMailSettings();
 	if (!settings.host || !settings.user || !settings.password || !isMailbox(settings.from)) return { sent: false, error: "邮箱服务还没有配置完整，请在后台填写 SMTP 主机、用户名、授权码和发件邮箱。" };
 	const mode = smtpConnectionMode(settings.port, settings.secure);
@@ -94,7 +95,15 @@ async function sendCommentMail(to: string | string[], subject: string, text: str
 		commentMailer = { key, transport: nodemailer.createTransport({ host: settings.host, port: settings.port, secure: mode.secure, requireTLS: mode.requireTLS, auth: { user: settings.user, pass: settings.password }, connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000, tls: { servername: settings.host } }) };
 	}
 	try {
-		await commentMailer.transport.sendMail({ from: { name: settings.siteName, address }, to: recipients, envelope: { from: address, to: recipients }, subject: `${settings.siteName} ${subject}`.trim(), text });
+		const fullSubject = subject.startsWith("【") ? subject : `${settings.siteName} ${subject}`.trim();
+		await commentMailer.transport.sendMail({
+			from: { name: settings.siteName, address },
+			to: recipients,
+			envelope: { from: address, to: recipients },
+			subject: fullSubject,
+			text,
+			...(html ? { html } : {}),
+		});
 		return { sent: true };
 	} catch (error) {
 		commentMailer = null;
@@ -112,7 +121,9 @@ async function notifyCommentAdmins(subject: string, lines: string[], enabledKey?
 			if (value[enabledKey] === false) return;
 		}
 		if (!settings.notificationEmails.length) return;
-		const result = await sendCommentMail(settings.notificationEmails, subject, lines.join("\n"));
+		const siteUrl = process.env.CLIENT_ORIGIN || "https://blog.fjayson.com";
+		const rendered = renderNotificationEmail({ siteName: settings.siteName, title: subject, lines, siteUrl });
+		const result = await sendCommentMail(settings.notificationEmails, rendered.subject, rendered.text, rendered.html);
 		if (!result.sent) console.warn("[comment-mail] notification failed:", result.error);
 	} catch (error) {
 		console.warn("[comment-mail] notification failed:", error instanceof Error ? error.message : error);
@@ -796,7 +807,7 @@ export async function registerCommentUser(input: {
 	return user;
 }
 
-export async function requestCommentEmailCode(email: string) {
+export async function requestCommentEmailCode(email: string, purpose = "注册验证码") {
 	const normalized = email.trim().toLowerCase();
 	const code = String(Math.floor(100000 + Math.random() * 900000));
 	const hash = createHash("sha256").update(code).digest("hex");
@@ -807,7 +818,16 @@ export async function requestCommentEmailCode(email: string) {
 		[normalized, hash],
 	);
 	const settings = await commentMailSettings();
-	const delivery = await sendCommentMail(normalized, "注册验证码", `你的注册验证码是 ${code}，${COMMENT_EMAIL_CODE_TTL_MINUTES} 分钟内有效。请勿将验证码提供给他人。`);
+	const siteUrl = process.env.CLIENT_ORIGIN || "https://blog.fjayson.com";
+	const rendered = renderVerificationCodeEmail({
+		siteName: settings.siteName,
+		code,
+		ttlMinutes: COMMENT_EMAIL_CODE_TTL_MINUTES,
+		email: normalized,
+		purpose,
+		siteUrl,
+	});
+	const delivery = await sendCommentMail(normalized, rendered.subject, rendered.text, rendered.html);
 	const sent = delivery.sent;
 	return { ok: sent, sent, error: sent ? undefined : delivery.error, expiresInSeconds: COMMENT_EMAIL_CODE_TTL_MINUTES * 60, debugCode: !sent && process.env.NODE_ENV !== "production" ? code : undefined, mailConfigured: Boolean(settings.host && settings.user && settings.password && isMailbox(settings.from)) };
 }

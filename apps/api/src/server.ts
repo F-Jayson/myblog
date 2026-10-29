@@ -927,7 +927,7 @@ app.post("/api/user/profile/email-code", requireFeature("userCenterEnabled", "�
 		const requested = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
 		const email = user?.email || requested;
 		if (!email) { res.status(400).json({ error: "请先填写邮箱" }); return; }
-		res.json(await requestCommentEmailCode(z.string().email().max(190).parse(email)));
+		res.json(await requestCommentEmailCode(z.string().email().max(190).parse(email), "修改资料验证码"));
 	} catch (error) { next(error); }
 });
 app.patch("/api/user/profile", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
