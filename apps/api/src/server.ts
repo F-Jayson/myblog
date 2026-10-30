@@ -28,6 +28,7 @@ import {
 } from "./accessPassword.js";
 import { ADMIN_DRIVE_CHUNK_BYTES, ADMIN_DRIVE_MAX_BYTES, adminDriveFilePath, contentDispositionAttachment, countsAsDriveDownload, driveDownloadUrl, isDriveToken, normalizeDriveFileName, parseSingleByteRange, safeDriveMimeType } from "./adminDrive.js";
 import { config } from "./config.js";
+import { deletePublicFile, deleteUserSpaceFile, getR2ObjectStream, isR2Configured, savePublicFile, saveUserSpaceFile } from "./storage.js";
 import { pool } from "./db.js";
 import { getDatabaseStatus, pingDatabase } from "./db.js";
 import { getProcessSnapshot, getRequestMetrics, recordRequest } from "./telemetry.js";
@@ -382,6 +383,7 @@ async function removeUserStorageFile(storageKey: string | undefined) {
 	if (!storageKey) return;
 	const filePath = safeUserStoragePath(storageKey);
 	if (filePath) await unlink(filePath).catch(() => undefined);
+	await deleteUserSpaceFile(storageKey).catch(() => undefined);
 }
 
 function userImageUploadRoute(kind: UserStorageKind, defaultPublic: boolean) {
@@ -397,6 +399,11 @@ function userImageUploadRoute(kind: UserStorageKind, defaultPublic: boolean) {
 				const limitViews = parseBooleanInput(req.body?.limitViews, false);
 				const rawMaxViews = req.body?.maxViews !== undefined ? Number(req.body.maxViews) : null;
 				const maxViews = limitViews && rawMaxViews && Number.isFinite(rawMaxViews) ? Math.max(1, Math.floor(rawMaxViews)) : null;
+				await saveUserSpaceFile({
+					filename: req.file.filename,
+					localPath: req.file.path,
+					mimeType: req.file.mimetype,
+				});
 				const item = await createUserStorageItem({ userId: req.commentUser.id, kind, name, url: "", storageKey: req.file.filename, mimeType: req.file.mimetype, byteSize: req.file.size, isPublic, accessPassword: accessPassword ?? null, accessPasswordHint: accessPasswordHint ?? null, limitViews, maxViews });
 				if (!item) throw new Error("图片记录创建失败");
 				res.status(201).json(item);
@@ -408,8 +415,8 @@ function userImageUploadRoute(kind: UserStorageKind, defaultPublic: boolean) {
 	};
 }
 
-function uploadResponse(file: Express.Multer.File) {
-	const url = `/api/uploads/${encodeURIComponent(file.filename)}`;
+function uploadResponse(file: Express.Multer.File, customUrl?: string) {
+	const url = customUrl ?? `/api/uploads/${encodeURIComponent(file.filename)}`;
 	return { url, path: url, src: url, name: file.originalname, size: file.size, mimeType: file.mimetype };
 }
 
@@ -681,11 +688,29 @@ app.get("/api/user/storage/:id/file", requireFeature("userCenterEnabled", "用�
 		const item = await getUserStorageItem(req.commentUser!.id, id);
 		if (!item) { res.status(404).json({ error: "资源不存在" }); return; }
 		const filePath = safeUserStoragePath(item.storageKey ?? "");
-		if (!filePath) { res.status(404).json({ error: "资源文件不存在" }); return; }
-		res.type(item.mimeType || "application/octet-stream");
-		res.setHeader("Content-Disposition", "inline");
-		res.setHeader("Cache-Control", "private, max-age=60");
-		res.sendFile(filePath, (error) => { if (error && !res.headersSent) next(error); });
+		let localExists = false;
+		if (filePath) {
+			try {
+				const st = await stat(filePath);
+				localExists = st.isFile();
+			} catch {}
+		}
+		if (localExists && filePath) {
+			res.type(item.mimeType || "application/octet-stream");
+			res.setHeader("Content-Disposition", "inline");
+			res.setHeader("Cache-Control", "private, max-age=60");
+			res.sendFile(filePath, (error) => { if (error && !res.headersSent) next(error); });
+			return;
+		}
+		const stream = await getR2ObjectStream(`user-space/${item.storageKey}`);
+		if (stream) {
+			res.type(item.mimeType || "application/octet-stream");
+			res.setHeader("Content-Disposition", "inline");
+			res.setHeader("Cache-Control", "private, max-age=60");
+			stream.pipe(res);
+			return;
+		}
+		res.status(404).json({ error: "资源文件不存在" });
 	} catch (error) { next(error); }
 });
 app.patch("/api/user/storage/:id", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("imageHostingEnabled", "图床功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
@@ -862,14 +887,35 @@ async function deliverPublicResource(req: Request, res: Response, next: NextFunc
 			return;
 		}
 		const filePath = safeUserStoragePath(opened.found.item.storageKey ?? "");
-		if (!filePath) { res.status(404).json({ error: "公开资源文件不存在" }); return; }
-		await incrementPublicResourceView("image", opened.found.item.id);
-		res.type(opened.found.item.mimeType || "application/octet-stream");
-		res.setHeader("Content-Disposition", "inline");
-		res.setHeader("X-Content-Type-Options", "nosniff");
-		res.setHeader("Referrer-Policy", "no-referrer");
-		if (protectedResource) res.setHeader("Cache-Control", "private, no-store");
-		res.sendFile(filePath, (error) => { if (error && !res.headersSent) next(error); });
+		let localExists = false;
+		if (filePath) {
+			try {
+				const st = await stat(filePath);
+				localExists = st.isFile();
+			} catch {}
+		}
+		if (localExists && filePath) {
+			await incrementPublicResourceView("image", opened.found.item.id);
+			res.type(opened.found.item.mimeType || "application/octet-stream");
+			res.setHeader("Content-Disposition", "inline");
+			res.setHeader("X-Content-Type-Options", "nosniff");
+			res.setHeader("Referrer-Policy", "no-referrer");
+			if (protectedResource) res.setHeader("Cache-Control", "private, no-store");
+			res.sendFile(filePath, (error) => { if (error && !res.headersSent) next(error); });
+			return;
+		}
+		const stream = await getR2ObjectStream(`user-space/${opened.found.item.storageKey}`);
+		if (stream) {
+			await incrementPublicResourceView("image", opened.found.item.id);
+			res.type(opened.found.item.mimeType || "application/octet-stream");
+			res.setHeader("Content-Disposition", "inline");
+			res.setHeader("X-Content-Type-Options", "nosniff");
+			res.setHeader("Referrer-Policy", "no-referrer");
+			if (protectedResource) res.setHeader("Cache-Control", "private, no-store");
+			stream.pipe(res);
+			return;
+		}
+		res.status(404).json({ error: "公开资源文件不存在" });
 		return;
 	}
 	const clipboard = opened.found.item;
@@ -952,7 +998,17 @@ function handlePublicUpload(upload: multer.Multer, field: string) {
 		upload.single(field)(req, res, async (error) => {
 			if (error) { next(error); return; }
 			if (!req.file) { res.status(400).json({ error: "请选择图片文件" }); return; }
-			res.status(201).json(uploadResponse(req.file));
+			try {
+				const stored = await savePublicFile({
+					filename: req.file.filename,
+					localPath: req.file.path,
+					mimeType: req.file.mimetype,
+				});
+				res.status(201).json(uploadResponse(req.file, stored.url));
+			} catch (err) {
+				if (req.file?.path) await unlink(req.file.path).catch(() => undefined);
+				next(err);
+			}
 		});
 	};
 }
@@ -985,9 +1041,17 @@ app.post("/api/user/stickers", requireFeature("commentsEnabled", "评论功能�
 		try {
 			if (!req.file || !req.commentUser) { res.status(400).json({ error: "请选择表情图片" }); return; }
 			const name = typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim().slice(0, 120) : "我的表情";
-			const item = await createUserSticker({ userId: req.commentUser.id, name, imageUrl: uploadResponse(req.file).url, mimeType: req.file.mimetype, byteSize: req.file.size });
+			const stored = await savePublicFile({
+				filename: req.file.filename,
+				localPath: req.file.path,
+				mimeType: req.file.mimetype,
+			});
+			const item = await createUserSticker({ userId: req.commentUser.id, name, imageUrl: stored.url, mimeType: req.file.mimetype, byteSize: req.file.size });
 			res.status(201).json(item);
-		} catch (uploadError) { next(uploadError); }
+		} catch (uploadError) {
+			if (req.file?.path) await unlink(req.file.path).catch(() => undefined);
+			next(uploadError);
+		}
 	});
 });
 
@@ -1740,11 +1804,24 @@ app.post("/api/comments", requireFeature("commentsEnabled", "评论功能当前�
 });
 
 app.post("/api/uploads/comment-images", requireFeature("commentsEnabled", "评论功能当前已关闭"), requireFeature("imageHostingEnabled", "图片上传功能当前已关闭"), (req, res, next) => {
-	commentImageUpload.array("files", 3)(req, res, (error) => {
+	commentImageUpload.array("files", 3)(req, res, async (error) => {
 		if (error) { next(error); return; }
 		const files = (req.files as Express.Multer.File[] | undefined) ?? [];
 		if (!files.length) { res.status(400).json({ error: "请选择图片" }); return; }
-		res.status(201).json({ items: files.map(uploadResponse) });
+		try {
+			const items = await Promise.all(files.map(async (file) => {
+				const stored = await savePublicFile({
+					filename: file.filename,
+					localPath: file.path,
+					mimeType: file.mimetype,
+				});
+				return uploadResponse(file, stored.url);
+			}));
+			res.status(201).json({ items });
+		} catch (err) {
+			await Promise.all(files.map((f) => unlink(f.path).catch(() => undefined)));
+			next(err);
+		}
 	});
 });
 
@@ -2076,11 +2153,29 @@ app.get("/api/admin/user-space/:userId/items/:itemId/file", requireAdmin, async 
 		const item = await getUserStorageItem(userId, itemId);
 		if (!item) { res.status(404).json({ error: "资源不存在" }); return; }
 		const filePath = safeUserStoragePath(item.storageKey ?? "");
-		if (!filePath) { res.status(404).json({ error: "资源文件不存在" }); return; }
-		res.type(item.mimeType || "application/octet-stream");
-		res.setHeader("Content-Disposition", "inline");
-		res.setHeader("Cache-Control", "private, max-age=60");
-		res.sendFile(filePath, (error) => { if (error && !res.headersSent) next(error); });
+		let localExists = false;
+		if (filePath) {
+			try {
+				const st = await stat(filePath);
+				localExists = st.isFile();
+			} catch {}
+		}
+		if (localExists && filePath) {
+			res.type(item.mimeType || "application/octet-stream");
+			res.setHeader("Content-Disposition", "inline");
+			res.setHeader("Cache-Control", "private, max-age=60");
+			res.sendFile(filePath, (error) => { if (error && !res.headersSent) next(error); });
+			return;
+		}
+		const stream = await getR2ObjectStream(`user-space/${item.storageKey}`);
+		if (stream) {
+			res.type(item.mimeType || "application/octet-stream");
+			res.setHeader("Content-Disposition", "inline");
+			res.setHeader("Cache-Control", "private, max-age=60");
+			stream.pipe(res);
+			return;
+		}
+		res.status(404).json({ error: "资源文件不存在" });
 	} catch (error) { next(error); }
 });
 app.delete("/api/admin/user-space/:userId/items/:itemId", requireAdmin, async (req, res, next) => {
@@ -2109,6 +2204,9 @@ app.delete("/api/admin/user-space/:userId/stickers/:stickerId", requireAdmin, as
 		const stickerId = parseCommentUserId(String(req.params.stickerId));
 		if (!userId || !stickerId) { res.status(400).json({ error: "表情编号无效" }); return; }
 		const deleted = await deleteUserSticker(userId, stickerId);
+		if (deleted?.url) {
+			await deletePublicFile(deleted.url).catch(() => undefined);
+		}
 		res.status(deleted ? 204 : 404).end();
 	} catch (error) { next(error); }
 });
@@ -2489,8 +2587,8 @@ const mediaUpload = multer({
 });
 const dataUploadInput = z.object({ dataUrl: z.string().max(11_000_000), name: z.string().trim().min(1).max(255) });
 
-function mediaResponse(name: string, originalName: string, size: number, mimeType: string, media = mediaTypes[mimeType.toLowerCase()] ?? mediaTypesByExtension[extname(originalName).toLowerCase()]) {
-	const url = `/api/uploads/${encodeURIComponent(name)}`;
+function mediaResponse(name: string, originalName: string, size: number, mimeType: string, media = mediaTypes[mimeType.toLowerCase()] ?? mediaTypesByExtension[extname(originalName).toLowerCase()], customUrl?: string) {
+	const url = customUrl ?? `/api/uploads/${encodeURIComponent(name)}`;
 	return { url, path: url, kind: media?.kind ?? "image", name: originalName, fileName: name, size, mimeType };
 }
 
@@ -2518,7 +2616,12 @@ function uploadMedia(req: Request, res: Response, next: NextFunction) {
 					res.status(400).json({ error: validationError });
 					return;
 				}
-				res.status(201).json(mediaResponse(req.file.filename, req.file.originalname, req.file.size, req.file.mimetype, media));
+				const stored = await savePublicFile({
+					filename: req.file.filename,
+					localPath: req.file.path,
+					mimeType: req.file.mimetype,
+				});
+				res.status(201).json(mediaResponse(req.file.filename, req.file.originalname, req.file.size, req.file.mimetype, media, stored.url));
 				return;
 			}
 			const input = dataUploadInput.parse(req.body);
@@ -2533,8 +2636,12 @@ function uploadMedia(req: Request, res: Response, next: NextFunction) {
 			const validationError = validateSensitiveMedia(data, input.name, matched[1], media);
 			if (validationError) { res.status(400).json({ error: validationError }); return; }
 			const fileName = `${Date.now()}-${randomUUID()}${media.extension}`;
-			await writeFile(fileURLToPath(new URL(fileName, new URL("../../../uploads/", import.meta.url))), data, { flag: "wx" });
-			res.status(201).json(mediaResponse(fileName, input.name, data.length, matched[1]));
+			const stored = await savePublicFile({
+				filename: fileName,
+				buffer: data,
+				mimeType: matched[1],
+			});
+			res.status(201).json(mediaResponse(fileName, input.name, data.length, matched[1], media, stored.url));
 		} catch (error) {
 			if (req.file) await unlink(req.file.path).catch(() => undefined);
 			next(error);

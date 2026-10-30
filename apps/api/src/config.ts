@@ -58,4 +58,17 @@ export const config = {
 		password: databasePasswordFromEnv(),
 		connectionLimit: numberFromEnv(process.env.MYSQL_CONNECTION_LIMIT, 10),
 	},
+	storage: {
+		driver: (process.env.STORAGE_DRIVER?.trim().toLowerCase() || "local") as "local" | "r2",
+		r2: {
+			accountId: process.env.R2_ACCOUNT_ID?.trim() || "",
+			accessKeyId: process.env.R2_ACCESS_KEY_ID?.trim() || "",
+			secretAccessKey: process.env.R2_SECRET_ACCESS_KEY?.trim() || "",
+			bucketName: process.env.R2_BUCKET_NAME?.trim() || "",
+			publicUrl: (process.env.R2_PUBLIC_URL?.trim() || "").replace(/\/+$/u, ""),
+			endpoint: process.env.R2_ENDPOINT?.trim() || "",
+			region: process.env.R2_REGION?.trim() || "auto",
+			keepLocalCopy: process.env.R2_KEEP_LOCAL_COPY === "true" || process.env.R2_KEEP_LOCAL_COPY === "1",
+		},
+	},
 };
