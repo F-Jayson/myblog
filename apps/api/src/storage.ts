@@ -20,11 +20,17 @@ export interface StoredPublicFile {
 
 let s3ClientInstance: S3Client | null = null;
 
+export function isWorkerConfigured(): boolean {
+	const { driver, worker } = config.storage;
+	if (driver === "worker") return Boolean(worker.url && worker.token);
+	return driver !== "local" && driver !== "r2" && Boolean(worker.url && worker.token);
+}
+
 export function isR2Configured(): boolean {
 	const { driver, r2 } = config.storage;
-	if (driver === "local") return false;
+	if (driver === "local" || driver === "worker") return false;
 	if (driver === "r2") return true;
-	// Auto-detect when driver is not explicitly local
+	// Auto-detect when driver is not explicitly local or worker
 	return Boolean(r2.accountId && r2.accessKeyId && r2.secretAccessKey && r2.bucketName);
 }
 
@@ -44,6 +50,9 @@ function getS3Client(): S3Client {
 }
 
 export function getR2PublicObjectUrl(key: string): string {
+	if (isWorkerConfigured()) {
+		return `${config.storage.worker.url}/${key.replace(/^\/+/u, "")}`;
+	}
 	const base = config.storage.r2.publicUrl.replace(/\/+$/u, "");
 	const cleanKey = key.replace(/^\/+/u, "");
 	if (base) {
@@ -81,6 +90,40 @@ export async function savePublicFile(options: {
 	const key = `${folder}/${options.filename}`;
 	const mimeType = options.mimeType || "application/octet-stream";
 
+	// 1. Worker Storage Driver
+	if (isWorkerConfigured()) {
+		const data = options.buffer ?? (options.localPath ? await readFile(options.localPath) : null);
+		if (!data) throw new Error("File content is required for storage");
+
+		const targetUrl = `${config.storage.worker.url}/${key}`;
+		const response = await fetch(targetUrl, {
+			method: "PUT",
+			headers: {
+				"Authorization": `Bearer ${config.storage.worker.token}`,
+				"Content-Type": mimeType,
+			},
+			body: new Uint8Array(data),
+		});
+
+		if (!response.ok) {
+			const errText = await response.text().catch(() => "");
+			throw new Error(`Worker storage upload failed (${response.status}): ${errText || response.statusText}`);
+		}
+
+		if (options.localPath && !config.storage.worker.keepLocalCopy) {
+			await unlink(options.localPath).catch(() => undefined);
+		}
+
+		return {
+			url: targetUrl,
+			key,
+			filename: options.filename,
+			size: data.length,
+			mimeType,
+		};
+	}
+
+	// 2. Direct R2 (S3 API) Driver
 	if (isR2Configured()) {
 		const data = options.buffer ?? (options.localPath ? await readFile(options.localPath) : null);
 		if (!data) throw new Error("File content is required for storage");
@@ -107,7 +150,7 @@ export async function savePublicFile(options: {
 		};
 	}
 
-	// Local storage fallback
+	// 3. Local storage fallback
 	let size = options.buffer?.length ?? 0;
 	if (options.buffer && !options.localPath) {
 		await mkdir(uploadsDirectory, { recursive: true });
@@ -130,13 +173,25 @@ export async function savePublicFile(options: {
 }
 
 /**
- * Delete a public media file from R2 and/or local disk
+ * Delete a public media file from Worker, R2 and/or local disk
  */
 export async function deletePublicFile(urlOrKey: string): Promise<boolean> {
 	const key = extractObjectKeyFromUrl(urlOrKey);
 	let deleted = false;
 
-	if (key && isR2Configured()) {
+	if (key && isWorkerConfigured()) {
+		try {
+			await fetch(`${config.storage.worker.url}/${key}`, {
+				method: "DELETE",
+				headers: {
+					"Authorization": `Bearer ${config.storage.worker.token}`,
+				},
+			});
+			deleted = true;
+		} catch (error) {
+			console.warn("[storage] Worker deleteObject failed:", error instanceof Error ? error.message : error);
+		}
+	} else if (key && isR2Configured()) {
 		try {
 			await getS3Client().send(new DeleteObjectCommand({
 				Bucket: config.storage.r2.bucketName,
@@ -159,7 +214,7 @@ export async function deletePublicFile(urlOrKey: string): Promise<boolean> {
 }
 
 /**
- * Upload a user space file to R2 or local disk
+ * Upload a user space file to Worker, R2 or local disk
  */
 export async function saveUserSpaceFile(options: {
 	filename: string;
@@ -169,6 +224,31 @@ export async function saveUserSpaceFile(options: {
 }): Promise<{ key: string; size: number }> {
 	const key = `user-space/${options.filename}`;
 	const mimeType = options.mimeType || "application/octet-stream";
+
+	if (isWorkerConfigured()) {
+		const data = options.buffer ?? (options.localPath ? await readFile(options.localPath) : null);
+		if (!data) throw new Error("File content is required for storage");
+
+		const targetUrl = `${config.storage.worker.url}/${key}`;
+		const response = await fetch(targetUrl, {
+			method: "PUT",
+			headers: {
+				"Authorization": `Bearer ${config.storage.worker.token}`,
+				"Content-Type": mimeType,
+			},
+			body: new Uint8Array(data),
+		});
+
+		if (!response.ok) {
+			throw new Error(`Worker user space upload failed with status ${response.status}`);
+		}
+
+		if (options.localPath && !config.storage.worker.keepLocalCopy) {
+			await unlink(options.localPath).catch(() => undefined);
+		}
+
+		return { key, size: data.length };
+	}
 
 	if (isR2Configured()) {
 		const data = options.buffer ?? (options.localPath ? await readFile(options.localPath) : null);
@@ -204,13 +284,24 @@ export async function saveUserSpaceFile(options: {
 }
 
 /**
- * Delete a user space file from R2 and/or local disk
+ * Delete a user space file from Worker, R2 and/or local disk
  */
 export async function deleteUserSpaceFile(storageKey: string): Promise<boolean> {
 	if (!storageKey) return false;
 	const key = `user-space/${basename(storageKey)}`;
 
-	if (isR2Configured()) {
+	if (isWorkerConfigured()) {
+		try {
+			await fetch(`${config.storage.worker.url}/${key}`, {
+				method: "DELETE",
+				headers: {
+					"Authorization": `Bearer ${config.storage.worker.token}`,
+				},
+			});
+		} catch (error) {
+			console.warn("[storage] Worker deleteUserSpaceFile failed:", error instanceof Error ? error.message : error);
+		}
+	} else if (isR2Configured()) {
 		try {
 			await getS3Client().send(new DeleteObjectCommand({
 				Bucket: config.storage.r2.bucketName,
@@ -227,9 +318,24 @@ export async function deleteUserSpaceFile(storageKey: string): Promise<boolean> 
 }
 
 /**
- * Get readable stream for an object in R2 (or null if not found or not in R2)
+ * Get readable stream for an object in Worker or R2 (or null if not found or local)
  */
 export async function getR2ObjectStream(key: string): Promise<Readable | null> {
+	if (isWorkerConfigured()) {
+		try {
+			const targetUrl = `${config.storage.worker.url}/${key.replace(/^\/+/u, "")}`;
+			const response = await fetch(targetUrl, {
+				headers: {
+					"Authorization": `Bearer ${config.storage.worker.token}`,
+				},
+			});
+			if (!response.ok || !response.body) return null;
+			return Readable.fromWeb(response.body as import("node:stream/web").ReadableStream);
+		} catch {
+			return null;
+		}
+	}
+
 	if (!isR2Configured()) return null;
 	try {
 		const response = await getS3Client().send(new GetObjectCommand({

@@ -59,7 +59,7 @@ export const config = {
 		connectionLimit: numberFromEnv(process.env.MYSQL_CONNECTION_LIMIT, 10),
 	},
 	storage: {
-		driver: (process.env.STORAGE_DRIVER?.trim().toLowerCase() || "local") as "local" | "r2",
+		driver: (process.env.STORAGE_DRIVER?.trim().toLowerCase() || "local") as "local" | "r2" | "worker",
 		r2: {
 			accountId: process.env.R2_ACCOUNT_ID?.trim() || "",
 			accessKeyId: process.env.R2_ACCESS_KEY_ID?.trim() || "",
@@ -69,6 +69,11 @@ export const config = {
 			endpoint: process.env.R2_ENDPOINT?.trim() || "",
 			region: process.env.R2_REGION?.trim() || "auto",
 			keepLocalCopy: process.env.R2_KEEP_LOCAL_COPY === "true" || process.env.R2_KEEP_LOCAL_COPY === "1",
+		},
+		worker: {
+			url: (process.env.WORKER_STORAGE_URL?.trim() || "").replace(/\/+$/u, ""),
+			token: process.env.WORKER_STORAGE_TOKEN?.trim() || "",
+			keepLocalCopy: process.env.WORKER_KEEP_LOCAL_COPY === "true" || process.env.WORKER_KEEP_LOCAL_COPY === "1",
 		},
 	},
 };
