@@ -1452,6 +1452,75 @@ export async function updatePost(id: number, input: AdminPostInput) {
 	return getAdminPost(id);
 }
 
+function parseStoredDate(value: unknown) {
+	if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+	if (value === null || value === undefined || value === "") return null;
+	const text = String(value).trim();
+	const date = new Date(text.includes("T") ? text : text.replace(" ", "T"));
+	return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// Agent writes must not clear access passwords, view limits, header images or filenames.
+export async function reviseManagedPost(id: number, input: {
+	slug: string;
+	title: string;
+	excerpt: string;
+	content: string;
+	cover?: string | null;
+	categoryNames?: string[];
+	tagNames?: string[];
+	pinned?: boolean;
+	status: "draft" | "published";
+	words: number;
+}) {
+	const connection = await pool.getConnection();
+	try {
+		await connection.beginTransaction();
+		const [existing] = await connection.query<RowDataPacket[]>(
+			"SELECT id, cover, category_id, pinned, status, published_at FROM posts WHERE id = ? FOR UPDATE",
+			[id],
+		);
+		if (!existing[0]) {
+			await connection.rollback();
+			return null;
+		}
+		const row = existing[0];
+		const categoryIds = input.categoryNames !== undefined
+			? await resolveCategoryIds(connection, input.categoryNames, null, null)
+			: await existingCategoryIds(connection, id, row.category_id);
+		const cover = input.cover === undefined ? (row.cover ? String(row.cover) : null) : input.cover;
+		const pinned = input.pinned === undefined ? Boolean(Number(row.pinned)) : Boolean(input.pinned);
+		const publishedAt = input.status === "published"
+			? parseStoredDate(row.published_at) ?? new Date()
+			: parseStoredDate(row.published_at);
+		await connection.execute(
+			`UPDATE posts SET slug = ?, title = ?, excerpt = ?, content = ?, cover = ?, category_id = ?, status = ?, pinned = ?, words = ?, minutes = ?, published_at = ? WHERE id = ?`,
+			[input.slug, input.title, input.excerpt, input.content, cover, categoryIds[0] ?? null, input.status, pinned, input.words, Math.max(1, Math.ceil(input.words / 400)), publishedAt, id],
+		);
+		await replacePostCategories(connection, id, categoryIds);
+		if (input.tagNames !== undefined) await replacePostTags(connection, id, undefined, input.tagNames);
+		await connection.commit();
+	} catch (error) {
+		await connection.rollback();
+		throw error;
+	} finally {
+		connection.release();
+	}
+	return getAdminPost(id);
+}
+
+async function existingCategoryIds(connection: TaxonomyConnection, postId: number, legacyCategoryId: unknown) {
+	const [linked] = await connection.query<RowDataPacket[]>("SELECT category_id FROM post_categories WHERE post_id = ? ORDER BY category_id ASC", [postId]);
+	const ids = linked.map((item) => Number(item.category_id)).filter((item) => Number.isInteger(item) && item > 0);
+	if (ids.length) return ids;
+	const legacy = Number(legacyCategoryId);
+	return Number.isInteger(legacy) && legacy > 0 ? [legacy] : [];
+}
+
+export async function updatePostReadingStats(id: number, words: number) {
+	await pool.execute("UPDATE posts SET words = ?, minutes = ? WHERE id = ?", [words, Math.max(1, Math.ceil(words / 400)), id]);
+}
+
 export async function listAllTags(): Promise<Tag[]> {
 	const [rows] = await pool.query<RowDataPacket[]>("SELECT t.id, t.name, t.slug, COUNT(pt.post_id) AS postCount FROM tags t LEFT JOIN post_tags pt ON pt.tag_id = t.id GROUP BY t.id ORDER BY t.name ASC");
 	return rows.map((row) => ({ id: Number(row.id), name: String(row.name), slug: String(row.slug), postCount: Number(row.postCount) }));

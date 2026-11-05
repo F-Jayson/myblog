@@ -27,6 +27,7 @@ import {
 	verifyAndApplyAccessPassword,
 } from "./accessPassword.js";
 import { ADMIN_DRIVE_CHUNK_BYTES, ADMIN_DRIVE_MAX_BYTES, adminDriveFilePath, contentDispositionAttachment, countsAsDriveDownload, driveDownloadUrl, isDriveToken, normalizeDriveFileName, parseSingleByteRange, safeDriveMimeType } from "./adminDrive.js";
+import { mountAgentRoutes } from "./agentRoutes.js";
 import { config } from "./config.js";
 import { deletePublicFile, deleteUserSpaceFile, getR2ObjectStream, isR2Configured, savePublicFile, saveUserSpaceFile } from "./storage.js";
 import { pool } from "./db.js";
@@ -198,6 +199,7 @@ const publicImageUpload = (maxFileSize: number) => multer({
 	fileFilter: (_req, file, callback) => callback(null, /^image\/(?:jpeg|png|gif|webp|avif)$/iu.test(file.mimetype)),
 });
 const avatarUpload = publicImageUpload(3 * 1024 * 1024);
+const agentImageUpload = publicImageUpload(8 * 1024 * 1024);
 const commentImageUpload = publicImageUpload(5 * 1024 * 1024);
 const stickerUpload = publicImageUpload(5 * 1024 * 1024);
 const userStorageUploadRoot = fileURLToPath(new URL("../../../uploads/user-space/", import.meta.url));
@@ -226,6 +228,8 @@ function auditExcludedRequest(method: string, path: string) {
 	// Compiler source and stdin are user code; never persist them in the audit
 	// payload, while the request metrics middleware still records duration/status.
 	if (path.startsWith("/api/compiler/") || path.startsWith("/api/user/compiler/")) return true;
+	// Agent bodies contain article markdown and one-time device secrets.
+	if (path.startsWith("/api/agent/")) return true;
 	// Reading the audit stream must not add another row on every refresh. Keep
 	// mutating audit actions (such as clear) observable through the same hook.
 	if ((method === "GET" || method === "HEAD") && (path === "/api/admin/audit-logs" || path === "/api/admin/audit")) return true;
@@ -3321,6 +3325,8 @@ app.delete("/api/admin/app-releases/schedule", requireAdmin, async (req: Request
 });
 
 
+mountAgentRoutes(app, { requireAdmin, imageUpload: agentImageUpload });
+
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 	if (error instanceof CompilerError) {
 		res.status(error.statusCode).json({ error: error.message, code: error.code });
@@ -3329,7 +3335,8 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 	if (error instanceof multer.MulterError) {
 		const driveUpload = req.path === "/api/admin/drive";
 		if (error.code === "LIMIT_FILE_SIZE") {
-			res.status(413).json({ error: driveUpload ? "文件不能超过 2GB" : "Media file is too large" });
+			const message = driveUpload ? "文件不能超过 2GB" : req.path === "/api/agent/images" ? "图片不能超过 8MB" : "Media file is too large";
+			res.status(413).json({ error: message });
 			return;
 		}
 		res.status(400).json({ error: driveUpload ? "上传失败，请重新选择一个不超过 2GB 的文件" : "Unsupported media upload" });
@@ -3344,6 +3351,10 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 			cooldownSeconds: error.cooldownSeconds,
 			lockedUntil: error.lockedUntil,
 		});
+		return;
+	}
+	if (error instanceof SyntaxError && "status" in error && (error as { status?: number }).status === 400) {
+		res.status(400).json({ error: "invalid_request", message: "请求体不是有效的 JSON" });
 		return;
 	}
 	if (error instanceof z.ZodError) {

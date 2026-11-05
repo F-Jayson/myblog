@@ -715,4 +715,68 @@ CREATE TABLE IF NOT EXISTS post_client_views (
   CONSTRAINT fk_post_client_views_post FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Device-flow grants for local agents. The browser login creates a normal
+-- admin session only long enough to approve; the agent receives a separate
+-- scoped token and never sees the administrator password.
+CREATE TABLE IF NOT EXISTS agent_device_requests (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  device_code_hash CHAR(64) NOT NULL UNIQUE,
+  user_code CHAR(8) NOT NULL,
+  client_name VARCHAR(120) NOT NULL DEFAULT 'Cursor 智能体',
+  requested_scopes VARCHAR(255) NOT NULL,
+  status ENUM('pending', 'approved', 'denied', 'expired') NOT NULL DEFAULT 'pending',
+  admin_user_id BIGINT UNSIGNED NULL,
+  grant_id BIGINT UNSIGNED NULL,
+  delivery_token VARCHAR(128) NULL,
+  expires_at DATETIME NOT NULL,
+  approved_at DATETIME NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_agent_device_admin FOREIGN KEY (admin_user_id) REFERENCES admin_users(id) ON DELETE SET NULL,
+  INDEX idx_agent_device_user_code (user_code, status, expires_at),
+  INDEX idx_agent_device_expiry (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS agent_grants (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  token_hash CHAR(64) NOT NULL UNIQUE,
+  admin_user_id BIGINT UNSIGNED NOT NULL,
+  client_name VARCHAR(120) NOT NULL DEFAULT 'Cursor 智能体',
+  scopes VARCHAR(255) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  last_used_at DATETIME NULL,
+  revoked_at DATETIME NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_agent_grants_admin FOREIGN KEY (admin_user_id) REFERENCES admin_users(id) ON DELETE CASCADE,
+  INDEX idx_agent_grants_admin (admin_user_id, revoked_at),
+  INDEX idx_agent_grants_expiry (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS agent_documents (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  admin_user_id BIGINT UNSIGNED NOT NULL,
+  grant_id BIGINT UNSIGNED NOT NULL,
+  external_key VARCHAR(255) NOT NULL,
+  post_id BIGINT UNSIGNED NOT NULL,
+  content_hash CHAR(64) NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_agent_document_owner (admin_user_id, external_key),
+  CONSTRAINT fk_agent_documents_admin FOREIGN KEY (admin_user_id) REFERENCES admin_users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_agent_documents_grant FOREIGN KEY (grant_id) REFERENCES agent_grants(id) ON DELETE CASCADE,
+  CONSTRAINT fk_agent_documents_post FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+  INDEX idx_agent_documents_post (post_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS agent_audit (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  grant_id BIGINT UNSIGNED NULL,
+  admin_user_id BIGINT UNSIGNED NULL,
+  action_name VARCHAR(40) NOT NULL,
+  target VARCHAR(255) NOT NULL DEFAULT '',
+  detail VARCHAR(500) NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_agent_audit_created (created_at, id),
+  INDEX idx_agent_audit_grant (grant_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 

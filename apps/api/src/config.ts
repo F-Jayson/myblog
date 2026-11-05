@@ -35,6 +35,7 @@ export const config = {
 	filesPublicOrigin: (process.env.FILES_PUBLIC_ORIGIN?.trim() || "https://files.fjayson.com").replace(/\/+$/u, ""),
 	monitorSlowRequestMs: numberFromEnv(process.env.MONITOR_SLOW_REQUEST_MS, 1000),
 	monitorSlowSqlMs: numberFromEnv(process.env.MONITOR_SLOW_SQL_MS, 200),
+	agentGrantDays: Math.min(365, Math.max(1, numberFromEnv(process.env.AGENT_GRANT_DAYS, 90))),
 	compiler: {
 		dockerBinary: process.env.COMPILER_DOCKER_BIN?.trim() || "docker",
 		network: process.env.COMPILER_DOCKER_NETWORK?.trim() || "none",

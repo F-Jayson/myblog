@@ -89,6 +89,8 @@ pnpm --filter @jayson-blog/api exec tsx src/cli.ts set-admin-password
 
 登录 session 只保存在当前浏览器会话中，退出登录时会撤销服务端 session。
 
+后台新增「智能体授权」页，用来查看和撤销 Cursor 等智能体的连接。智能体写入文章前会打开浏览器授权页，管理员密码只提交给博客 API。接入方式、权限和接口见 [docs/agent-tools.md](docs/agent-tools.md)。
+
 ## 页面与接口
 
 前端包含首页、文章详情、归档、分类、标签、搜索、关于、友链、留言板、动态、相册、书签导航和打赏页面。API 提供：
@@ -129,6 +131,13 @@ PUT  /api/admin/drive/sessions/:id
 POST /api/admin/drive/sessions/:id/complete
 DELETE /api/admin/drive/:id
 GET  /api/files/:token/:filename
+POST /api/agent/device/start
+POST /api/agent/device/token
+GET  /api/agent/posts
+POST /api/agent/posts
+POST /api/agent/images
+GET  /api/admin/agent-grants
+DELETE /api/admin/agent-grants/:id
 ```
 
 文章正文以 Markdown 原文存储在 MySQL，React 端进行安全渲染；图片、壁纸、二维码和音乐继续作为静态资源存放，不写入数据库。

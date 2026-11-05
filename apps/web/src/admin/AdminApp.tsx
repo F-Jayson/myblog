@@ -13,6 +13,7 @@ import {
   Archive,
   Ban,
   Bell,
+  Bot,
   BookOpen,
   Boxes,
   ChartNoAxesCombined,
@@ -74,6 +75,7 @@ import { AuthImage } from "../AuthImage";
 import { markdownToPlainText, parseDynamicBody, parseDynamicImageSize, withDynamicImageSize, type DynamicImageSize } from "../markdown";
 import { absoluteMediaUrl } from "../media";
 import AdminDrive from "./AdminDrive";
+import AdminAgents from "./AdminAgents";
 import AdminAppRelease from "./AdminAppRelease";
 import MdEditorBridge from "./MdEditorBridge";
 import type { Post, SiteData } from "../types";
@@ -868,6 +870,12 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     label: "账号与资源",
     items: [
       {
+        href: "/admin/agents",
+        label: "智能体授权",
+        hint: "查看并撤销已连接的智能体",
+        icon: Bot,
+      },
+      {
         href: "/admin/drive",
         label: "文件网盘",
         hint: "上传文件并分享下载链接",
@@ -980,6 +988,7 @@ function AdminShell() {
   else if (location.pathname === "/admin/app-release") page = <AdminAppRelease />;
   else if (location.pathname === "/admin/site") page = <AdminSiteSettings />;
   else if (location.pathname === "/admin/accounts") page = <AdminAccounts />;
+  else if (location.pathname === "/admin/agents") page = <AdminAgents />;
   else if (location.pathname !== "/admin")
     page = <AdminPlaceholder title={meta.label} description={meta.hint} />;
   return (

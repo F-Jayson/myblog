@@ -103,6 +103,15 @@ importers:
         specifier: ^5.8.3
         version: 5.8.3
 
+  packages/blog-mcp:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.21
+        version: 22.20.1
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
+
 packages:
 
   '@aws-sdk/checksums@3.1001.7':
