@@ -133,6 +133,30 @@ function frameFromBlob(source: { blob: Blob; filename: string }): WallpaperFrame
 	return { desktop: objectUrl, mobile: objectUrl, blob: source.blob, filename: source.filename || "wallpaper.jpg", objectUrl };
 }
 
+function whenImageReady(url: string) {
+	return new Promise<void>((resolve) => {
+		const image = new window.Image();
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			window.clearTimeout(timer);
+			resolve();
+		};
+		const timer = window.setTimeout(finish, 2500);
+		image.onload = finish;
+		image.onerror = finish;
+		image.src = url;
+		if (typeof image.decode === "function") void image.decode().then(finish).catch(finish);
+	});
+}
+
+async function revealFrame(frame: WallpaperFrame) {
+	const urls = frame.mobile === frame.desktop ? [frame.desktop] : [frame.desktop, frame.mobile];
+	await Promise.all(urls.map(whenImageReady));
+	return frame;
+}
+
 function randomFallbackFrame() {
 	const index = Math.floor(Math.random() * fallbackHeroSources.length);
 	return frameFromSource(fallbackHeroSources[index] || fallbackHeroSources[0]);
@@ -529,9 +553,14 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 	useLayoutEffect(() => {
 		if (!isApiCover || wallpaper === "none") return undefined;
 		let cancelled = false;
-		void primeWallpaperCache().then((cached) => {
+		void primeWallpaperCache().then(async (cached) => {
 			if (cancelled) return;
 			const replacement = cached ? frameFromBlob(cached) : null;
+			if (replacement) await revealFrame(replacement);
+			if (cancelled) {
+				if (replacement?.objectUrl) URL.revokeObjectURL(replacement.objectUrl);
+				return;
+			}
 			setCurrentFrame((current) => {
 				if (current?.blob) {
 					if (replacement?.objectUrl) URL.revokeObjectURL(replacement.objectUrl);
@@ -547,10 +576,14 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 		if (!isApiCover || !siteLoaded || wallpaper === "none") return undefined;
 		let cancelled = false;
 		let fadeTimer: number | undefined;
-		api.fetchWallpaper().then((next) => {
+		api.fetchWallpaper().then(async (next) => {
 			void rememberWallpaper(next.blob, next.filename);
 			if (cancelled) return;
-			const frame = frameFromBlob(next);
+			const frame = await revealFrame(frameFromBlob(next));
+			if (cancelled) {
+				if (frame.objectUrl) URL.revokeObjectURL(frame.objectUrl);
+				return;
+			}
 			const previous = currentFrameRef.current;
 			if (previous) setOutgoingFrame(previous);
 			setCurrentFrame(frame);
@@ -590,7 +623,7 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 		const loadNext = async () => {
 			const next = await api.fetchWallpaper();
 			void rememberWallpaper(next.blob, next.filename);
-			return frameFromBlob(next);
+			return revealFrame(frameFromBlob(next));
 		};
 
 		const schedule = () => {
@@ -636,7 +669,7 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 		"--hero-position": safeHeroPosition(site.cover?.position),
 	} as CSSProperties);
 	const downloadButton = currentFrame ? <button type="button" className="hero-download" title="下载当前壁纸" aria-label="下载当前壁纸" onClick={() => { void downloadWallpaperFrame(currentFrame); }}><Download size={14} /></button> : null;
-	const crossfadeImages = (className = "") => currentFrame ? <>{outgoingFrame ? <div className={`hero-image hero-image-outgoing ${className}`} style={imageStyle(outgoingFrame)} /> : null}<div className={`hero-image hero-image-current ${outgoingFrame ? "is-crossfading" : ""} ${className}`} style={imageStyle(currentFrame)} /></> : null;
+	const crossfadeImages = (className = "") => currentFrame ? <div className={`hero-media ${className}`.trim()}>{outgoingFrame ? <div className="hero-image hero-image-outgoing" style={imageStyle(outgoingFrame)} /> : null}<div className={`hero-image hero-image-current ${outgoingFrame ? "is-crossfading" : ""}`} style={imageStyle(currentFrame)} /></div> : null;
 	if (wallpaper === "overlay") return <div className={`hero-overlay-layer ${gradientEnabled ? "" : "hero-gradient-off"}`}>{crossfadeImages()}<div className="hero-scrim" /></div>;
 	const title = site.titleConfig?.title?.trim() || site.title || "Jayson's Blog";
 	const subtitle = site.titleConfig?.subtitle?.trim() || site.subtitle || "愿每一颗心，都能免于哀伤。";
