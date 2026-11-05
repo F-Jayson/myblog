@@ -5,10 +5,18 @@ import { ACTIVITY_SERVICE_POINTS, KB_DEFAULTS } from "./constants.js";
 import type {
 	ActivityEventInput,
 	ActivityType,
+	AttachmentSummary,
+	DocumentDetail,
 	KbAccessMode,
+	KbDocumentKind,
+	KbEffectiveRole,
 	KbEntitlement,
 	KbMemberRole,
 	KbVisibility,
+	LibrarySummary,
+	RevisionSummary,
+	SearchResultItem,
+	TreeNode,
 	UserActivityDailyRecord,
 } from "./types.js";
 
@@ -195,6 +203,13 @@ export async function getDailyActivitiesForPast30Days(
 	}));
 }
 
+function formatMysqlDatetime(val: Date | string | null | undefined): string | null {
+	if (!val) return null;
+	const d = typeof val === "object" ? val : new Date(val);
+	if (Number.isNaN(d.getTime())) return null;
+	return d.toISOString().slice(0, 19).replace("T", " ");
+}
+
 /**
  * 获取知识库资格记录
  */
@@ -206,7 +221,10 @@ export async function getKbEntitlement(
 	const [[row]] = await conn.query<RowDataPacket[]>(
 		`SELECT user_id, status, score, login_days_d, service_score_u, service_days_s, time_windows_w,
 		        DATE_FORMAT(stat_date_cutoff, '%Y-%m-%d') AS stat_date_cutoff,
-		        rule_version, activated_at, grace_started_at, restriction_reason
+		        rule_version,
+		        DATE_FORMAT(activated_at, '%Y-%m-%d %H:%i:%s') AS activated_at,
+		        DATE_FORMAT(grace_started_at, '%Y-%m-%d %H:%i:%s') AS grace_started_at,
+		        restriction_reason
 		 FROM kb_entitlements
 		 WHERE user_id = ?`,
 		[userId],
@@ -263,8 +281,8 @@ export async function upsertKbEntitlement(
 			entitlement.timeWindowsW,
 			entitlement.statDateCutoff,
 			entitlement.ruleVersion,
-			entitlement.activatedAt,
-			entitlement.graceStartedAt,
+			formatMysqlDatetime(entitlement.activatedAt),
+			formatMysqlDatetime(entitlement.graceStartedAt),
 			entitlement.restrictionReason,
 		],
 	);
@@ -420,3 +438,756 @@ export async function getDocumentAncestors(
 
 	return ancestors;
 }
+
+/**
+ * 统计用户当前名下拥有的活跃知识库总数
+ */
+export async function countUserLibraries(
+	userId: number,
+	connection?: PoolConnection,
+): Promise<number> {
+	const conn = connection ?? pool;
+	const [[row]] = await conn.query<RowDataPacket[]>(
+		"SELECT COUNT(*) AS total FROM knowledge_bases WHERE owner_user_id = ? AND deleted_at IS NULL",
+		[userId],
+	);
+	return Number(row?.total ?? 0);
+}
+
+/**
+ * 创建新知识库
+ */
+export async function createLibrary(
+	ownerUserId: number,
+	data: {
+		title: string;
+		description?: string;
+		coverUrl?: string;
+		visibility?: KbVisibility;
+	},
+	connection?: PoolConnection,
+): Promise<number> {
+	const conn = connection ?? pool;
+	const [result] = await conn.execute<ResultSetHeader>(
+		`INSERT INTO knowledge_bases (owner_user_id, title, description, cover_url, visibility)
+		 VALUES (?, ?, ?, ?, ?)`,
+		[
+			ownerUserId,
+			data.title.trim(),
+			data.description?.trim() ?? "",
+			data.coverUrl?.trim() ?? "",
+			data.visibility ?? "private",
+		],
+	);
+	return Number(result.insertId);
+}
+
+/**
+ * 首次建库如果用户是 eligible，激活为 active
+ */
+export async function activateUserIfEligible(
+	userId: number,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		`UPDATE kb_entitlements
+		 SET status = 'active',
+		     activated_at = COALESCE(activated_at, NOW())
+		 WHERE user_id = ? AND status = 'eligible'`,
+		[userId],
+	);
+}
+
+/**
+ * 列出用户可访问的全部知识库（本人拥有及受邀作为成员）
+ */
+export async function listLibrariesForUser(
+	userId: number,
+	connection?: PoolConnection,
+): Promise<LibrarySummary[]> {
+	const conn = connection ?? pool;
+	const [rows] = await conn.query<RowDataPacket[]>(
+		`SELECT k.id,
+		        k.owner_user_id,
+		        k.title,
+		        k.description,
+		        k.cover_url,
+		        k.visibility,
+		        k.discovery_enabled,
+		        k.public_comments_enabled,
+		        k.created_at,
+		        k.updated_at,
+		        COALESCE(m.role, IF(k.owner_user_id = ?, 'owner', NULL)) AS user_role,
+		        (SELECT COUNT(*) FROM kb_documents d WHERE d.library_id = k.id AND d.deleted_at IS NULL) AS document_count
+		 FROM knowledge_bases k
+		 LEFT JOIN kb_members m ON m.library_id = k.id AND m.user_id = ?
+		 WHERE (k.owner_user_id = ? OR m.user_id = ?)
+		   AND k.deleted_at IS NULL
+		 ORDER BY k.updated_at DESC`,
+		[userId, userId, userId, userId],
+	);
+
+	return (rows as RowDataPacket[]).map((r) => ({
+		id: Number(r.id),
+		ownerUserId: Number(r.owner_user_id),
+		title: String(r.title),
+		description: String(r.description),
+		coverUrl: String(r.cover_url),
+		visibility: r.visibility as KbVisibility,
+		discoveryEnabled: Boolean(Number(r.discovery_enabled)),
+		publicCommentsEnabled: Boolean(Number(r.public_comments_enabled)),
+		documentCount: Number(r.document_count ?? 0),
+		role: r.user_role as KbEffectiveRole,
+		createdAt: String(r.created_at),
+		updatedAt: String(r.updated_at),
+	}));
+}
+
+/**
+ * 更新知识库基本设置
+ */
+export async function updateLibrary(
+	libraryId: number,
+	data: {
+		title?: string;
+		description?: string;
+		coverUrl?: string;
+		visibility?: KbVisibility;
+		discoveryEnabled?: boolean;
+		publicCommentsEnabled?: boolean;
+	},
+	connection?: PoolConnection,
+): Promise<boolean> {
+	const conn = connection ?? pool;
+	const updates: string[] = [];
+	const values: any[] = [];
+
+	if (data.title !== undefined) { updates.push("title = ?"); values.push(data.title.trim()); }
+	if (data.description !== undefined) { updates.push("description = ?"); values.push(data.description.trim()); }
+	if (data.coverUrl !== undefined) { updates.push("cover_url = ?"); values.push(data.coverUrl.trim()); }
+	if (data.visibility !== undefined) { updates.push("visibility = ?"); values.push(data.visibility); }
+	if (data.discoveryEnabled !== undefined) { updates.push("discovery_enabled = ?"); values.push(data.discoveryEnabled); }
+	if (data.publicCommentsEnabled !== undefined) { updates.push("public_comments_enabled = ?"); values.push(data.publicCommentsEnabled); }
+
+	if (!updates.length) return false;
+	values.push(libraryId);
+
+	const [res] = await conn.execute<ResultSetHeader>(
+		`UPDATE knowledge_bases SET ${updates.join(", ")}, version = version + 1 WHERE id = ?`,
+		values,
+	);
+	return res.affectedRows > 0;
+}
+
+/**
+ * 软删除整个知识库
+ */
+export async function softDeleteLibrary(
+	libraryId: number,
+	connection?: PoolConnection,
+): Promise<boolean> {
+	const conn = connection ?? pool;
+	const [res] = await conn.execute<ResultSetHeader>(
+		"UPDATE knowledge_bases SET deleted_at = NOW() WHERE id = ? AND deleted_at IS NULL",
+		[libraryId],
+	);
+	return res.affectedRows > 0;
+}
+
+/**
+ * 统计库内有效文档/文件夹总数
+ */
+export async function countLibraryDocuments(
+	libraryId: number,
+	connection?: PoolConnection,
+): Promise<number> {
+	const conn = connection ?? pool;
+	const [[row]] = await conn.query<RowDataPacket[]>(
+		"SELECT COUNT(*) AS total FROM kb_documents WHERE library_id = ? AND deleted_at IS NULL",
+		[libraryId],
+	);
+	return Number(row?.total ?? 0);
+}
+
+/**
+ * 获取知识库的目录节点列表
+ */
+export async function getLibraryTreeNodes(
+	libraryId: number,
+	includeDeleted = false,
+	connection?: PoolConnection,
+): Promise<TreeNode[]> {
+	const conn = connection ?? pool;
+	const deletedCondition = includeDeleted ? "" : "AND d.deleted_at IS NULL";
+
+	const [rows] = await conn.query<RowDataPacket[]>(
+		`SELECT d.id,
+		        d.library_id,
+		        d.parent_id,
+		        d.kind,
+		        d.sort_order,
+		        d.access_mode,
+		        d.version,
+		        d.current_revision_id,
+		        d.published_revision_id,
+		        d.deleted_at,
+		        COALESCE(r.title, '') AS title
+		 FROM kb_documents d
+		 LEFT JOIN kb_revisions r ON r.id = d.current_revision_id
+		 WHERE d.library_id = ? ${deletedCondition}
+		 ORDER BY d.sort_order ASC, d.id ASC`,
+		[libraryId],
+	);
+
+	return (rows as RowDataPacket[]).map((r) => ({
+		id: Number(r.id),
+		libraryId: Number(r.library_id),
+		parentId: r.parent_id !== null ? Number(r.parent_id) : null,
+		kind: r.kind as KbDocumentKind,
+		sortOrder: Number(r.sort_order),
+		accessMode: r.access_mode as KbAccessMode,
+		title: String(r.title),
+		version: Number(r.version),
+		currentRevisionId: r.current_revision_id !== null ? Number(r.current_revision_id) : null,
+		publishedRevisionId: r.published_revision_id !== null ? Number(r.published_revision_id) : null,
+		deletedAt: r.deleted_at ? String(r.deleted_at) : null,
+	}));
+}
+
+/**
+ * 创建文档节点 (记录在 kb_documents 表中)
+ */
+export async function createDocumentRecord(
+	data: {
+		libraryId: number;
+		parentId?: number | null;
+		kind: KbDocumentKind;
+		sortOrder?: number;
+		accessMode?: KbAccessMode;
+		externalKey?: string;
+	},
+	connection?: PoolConnection,
+): Promise<number> {
+	const conn = connection ?? pool;
+	const [result] = await conn.execute<ResultSetHeader>(
+		`INSERT INTO kb_documents (library_id, parent_id, kind, sort_order, access_mode, external_key)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		[
+			data.libraryId,
+			data.parentId ?? null,
+			data.kind,
+			data.sortOrder ?? 0,
+			data.accessMode ?? "inherit",
+			data.externalKey ?? null,
+		],
+	);
+	return Number(result.insertId);
+}
+
+/**
+ * 创建不可变 Revision 记录
+ */
+export async function createRevisionRecord(
+	data: {
+		documentId: number;
+		version: number;
+		title: string;
+		markdown: string;
+		tags?: string[];
+		sourceUrl?: string;
+		contentHash: string;
+		byteSize: number;
+		actorUserId?: number | null;
+		actorGrantId?: number | null;
+	},
+	connection?: PoolConnection,
+): Promise<number> {
+	const conn = connection ?? pool;
+	const [result] = await conn.execute<ResultSetHeader>(
+		`INSERT INTO kb_revisions (
+			document_id, version, title, markdown, tags, source_url, content_hash, byte_size, actor_user_id, actor_grant_id
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		[
+			data.documentId,
+			data.version,
+			data.title.trim(),
+			data.markdown,
+			JSON.stringify(data.tags ?? []),
+			data.sourceUrl?.trim() ?? "",
+			data.contentHash,
+			data.byteSize,
+			data.actorUserId ?? null,
+			data.actorGrantId ?? null,
+		],
+	);
+	return Number(result.insertId);
+}
+
+/**
+ * 更新文档当前的 revision 指针与 version 号
+ */
+export async function updateDocumentCurrentRevision(
+	documentId: number,
+	revisionId: number,
+	version: number,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		`UPDATE kb_documents
+		 SET current_revision_id = ?,
+		     version = ?
+		 WHERE id = ?`,
+		[revisionId, version, documentId],
+	);
+}
+
+/**
+ * 获取文档完整详情（携带当前 revision 正文与元数据）
+ */
+export async function getDocumentDetail(
+	documentId: number,
+	connection?: PoolConnection,
+): Promise<DocumentDetail | null> {
+	const conn = connection ?? pool;
+	const [[row]] = await conn.query<RowDataPacket[]>(
+		`SELECT d.id,
+		        d.library_id,
+		        d.parent_id,
+		        d.kind,
+		        d.sort_order,
+		        d.access_mode,
+		        d.version,
+		        d.current_revision_id,
+		        d.published_revision_id,
+		        d.deleted_at,
+		        d.created_at,
+		        d.updated_at,
+		        COALESCE(r.title, '') AS title,
+		        COALESCE(r.markdown, '') AS markdown,
+		        COALESCE(r.tags, '[]') AS tags,
+		        COALESCE(r.source_url, '') AS source_url,
+		        COALESCE(r.content_hash, '') AS content_hash,
+		        COALESCE(r.byte_size, 0) AS byte_size,
+		        r.actor_user_id
+		 FROM kb_documents d
+		 LEFT JOIN kb_revisions r ON r.id = d.current_revision_id
+		 WHERE d.id = ?`,
+		[documentId],
+	);
+	if (!row) return null;
+
+	let parsedTags: string[] = [];
+	try {
+		parsedTags = typeof row.tags === "string" ? JSON.parse(row.tags) : row.tags;
+	} catch {
+		parsedTags = [];
+	}
+
+	return {
+		id: Number(row.id),
+		libraryId: Number(row.library_id),
+		parentId: row.parent_id !== null ? Number(row.parent_id) : null,
+		kind: row.kind as KbDocumentKind,
+		sortOrder: Number(row.sort_order),
+		accessMode: row.access_mode as KbAccessMode,
+		version: Number(row.version),
+		currentRevisionId: row.current_revision_id !== null ? Number(row.current_revision_id) : null,
+		publishedRevisionId: row.published_revision_id !== null ? Number(row.published_revision_id) : null,
+		title: String(row.title),
+		markdown: String(row.markdown),
+		tags: parsedTags,
+		sourceUrl: String(row.source_url),
+		contentHash: String(row.content_hash),
+		byteSize: Number(row.byte_size),
+		actorUserId: row.actor_user_id !== null ? Number(row.actor_user_id) : null,
+		deletedAt: row.deleted_at ? String(row.deleted_at) : null,
+		createdAt: String(row.created_at),
+		updatedAt: String(row.updated_at),
+	};
+}
+
+/**
+ * 乐观并发检查与文档行加锁
+ */
+export async function checkDocumentConflictAndLock(
+	documentId: number,
+	expectedVersion: number,
+	connection: PoolConnection,
+): Promise<{
+	currentVersion: number;
+	isConflict: boolean;
+	currentRevisionId: number | null;
+	libraryId: number;
+}> {
+	const [[row]] = await connection.query<RowDataPacket[]>(
+		"SELECT version, current_revision_id, library_id FROM kb_documents WHERE id = ? FOR UPDATE",
+		[documentId],
+	);
+	if (!row) {
+		throw new Error("文档不存在");
+	}
+	const currentVersion = Number(row.version);
+	return {
+		currentVersion,
+		isConflict: currentVersion !== expectedVersion,
+		currentRevisionId: row.current_revision_id !== null ? Number(row.current_revision_id) : null,
+		libraryId: Number(row.library_id),
+	};
+}
+
+/**
+ * 获取文档历史 revisions 列表
+ */
+export async function getDocumentRevisions(
+	documentId: number,
+	connection?: PoolConnection,
+): Promise<RevisionSummary[]> {
+	const conn = connection ?? pool;
+	const [rows] = await conn.query<RowDataPacket[]>(
+		`SELECT id, document_id, version, title, tags, source_url, byte_size, actor_user_id, created_at
+		 FROM kb_revisions
+		 WHERE document_id = ?
+		 ORDER BY version DESC
+		 LIMIT 200`,
+		[documentId],
+	);
+
+	return (rows as RowDataPacket[]).map((r) => {
+		let tags: string[] = [];
+		try { tags = typeof r.tags === "string" ? JSON.parse(r.tags) : r.tags; } catch { tags = []; }
+		return {
+			id: Number(r.id),
+			documentId: Number(r.document_id),
+			version: Number(r.version),
+			title: String(r.title),
+			tags,
+			sourceUrl: String(r.source_url),
+			byteSize: Number(r.byte_size),
+			actorUserId: r.actor_user_id !== null ? Number(r.actor_user_id) : null,
+			createdAt: String(r.created_at),
+		};
+	});
+}
+
+/**
+ * 获取特定 revision 的详情
+ */
+export async function getRevisionDetail(
+	revisionId: number,
+	connection?: PoolConnection,
+): Promise<{
+	id: number;
+	documentId: number;
+	version: number;
+	title: string;
+	markdown: string;
+	tags: string[];
+	sourceUrl: string;
+} | null> {
+	const conn = connection ?? pool;
+	const [[row]] = await conn.query<RowDataPacket[]>(
+		"SELECT id, document_id, version, title, markdown, tags, source_url FROM kb_revisions WHERE id = ?",
+		[revisionId],
+	);
+	if (!row) return null;
+	let tags: string[] = [];
+	try { tags = typeof row.tags === "string" ? JSON.parse(row.tags) : row.tags; } catch { tags = []; }
+	return {
+		id: Number(row.id),
+		documentId: Number(row.document_id),
+		version: Number(row.version),
+		title: String(row.title),
+		markdown: String(row.markdown),
+		tags,
+		sourceUrl: String(row.source_url),
+	};
+}
+
+/**
+ * 递归软删除文档树（将该节点及其所有后代节点 deleted_at 设为 NOW()）
+ */
+export async function softDeleteDocumentTree(
+	documentId: number,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	// 查找所有后代 ID
+	const descendants: number[] = [documentId];
+	const queue: number[] = [documentId];
+
+	while (queue.length > 0) {
+		const current = queue.shift()!;
+		const [childRows] = await conn.query<RowDataPacket[]>(
+			"SELECT id FROM kb_documents WHERE parent_id = ? AND deleted_at IS NULL",
+			[current],
+		);
+		for (const row of childRows as RowDataPacket[]) {
+			const cid = Number(row.id);
+			descendants.push(cid);
+			queue.push(cid);
+		}
+	}
+
+	await conn.query(
+		"UPDATE kb_documents SET deleted_at = NOW() WHERE id IN (?)",
+		[descendants],
+	);
+}
+
+/**
+ * 恢复软删除的文档及其后代
+ */
+export async function restoreDocumentTree(
+	documentId: number,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	const descendants: number[] = [documentId];
+	const queue: number[] = [documentId];
+
+	while (queue.length > 0) {
+		const current = queue.shift()!;
+		const [childRows] = await conn.query<RowDataPacket[]>(
+			"SELECT id FROM kb_documents WHERE parent_id = ? AND deleted_at IS NOT NULL",
+			[current],
+		);
+		for (const row of childRows as RowDataPacket[]) {
+			const cid = Number(row.id);
+			descendants.push(cid);
+			queue.push(cid);
+		}
+	}
+
+	await conn.query(
+		"UPDATE kb_documents SET deleted_at = NULL WHERE id IN (?)",
+		[descendants],
+	);
+}
+
+/**
+ * 获取知识库下所有已软删除的文档列表（回收站）
+ */
+export async function listTrashedDocuments(
+	libraryId: number,
+	connection?: PoolConnection,
+): Promise<Array<{
+	id: number;
+	libraryId: number;
+	parentId: number | null;
+	kind: KbDocumentKind;
+	title: string;
+	version: number;
+	deletedAt: string;
+}>> {
+	const conn = connection ?? pool;
+	const [rows] = await conn.query<RowDataPacket[]>(
+		`SELECT d.id, d.library_id, d.parent_id, d.kind, d.version,
+		        DATE_FORMAT(d.deleted_at, '%Y-%m-%d %H:%i:%s') AS deleted_at,
+		        COALESCE(r.title, '') AS title
+		 FROM kb_documents d
+		 LEFT JOIN kb_revisions r ON r.id = d.current_revision_id
+		 WHERE d.library_id = ? AND d.deleted_at IS NOT NULL
+		 ORDER BY d.deleted_at DESC`,
+		[libraryId],
+	);
+	return (rows as RowDataPacket[]).map((r) => ({
+		id: Number(r.id),
+		libraryId: Number(r.library_id),
+		parentId: r.parent_id !== null ? Number(r.parent_id) : null,
+		kind: r.kind as KbDocumentKind,
+		title: String(r.title),
+		version: Number(r.version),
+		deletedAt: String(r.deleted_at),
+	}));
+}
+
+/**
+ * 移动文档树节点
+ */
+export async function moveDocumentNode(
+	documentId: number,
+	targetParentId: number | null,
+	sortOrder: number,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		"UPDATE kb_documents SET parent_id = ?, sort_order = ? WHERE id = ?",
+		[targetParentId, sortOrder, documentId],
+	);
+}
+
+/**
+ * 知识库全文检索 (MySQL ngram 全文索引 + LIKE 降级兼容)
+ */
+export async function searchUserAccessibleDocuments(
+	userId: number,
+	searchQuery: string,
+	libraryId?: number,
+	connection?: PoolConnection,
+): Promise<SearchResultItem[]> {
+	const conn = connection ?? pool;
+	const cleanQ = searchQuery.trim();
+	if (!cleanQ) return [];
+
+	let libFilter = "";
+	const queryParams: unknown[] = [userId, userId, userId, userId];
+
+	if (libraryId) {
+		libFilter = "AND k.id = ?";
+		queryParams.push(libraryId);
+	}
+
+	// 匹配参数
+	queryParams.push(`%${cleanQ}%`, `%${cleanQ}%`);
+
+	const [rows] = await conn.query<RowDataPacket[]>(
+		`SELECT d.id AS document_id,
+		        k.id AS library_id,
+		        k.title AS library_title,
+		        r.title,
+		        SUBSTRING(r.markdown, 1, 160) AS excerpt,
+		        d.version,
+		        d.updated_at
+		 FROM kb_documents d
+		 INNER JOIN knowledge_bases k ON k.id = d.library_id
+		 INNER JOIN kb_revisions r ON r.id = d.current_revision_id
+		 LEFT JOIN kb_members m ON m.library_id = k.id AND m.user_id = ?
+		 WHERE (k.owner_user_id = ? OR m.user_id = ?)
+		   AND d.deleted_at IS NULL
+		   AND k.deleted_at IS NULL
+		   ${libFilter}
+		   AND (r.title LIKE ? OR r.markdown LIKE ?)
+		 ORDER BY d.updated_at DESC
+		 LIMIT 50`,
+		queryParams,
+	);
+
+	return (rows as RowDataPacket[]).map((r) => ({
+		documentId: Number(r.document_id),
+		libraryId: Number(r.library_id),
+		libraryTitle: String(r.library_title),
+		title: String(r.title),
+		excerpt: String(r.excerpt ?? "").replace(/[#*`~>]/g, "").trim(),
+		version: Number(r.version),
+		updatedAt: String(r.updated_at),
+	}));
+}
+
+/**
+ * 记录上传的附件元数据
+ */
+export async function createAttachment(
+	data: {
+		libraryId: number;
+		documentId: number;
+		ownerUserId: number;
+		uploaderUserId: number;
+		storageKey: string;
+		filename: string;
+		mimeType: string;
+		byteSize: number;
+		status?: "staged" | "bound";
+	},
+	connection?: PoolConnection,
+): Promise<number> {
+	const conn = connection ?? pool;
+	const [result] = await conn.execute<ResultSetHeader>(
+		`INSERT INTO kb_attachments (
+			library_id, document_id, owner_user_id, uploader_user_id, storage_key, filename, mime_type, byte_size, status
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		[
+			data.libraryId,
+			data.documentId,
+			data.ownerUserId,
+			data.uploaderUserId,
+			data.storageKey,
+			data.filename,
+			data.mimeType,
+			data.byteSize,
+			data.status ?? "staged",
+		],
+	);
+	return Number(result.insertId);
+}
+
+/**
+ * 获取附件元数据
+ */
+export async function getAttachment(
+	attachmentId: number,
+	connection?: PoolConnection,
+): Promise<AttachmentSummary & { storageKey: string; ownerUserId: number } | null> {
+	const conn = connection ?? pool;
+	const [[row]] = await conn.query<RowDataPacket[]>(
+		`SELECT id, library_id, document_id, owner_user_id, filename, mime_type, byte_size, status, storage_key, created_at
+		 FROM kb_attachments
+		 WHERE id = ? AND status != 'marked_delete'`,
+		[attachmentId],
+	);
+	if (!row) return null;
+	return {
+		id: Number(row.id),
+		libraryId: Number(row.library_id),
+		documentId: Number(row.document_id),
+		ownerUserId: Number(row.owner_user_id),
+		filename: String(row.filename),
+		mimeType: String(row.mime_type),
+		byteSize: Number(row.byte_size),
+		status: row.status,
+		storageKey: String(row.storage_key),
+		createdAt: String(row.created_at),
+	};
+}
+
+/**
+ * 列出文档的所有有效附件
+ */
+export async function listDocumentAttachments(
+	documentId: number,
+	connection?: PoolConnection,
+): Promise<AttachmentSummary[]> {
+	const conn = connection ?? pool;
+	const [rows] = await conn.query<RowDataPacket[]>(
+		`SELECT id, library_id, document_id, filename, mime_type, byte_size, status, created_at
+		 FROM kb_attachments
+		 WHERE document_id = ? AND status != 'marked_delete'
+		 ORDER BY created_at DESC`,
+		[documentId],
+	);
+
+	return (rows as RowDataPacket[]).map((r) => ({
+		id: Number(r.id),
+		libraryId: Number(r.library_id),
+		documentId: Number(r.document_id),
+		filename: String(r.filename),
+		mimeType: String(r.mime_type),
+		byteSize: Number(r.byte_size),
+		status: r.status,
+		createdAt: String(r.created_at),
+	}));
+}
+
+/**
+ * 将附件与 revision 绑定
+ */
+export async function bindAttachmentsToRevision(
+	revisionId: number,
+	attachmentIds: number[],
+	connection?: PoolConnection,
+): Promise<void> {
+	if (!attachmentIds.length) return;
+	const conn = connection ?? pool;
+	const values = attachmentIds.map((id) => [revisionId, id]);
+	await conn.query(
+		"INSERT IGNORE INTO kb_revision_attachments (revision_id, attachment_id) VALUES ?",
+		[values],
+	);
+	await conn.query(
+		"UPDATE kb_attachments SET status = 'bound' WHERE id IN (?)",
+		[attachmentIds],
+	);
+}
+

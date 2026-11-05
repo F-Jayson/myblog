@@ -1,4 +1,5 @@
-import { Camera, Check, ImagePlus, KeyRound, LogIn, LogOut, Mail, UserRound, X } from "lucide-react";
+import { BookOpen, Camera, Check, ImagePlus, KeyRound, LogIn, LogOut, Mail, UserRound, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "./api";
 import { resolveMediaUrl } from "./media";
@@ -193,5 +194,5 @@ export function AccountMenu() {
 	const { user, openAuth, logout } = useAuth();
 	const [open, setOpen] = useState(false);
 	if (!user) return <button type="button" className="account-entry" title="登录 / 注册" onClick={() => openAuth("login")}><LogIn size={18} /><span>登录</span></button>;
-	return <div className="account-menu-wrap"><button type="button" className={`account-entry account-entry-user ${open ? "is-active" : ""}`} title="打开账号菜单" onClick={() => setOpen((value) => !value)}><UserAvatar user={user} size={28} /><span>{displayName(user)}</span></button>{open ? <div className="account-menu"><div className="account-menu-user"><UserAvatar user={user} size={38} /><div><strong>{displayName(user)}</strong><small>@{user.username || user.account}</small></div></div><button type="button" onClick={() => { setOpen(false); void logout(); }}><LogOut size={15} />退出登录</button></div> : null}</div>;
+	return <div className="account-menu-wrap"><button type="button" className={`account-entry account-entry-user ${open ? "is-active" : ""}`} title="打开账号菜单" onClick={() => setOpen((value) => !value)}><UserAvatar user={user} size={28} /><span>{displayName(user)}</span></button>{open ? <div className="account-menu"><div className="account-menu-user"><UserAvatar user={user} size={38} /><div><strong>{displayName(user)}</strong><small>@{user.username || user.account}</small></div></div><Link to="/knowledge" onClick={() => setOpen(false)}><BookOpen size={15} />个人知识库</Link><button type="button" onClick={() => { setOpen(false); void logout(); }}><LogOut size={15} />退出登录</button></div> : null}</div>;
 }

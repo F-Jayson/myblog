@@ -140,3 +140,91 @@ export interface AccessEvaluationResult {
 	effectiveRole: KbEffectiveRole | null;
 	denyReason?: string;
 }
+
+export type KbDocumentKind = "document" | "folder";
+
+export interface LibrarySummary {
+	id: number;
+	ownerUserId: number;
+	title: string;
+	description: string;
+	coverUrl: string;
+	visibility: KbVisibility;
+	discoveryEnabled: boolean;
+	publicCommentsEnabled: boolean;
+	documentCount: number;
+	role?: KbEffectiveRole;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface TreeNode {
+	id: number;
+	libraryId: number;
+	parentId: number | null;
+	kind: KbDocumentKind;
+	sortOrder: number;
+	accessMode: KbAccessMode;
+	title: string;
+	version: number;
+	currentRevisionId: number | null;
+	publishedRevisionId: number | null;
+	deletedAt: string | null;
+	children?: TreeNode[];
+}
+
+export interface DocumentDetail {
+	id: number;
+	libraryId: number;
+	parentId: number | null;
+	kind: KbDocumentKind;
+	sortOrder: number;
+	accessMode: KbAccessMode;
+	version: number;
+	currentRevisionId: number | null;
+	publishedRevisionId: number | null;
+	title: string;
+	markdown: string;
+	tags: string[];
+	sourceUrl: string;
+	contentHash: string;
+	byteSize: number;
+	actorUserId: number | null;
+	deletedAt: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface RevisionSummary {
+	id: number;
+	documentId: number;
+	version: number;
+	title: string;
+	tags: string[];
+	sourceUrl: string;
+	byteSize: number;
+	actorUserId: number | null;
+	createdAt: string;
+}
+
+export interface SearchResultItem {
+	documentId: number;
+	libraryId: number;
+	libraryTitle: string;
+	title: string;
+	excerpt: string;
+	version: number;
+	updatedAt: string;
+}
+
+export interface AttachmentSummary {
+	id: number;
+	libraryId: number;
+	documentId: number;
+	filename: string;
+	mimeType: string;
+	byteSize: number;
+	status: "staged" | "bound" | "marked_delete";
+	createdAt: string;
+}
+

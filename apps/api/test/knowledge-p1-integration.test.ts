@@ -12,6 +12,7 @@ import {
 	recordDailyLogin,
 	recordUserDailyLogin,
 	recordWhitelistActivity,
+	pool,
 	UserDeletionBlockedError,
 	userOwnsKnowledgeData,
 } from "../src/knowledge/index.js";
@@ -56,6 +57,7 @@ describe("P1: 真实 MySQL 数据库集成测试 (firefly_blog_test)", () => {
 			}
 		} finally {
 			await connection.end();
+			await pool.end();
 		}
 	});
 
