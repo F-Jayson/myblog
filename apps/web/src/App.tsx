@@ -79,7 +79,7 @@ import { GameSidebarProvider } from "./games/sidebarSlot";
 import ClipboardSharePage from "./ClipboardSharePage";
 import { ClipboardPage, ImageHostPage, UserProfilePage, UserSpacePage } from "./UserTools";
 import AuthorProfilePage from "./AuthorProfilePage";
-import { fallbackPosts, fallbackPostsFor, fallbackSite } from "./data";
+import { fallbackPosts, fallbackSite } from "./data";
 import { parseDynamicBody } from "./markdown";
 import { isSafeNavigationUrl, isSafeResourceUrl, resolveMediaUrl } from "./media";
 import type { ChangelogEntry, ManagedFriendLink, ManagedPage, ManagedPageKey, Post, PostSummary, SiteData, SiteMusic } from "./types";
@@ -638,20 +638,20 @@ function SakuraEffect() {
 
 function LeftSidebar() {
 	const site = useSite();
-	const author = site.author ?? fallbackSite.author!;
+	const author = site.author;
 	const { music } = useContext(MusicPlaybackContext);
 	const { features } = useAuth();
-	const avatar = resolveMediaUrl(author.avatar || fallbackSite.author?.avatar || "/images/avatar.avif");
+	const avatar = resolveMediaUrl(author?.avatar);
 	const navigationUrl = (value: string | null | undefined) => isSafeNavigationUrl(value) ? value!.trim() : "#";
 	const displayAnnouncements = (site.announcement?.displayItems ?? []).filter((item) => item.isVisible).sort((left, right) => Number(right.isPinned) - Number(left.isPinned) || left.sortOrder - right.sortOrder || new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime() || right.id - left.id);
-	const announcement = (displayAnnouncements[0]?.content ?? site.announcement?.content ?? "欢迎来到我的博客！这是一则示例公告。").trim();
+	const announcement = (displayAnnouncements[0]?.content ?? site.announcement?.content ?? "").trim();
 	return <aside id="left-sidebar" className="sidebar left-sidebar">
-		<section className="card profile-card profile-card-large"><Link className="profile-avatar-link" to="/author" title={`查看 ${author.name} 的主页`}><img className="avatar" src={avatar} alt={`${author.name} 的头像`} width="256" height="256" loading="eager" decoding="async" /></Link><div className="profile-name-row"><h2>{author.name}</h2><span className="profile-status" title="正在记录生活" aria-label="正在记录生活" /></div><p>{author.bio || "记录技术与生活。"}</p><div className="profile-rule" aria-hidden="true" /><div className="profile-links"><a href={navigationUrl(author.qqUrl)} title="QQ"><MessageCircle size={18} /></a><a href={navigationUrl(author.githubUrl)} title="GitHub"><Github size={18} /></a><a href={author.email ? `mailto:${author.email}` : "#"} title="Email"><Mail size={18} /></a><a href={navigationUrl(author.rssUrl)} title="RSS"><Rss size={18} /></a>{(author.links ?? []).filter((link) => link.label.trim() && isSafeNavigationUrl(link.url)).map((link) => <a key={link.label + link.url} href={navigationUrl(link.url)} title={link.label} target={/^https?:\/\//u.test(link.url) ? "_blank" : undefined} rel={/^https?:\/\//u.test(link.url) ? "noreferrer" : undefined}><ExternalLink size={18} /></a>)}</div></section>
+		{author ? <section className="card profile-card profile-card-large"><Link className="profile-avatar-link" to="/author" title={`查看 ${author.name} 的主页`}>{avatar ? <img className="avatar" src={avatar} alt={`${author.name} 的头像`} width="256" height="256" loading="eager" decoding="async" /> : null}</Link><div className="profile-name-row"><h2>{author.name}</h2><span className="profile-status" title="正在记录生活" aria-label="正在记录生活" /></div>{author.bio ? <p>{author.bio}</p> : null}<div className="profile-rule" aria-hidden="true" /><div className="profile-links">{author.qqUrl ? <a href={navigationUrl(author.qqUrl)} title="QQ"><MessageCircle size={18} /></a> : null}{author.githubUrl ? <a href={navigationUrl(author.githubUrl)} title="GitHub"><Github size={18} /></a> : null}{author.email ? <a href={`mailto:${author.email}`} title="Email"><Mail size={18} /></a> : null}{author.rssUrl ? <a href={navigationUrl(author.rssUrl)} title="RSS"><Rss size={18} /></a> : null}{(author.links ?? []).filter((link) => link.label.trim() && isSafeNavigationUrl(link.url)).map((link) => <a key={link.label + link.url} href={navigationUrl(link.url)} title={link.label} target={/^https?:\/\//u.test(link.url) ? "_blank" : undefined} rel={/^https?:\/\//u.test(link.url) ? "noreferrer" : undefined}><ExternalLink size={18} /></a>)}</div></section> : null}
 		{announcement ? <section className="card widget announcement"><WidgetTitle icon={Info}>公告</WidgetTitle><p>{announcement}</p><Link className="widget-more" to="/about">了解更多 <ChevronRight size={14} /></Link></section> : null}
 		<div className="sidebar-sticky-section">
 			{music ? <section className="card widget music-widget"><WidgetTitle icon={Music2}>音乐</WidgetTitle><ConfiguredMusicPlayer compact /></section> : null}
-			<section className="card widget"><WidgetTitle icon={Folder}>分类</WidgetTitle><div className="category-list">{site.categories.map((category) => <Link key={category.slug} to={`/archive?category=${category.slug}`}><span>{category.name}</span><small>{category.postCount}</small></Link>)}</div></section>
-			<section className="card widget"><WidgetTitle icon={Tag}>标签</WidgetTitle><div className="tag-cloud">{site.tags.map((tag) => <Link key={tag.slug} to={`/archive?tag=${tag.slug}`}>{tag.name}</Link>)}<Link to="/tags" className="tag-more">更多</Link></div></section>
+			{site.categories.length ? <section className="card widget"><WidgetTitle icon={Folder}>分类</WidgetTitle><div className="category-list">{site.categories.map((category) => <Link key={category.slug} to={`/archive?category=${category.slug}`}><span>{category.name}</span><small>{category.postCount}</small></Link>)}</div></section> : null}
+			{site.tags.length ? <section className="card widget"><WidgetTitle icon={Tag}>标签</WidgetTitle><div className="tag-cloud">{site.tags.map((tag) => <Link key={tag.slug} to={`/archive?tag=${tag.slug}`}>{tag.name}</Link>)}<Link to="/tags" className="tag-more">更多</Link></div></section> : null}
 			<section className="card widget tools-widget"><WidgetTitle icon={Wrench}>小工具</WidgetTitle><div className="tools-widget-links"><Link to="/tools"><Wrench size={15}/>开发小工具</Link><Link to="/tools/highlight"><Highlighter size={15}/>代码高亮</Link>{features.gamesEnabled ? <Link to="/tools/games"><Gamepad2 size={15}/>小游戏</Link> : null}{features.compilerEnabled ? <Link to="/tools/compiler"><Code2 size={15}/>在线编译器</Link> : null}{features.imageHostingEnabled ? <Link to="/tools/image-host"><Image size={15}/>图床</Link> : null}{features.clipboardEnabled ? <Link to="/tools/clipboard"><Copy size={15}/>在线剪贴板</Link> : null}{features.userCenterEnabled ? <><Link to="/user/center"><UserRound size={15}/>用户中心</Link><Link to="/user/space"><Cloud size={15}/>空间管理</Link></> : null}</div></section>
 		</div>
 	</aside>;
@@ -766,7 +766,7 @@ function RightSidebar() {
 		return () => { active = false; };
 	}, [articleSlug]);
 	return <aside id="right-sidebar" className="sidebar right-sidebar">
-		<section className="card widget"><WidgetTitle icon={Quote}>最新动态</WidgetTitle><div className="dynamic-mini">{site.dynamics.slice(0, 2).map((dynamic) => { const parsed = parseDynamicBody(dynamic.body, dynamic.images); const image = parsed.images[0]?.src; return <Link to="/dynamic" key={dynamic.id}><p>{parsed.previewText || "查看动态"}</p>{image ? <img src={image} alt="" loading="lazy" decoding="async" /> : null}<time>{dateText(dynamic.publishedAt)}</time></Link>; })}<Link className="widget-more" to="/dynamic">更多动态 <ChevronRight size={14} /></Link></div></section>
+		{site.dynamics.length ? <section className="card widget"><WidgetTitle icon={Quote}>最新动态</WidgetTitle><div className="dynamic-mini">{site.dynamics.slice(0, 2).map((dynamic) => { const parsed = parseDynamicBody(dynamic.body, dynamic.images); const image = parsed.images[0]?.src; return <Link to="/dynamic" key={dynamic.id}><p>{parsed.previewText || "查看动态"}</p>{image ? <img src={image} alt="" loading="lazy" decoding="async" /> : null}<time>{dateText(dynamic.publishedAt)}</time></Link>; })}<Link className="widget-more" to="/dynamic">更多动态 <ChevronRight size={14} /></Link></div></section> : null}
 		{location.pathname === "/tools/games" || location.pathname.startsWith("/tools/games/") ? <GameSidebarRank /> : <>
 			<section className="card widget"><WidgetTitle icon={Library}>站点统计</WidgetTitle><div className="site-stats-list"><div><Library size={16} /><span>文章</span><strong>{numberText(site.stats.posts)}</strong></div><div><Folder size={16} /><span>分类</span><strong>{numberText(site.categories.length)}</strong></div><div><Tag size={16} /><span>标签</span><strong>{numberText(site.tags.length)}</strong></div><div><Code2 size={16} /><span>总字数</span><strong>{numberText(site.stats.totalWords)}</strong></div><div><Clock3 size={16} /><span>运行时长</span><strong>{runningDays === null ? (site.stats.posts ? "暂不可用" : "暂无文章") : runningDays > 3650 ? "较早" : `${runningDays} 天`}</strong></div><div><CalendarDays size={16} /><span>最后活动</span><strong>{relativeActivityText(site.stats.lastActivityAt)}</strong></div></div></section>
 			<SiteInfoWidget />
@@ -797,18 +797,14 @@ function PostCard({ post }: { post: PostSummary }) {
 
 function PostsPanel({ query, category, tag, heading, initialPage = 1 }: { query?: string; category?: string; tag?: string; heading?: string; initialPage?: number }) {
 	const [page, setPage] = useState(initialPage);
-	const initialResult = fallbackPostsFor({ page: initialPage, category, tag, q: query });
-	const [posts, setPosts] = useState<PostSummary[]>(initialResult.items);
-	const [total, setTotal] = useState(initialResult.total);
-	const [loading, setLoading] = useState(false);
+	const [posts, setPosts] = useState<PostSummary[]>([]);
+	const [total, setTotal] = useState(0);
+	const [loading, setLoading] = useState(true);
 	useEffect(() => { setPage(initialPage); }, [query, category, tag, initialPage]);
 	useEffect(() => {
 		let active = true;
-		const immediate = fallbackPostsFor({ page, category, tag, q: query });
-		setPosts(immediate.items);
-		setTotal(immediate.total);
-		setLoading(false);
-		api.posts({ page, category, tag, q: query }).then((result) => { if (active) { setPosts(result.items); setTotal(result.total); setLoading(false); } });
+		setLoading(true);
+		api.posts({ page, category, tag, q: query }).then((result) => { if (active) { setPosts(result.items); setTotal(result.total); } }).finally(() => { if (active) setLoading(false); });
 		return () => { active = false; };
 	}, [page, query, category, tag]);
 	return <section className={`posts-panel ${heading ? "posts-panel-compact" : "posts-panel-home"}`}>
@@ -1083,8 +1079,8 @@ function AuthorProfileRoute() { return <AuthorProfilePage site={useSite()} />; }
 
 function AboutPage() {
 	const site = useSite();
-	const author = site.author ?? fallbackSite.author!;
-	const avatar = resolveMediaUrl(author.avatar || fallbackSite.author?.avatar || "/images/avatar.avif");
+	const author = site.author ?? { name: "", bio: "", avatar: "", email: null, githubUrl: null, qqUrl: null, rssUrl: null };
+	const avatar = resolveMediaUrl(author.avatar);
 	return <StaticPage title="关于我"><div className="about-intro about-intro-wide"><img src={avatar} alt={author.name + " 的头像"} width="96" height="96" loading="lazy" decoding="async" /><div><h3>关于我 / About Me</h3><p>你好！我是 <strong>{author.name}</strong>，{author.bio || "一个在数字世界中记录生活与思考的人。"}</p><p className="about-signature">{site.subtitle || "愿每一颗心，都能免于哀伤。"}</p></div></div><Markdown content={"### 🛠️ 关于本站\n\n这个网站使用 React、Express 和 MySQL 构建，用来记录技术、生活和沿途的想法。\n\n### 现在正在做的事\n\n- 让内容从 Markdown 顺利迁移到 MySQL\n- 持续打磨长文章的阅读体验\n- 收集值得反复访问的链接\n\n感谢你的来访！希望在这里能找到对你有用的内容！"} /></StaticPage>;
 }
 
@@ -1170,8 +1166,8 @@ function ChangelogPage() {
 
 function DynamicPage() {
 	const site = useSite();
-	const author = site.author ?? fallbackSite.author!;
-	const avatar = resolveMediaUrl(author.avatar || fallbackSite.author?.avatar || "/images/avatar.avif");
+	const author = site.author ?? { name: "", bio: "", avatar: "", email: null, githubUrl: null, qqUrl: null, rssUrl: null };
+	const avatar = resolveMediaUrl(author.avatar);
 	const entries = site.dynamics ?? [];
 	const [selectedImage, setSelectedImage] = useState<string | null>(null);
 	useEffect(() => {
