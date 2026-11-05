@@ -54,7 +54,7 @@ import {
 	Wrench,
 	X,
 } from "lucide-react";
-import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import {
 	Link,
 	NavLink,
@@ -83,6 +83,7 @@ import { fallbackPosts, fallbackSite } from "./data";
 import { parseDynamicBody } from "./markdown";
 import { isSafeNavigationUrl, isSafeResourceUrl, resolveMediaUrl } from "./media";
 import type { ChangelogEntry, ManagedFriendLink, ManagedPage, ManagedPageKey, Post, PostSummary, SiteData, SiteMusic } from "./types";
+import { peekPrimedWallpaper, primeWallpaperCache, rememberWallpaper } from "./wallpaperCache";
 
 const SiteContext = createContext<SiteData>(fallbackSite);
 const MarkdownContent = lazy(() => import("./MarkdownContent"));
@@ -125,6 +126,20 @@ function frameFromSource(source: { desktop: string; mobile: string }): Wallpaper
 		mobile: source.mobile,
 		filename: wallpaperFilenameFromUrl(source.desktop),
 	};
+}
+
+function frameFromBlob(source: { blob: Blob; filename: string }): WallpaperFrame {
+	const objectUrl = URL.createObjectURL(source.blob);
+	return { desktop: objectUrl, mobile: objectUrl, blob: source.blob, filename: source.filename || "wallpaper.jpg", objectUrl };
+}
+
+function randomFallbackFrame() {
+	const index = Math.floor(Math.random() * fallbackHeroSources.length);
+	return frameFromSource(fallbackHeroSources[index] || fallbackHeroSources[0]);
+}
+
+function readRememberedCoverMode() {
+	try { return localStorage.getItem("site-cover-mode") || ""; } catch { return ""; }
 }
 
 function triggerBlobDownload(blob: Blob, filename: string) {
@@ -463,17 +478,24 @@ function Header({ dark, setDark, wallpaper, setWallpaper, settings }: { dark: bo
 	);
 }
 
-function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, gradientEnabled, onWallpaperDownloadChange }: { wallpaper: string; showTitle: boolean; carousel: boolean; carouselInterval: number; wavesEnabled: boolean; gradientEnabled: boolean; onWallpaperDownloadChange: (download: (() => void) | null) => void }) {
+function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, gradientEnabled, siteLoaded, onWallpaperDownloadChange }: { wallpaper: string; showTitle: boolean; carousel: boolean; carouselInterval: number; wavesEnabled: boolean; gradientEnabled: boolean; siteLoaded: boolean; onWallpaperDownloadChange: (download: (() => void) | null) => void }) {
 	const location = useLocation();
 	const site = useSite();
 	const isHome = location.pathname === "/";
-	const isApiCover = site.cover?.mode === "api";
+	const [rememberedCoverMode] = useState(readRememberedCoverMode);
+	const isApiCover = site.cover?.mode === "api" || (!siteLoaded && rememberedCoverMode === "api");
 	const coverSource = resolveMediaUrl(isApiCover ? (site.cover?.apiUrl || site.cover?.value) : site.cover?.value);
 	const configuredCover = !isApiCover && isSafeResourceUrl(coverSource) ? coverSource : "";
 	const heroSources = useMemo(() => configuredCover ? [{ desktop: configuredCover, mobile: configuredCover }] : fallbackHeroSources, [configuredCover]);
 	const intervalMs = clampCarouselInterval(carouselInterval) * 1000;
-	const initialFrame = frameFromSource(heroSources[configuredCover ? 0 : 1] || fallbackHeroSources[1]);
-	const [currentFrame, setCurrentFrame] = useState<WallpaperFrame>(initialFrame);
+	const [currentFrame, setCurrentFrame] = useState<WallpaperFrame | null>(() => {
+		if (isApiCover) {
+			const cached = peekPrimedWallpaper();
+			return cached ? frameFromBlob(cached) : null;
+		}
+		if (!siteLoaded) return null;
+		return frameFromSource(heroSources[configuredCover ? 0 : 1] || fallbackHeroSources[1]);
+	});
 	const [outgoingFrame, setOutgoingFrame] = useState<WallpaperFrame | null>(null);
 	const currentFrameRef = useRef(currentFrame);
 	const outgoingFrameRef = useRef(outgoingFrame);
@@ -491,33 +513,57 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 	}, [onWallpaperDownloadChange, wallpaper]);
 
 	useEffect(() => {
-		if (isApiCover) return;
+		if (!siteLoaded || isApiCover) return;
 		const nextIndex = configuredCover ? 0 : 1;
 		wallpaperIndexRef.current = nextIndex;
-		setCurrentFrame(frameFromSource(heroSources[nextIndex] || fallbackHeroSources[1]));
-		setOutgoingFrame(null);
-	}, [configuredCover, isApiCover]);
+		setCurrentFrame((current) => {
+			if (current?.objectUrl) URL.revokeObjectURL(current.objectUrl);
+			return frameFromSource(heroSources[nextIndex] || fallbackHeroSources[1]);
+		});
+		setOutgoingFrame((current) => {
+			if (current?.objectUrl) URL.revokeObjectURL(current.objectUrl);
+			return null;
+		});
+	}, [configuredCover, heroSources, isApiCover, siteLoaded]);
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		if (!isApiCover || wallpaper === "none") return undefined;
 		let cancelled = false;
-		const apiUrl = site.cover?.apiUrl || site.cover?.value || "";
+		void primeWallpaperCache().then((cached) => {
+			if (cancelled) return;
+			const replacement = cached ? frameFromBlob(cached) : null;
+			setCurrentFrame((current) => {
+				if (current?.blob) {
+					if (replacement?.objectUrl) URL.revokeObjectURL(replacement.objectUrl);
+					return current;
+				}
+				return replacement ?? current ?? randomFallbackFrame();
+			});
+		});
+		return () => { cancelled = true; };
+	}, [isApiCover, wallpaper]);
+
+	useEffect(() => {
+		if (!isApiCover || !siteLoaded || wallpaper === "none") return undefined;
+		let cancelled = false;
 		let fadeTimer: number | undefined;
 		api.fetchWallpaper().then((next) => {
+			void rememberWallpaper(next.blob, next.filename);
 			if (cancelled) return;
-			const objectUrl = URL.createObjectURL(next.blob);
+			const frame = frameFromBlob(next);
 			const previous = currentFrameRef.current;
-			setOutgoingFrame(previous);
-			setCurrentFrame({ desktop: objectUrl, mobile: objectUrl, blob: next.blob, filename: next.filename, objectUrl });
+			if (previous) setOutgoingFrame(previous);
+			setCurrentFrame(frame);
+			if (!previous) return;
 			fadeTimer = window.setTimeout(() => {
 				setOutgoingFrame((current) => {
-					if (current?.objectUrl && current.objectUrl !== objectUrl) URL.revokeObjectURL(current.objectUrl);
+					if (current?.objectUrl && current.objectUrl !== frame.objectUrl) URL.revokeObjectURL(current.objectUrl);
 					return current === previous ? null : current;
 				});
 			}, WALLPAPER_CROSSFADE_MS);
 		}).catch(() => undefined);
 		return () => { cancelled = true; if (fadeTimer) window.clearTimeout(fadeTimer); };
-	}, [isApiCover, wallpaper, site.cover?.apiUrl, site.cover?.value]);
+	}, [isApiCover, siteLoaded, wallpaper, site.cover?.apiUrl, site.cover?.value]);
 
 	useEffect(() => {
 		if (isApiCover || !carousel || heroSources.length < 2 || wallpaper === "none") return undefined;
@@ -536,15 +582,15 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 	}, [carousel, heroSources, intervalMs, isApiCover, wallpaper]);
 
 	useEffect(() => {
-		if (!isApiCover || !carousel || wallpaper === "none") return undefined;
+		if (!isApiCover || !siteLoaded || !carousel || wallpaper === "none") return undefined;
 		let cancelled = false;
 		let waitTimer: number | undefined;
 		let fadeTimer: number | undefined;
 
 		const loadNext = async () => {
 			const next = await api.fetchWallpaper();
-			const objectUrl = URL.createObjectURL(next.blob);
-			return { desktop: objectUrl, mobile: objectUrl, blob: next.blob, filename: next.filename, objectUrl } satisfies WallpaperFrame;
+			void rememberWallpaper(next.blob, next.filename);
+			return frameFromBlob(next);
 		};
 
 		const schedule = () => {
@@ -575,10 +621,10 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 			if (waitTimer) window.clearTimeout(waitTimer);
 			if (fadeTimer) window.clearTimeout(fadeTimer);
 		};
-	}, [carousel, intervalMs, isApiCover, wallpaper]);
+	}, [carousel, intervalMs, isApiCover, siteLoaded, wallpaper]);
 
 	useEffect(() => () => {
-		if (currentFrameRef.current.objectUrl) URL.revokeObjectURL(currentFrameRef.current.objectUrl);
+		if (currentFrameRef.current?.objectUrl) URL.revokeObjectURL(currentFrameRef.current.objectUrl);
 		if (outgoingFrameRef.current?.objectUrl) URL.revokeObjectURL(outgoingFrameRef.current.objectUrl);
 	}, []);
 
@@ -589,8 +635,8 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 		"--hero-mobile-image": cssUrl(frame.mobile),
 		"--hero-position": safeHeroPosition(site.cover?.position),
 	} as CSSProperties);
-	const downloadButton = <button type="button" className="hero-download" title="下载当前壁纸" aria-label="下载当前壁纸" onClick={() => { void downloadWallpaperFrame(currentFrame); }}><Download size={14} /></button>;
-	const crossfadeImages = (className = "") => <>{outgoingFrame ? <div className={`hero-image hero-image-outgoing ${className}`} style={imageStyle(outgoingFrame)} /> : null}<div className={`hero-image hero-image-current ${outgoingFrame ? "is-crossfading" : ""} ${className}`} style={imageStyle(currentFrame)} /></>;
+	const downloadButton = currentFrame ? <button type="button" className="hero-download" title="下载当前壁纸" aria-label="下载当前壁纸" onClick={() => { void downloadWallpaperFrame(currentFrame); }}><Download size={14} /></button> : null;
+	const crossfadeImages = (className = "") => currentFrame ? <>{outgoingFrame ? <div className={`hero-image hero-image-outgoing ${className}`} style={imageStyle(outgoingFrame)} /> : null}<div className={`hero-image hero-image-current ${outgoingFrame ? "is-crossfading" : ""} ${className}`} style={imageStyle(currentFrame)} /></> : null;
 	if (wallpaper === "overlay") return <div className={`hero-overlay-layer ${gradientEnabled ? "" : "hero-gradient-off"}`}>{crossfadeImages()}<div className="hero-scrim" /></div>;
 	const title = site.titleConfig?.title?.trim() || site.title || "Jayson's Blog";
 	const subtitle = site.titleConfig?.subtitle?.trim() || site.subtitle || "愿每一颗心，都能免于哀伤。";
@@ -1362,6 +1408,7 @@ function faviconMimeType(source: string): string {
 
 function SiteShell() {
 	const [site, setSite] = useState<SiteData>(fallbackSite);
+	const [siteLoaded, setSiteLoaded] = useState(false);
 	const [dark, setDark] = useState(() => localStorage.getItem("site-theme") === "dark" || (!localStorage.getItem("site-theme") && window.matchMedia("(prefers-color-scheme: dark)").matches));
 	const [wallpaper, setWallpaperState] = useState(() => localStorage.getItem("site-wallpaper") ?? "banner");
 	const [hue, setHueState] = useState(() => Number(localStorage.getItem("site-hue") ?? 165));
@@ -1386,7 +1433,16 @@ function SiteShell() {
 	const [overlayCardOpacity, setOverlayCardOpacity] = useState(() => Number(localStorage.getItem("site-overlay-card-opacity") ?? 50));
 	useEffect(() => {
 		let active = true;
-		const refreshSite = () => { api.site().then((result) => { if (active) setSite(result); }); };
+		const refreshSite = () => {
+			api.site().then((result) => {
+				if (!active) return;
+				setSite(result);
+				setSiteLoaded(true);
+				if (result.title || result.cover) {
+					try { localStorage.setItem("site-cover-mode", result.cover?.mode || "static"); } catch { /* ignore */ }
+				}
+			});
+		};
 		refreshSite();
 		const retryTimer = window.setInterval(refreshSite, 30_000);
 		return () => { active = false; window.clearInterval(retryTimer); };
@@ -1457,7 +1513,7 @@ function SiteShell() {
 	const leftSidebar = useSidebarOpen("left");
 	const rightSidebar = useSidebarOpen("right");
 	const gridClass = ["site-grid", leftSidebar.open ? "" : "collapse-left", rightSidebar.open ? "" : "collapse-right"].filter(Boolean).join(" ");
-	return <GameSidebarProvider><SiteContext.Provider value={site}><MusicPlaybackProvider><div className={shellClasses} style={shellStyle}><Header dark={dark} setDark={setDark} wallpaper={wallpaper} setWallpaper={setWallpaperState} settings={displaySettings} /><Hero wallpaper={wallpaper} showTitle={bannerTitle} carousel={carousel} carouselInterval={carouselInterval} wavesEnabled={wavesEnabled} gradientEnabled={gradientEnabled} onWallpaperDownloadChange={bindWallpaperDownload} />{sakuraEnabled ? <SakuraEffect /> : null}<main id="content" className={gridClass}><LeftSidebar /><div className="main-column"><Outlet context={site} /></div><RightSidebar /></main><footer className="site-footer"><span>Jayson's Blog</span><a href="/rss.xml">RSS</a><a href="/sitemap.xml">Sitemap</a></footer><CornerActions leftOpen={leftSidebar.open} rightOpen={rightSidebar.open} onToggleLeft={leftSidebar.toggle} onToggleRight={rightSidebar.toggle} /><WallpaperNavigationScroll wallpaper={wallpaper} /></div></MusicPlaybackProvider></SiteContext.Provider></GameSidebarProvider>;
+	return <GameSidebarProvider><SiteContext.Provider value={site}><MusicPlaybackProvider><div className={shellClasses} style={shellStyle}><Header dark={dark} setDark={setDark} wallpaper={wallpaper} setWallpaper={setWallpaperState} settings={displaySettings} /><Hero wallpaper={wallpaper} showTitle={bannerTitle} carousel={carousel} carouselInterval={carouselInterval} wavesEnabled={wavesEnabled} gradientEnabled={gradientEnabled} siteLoaded={siteLoaded} onWallpaperDownloadChange={bindWallpaperDownload} />{sakuraEnabled ? <SakuraEffect /> : null}<main id="content" className={gridClass}><LeftSidebar /><div className="main-column"><Outlet context={site} /></div><RightSidebar /></main><footer className="site-footer"><span>Jayson's Blog</span><a href="/rss.xml">RSS</a><a href="/sitemap.xml">Sitemap</a></footer><CornerActions leftOpen={leftSidebar.open} rightOpen={rightSidebar.open} onToggleLeft={leftSidebar.toggle} onToggleRight={rightSidebar.toggle} /><WallpaperNavigationScroll wallpaper={wallpaper} /></div></MusicPlaybackProvider></SiteContext.Provider></GameSidebarProvider>;
 }
 
 export default function App() { return <AuthProvider><Routes><Route path="/admin/*" element={<AdminWorkspace />} /><Route path="/agent/authorize" element={<AgentAuthorizePage />} /><Route element={<SiteShell />}><Route path="/" element={<HomePage />} /><Route path="/tools" element={<ToolsPage />} /><Route path="/tools/games" element={<GamesPage />} /><Route path="/tools/games/:gameId" element={<GamesPage />} /><Route path="/tools/compiler" element={<CompilerPage />} /><Route path="/tools/image-host" element={<ImageHostPage />} /><Route path="/tools/clipboard" element={<ClipboardPage />} /><Route path="/tools/:toolId" element={<ToolsPage />} /><Route path="/share/:token" element={<ClipboardSharePage />} /><Route path="/user/center" element={<UserProfilePage />} /><Route path="/user/space" element={<UserSpacePage />} /><Route path="/page/:page" element={<PageNumberPage />} /><Route path="/archive" element={<ArchivePage />} /><Route path="/timeline" element={<ArchiveTimelinePage />} /><Route path="/archive/timeline" element={<ArchiveTimelinePage />} /><Route path="/categories" element={<TaxonomyPage type="categories" />} /><Route path="/tags" element={<TaxonomyPage type="tags" />} /><Route path="/search" element={<SearchPage />} /><Route path="/posts/*" element={<PostPage />} /><Route path="/author" element={<AuthorProfileRoute />} /><Route path="/about" element={<AboutContentPage />} /><Route path="/transfer" element={<TransferPage />} /><Route path="/friends" element={<TransferPage />} /><Route path="/issues" element={<IssuesPage />} /><Route path="/feedback" element={<FeedbackPage />} /><Route path="/changelog" element={<ChangelogPage />} /><Route path="/guestbook" element={<GuestbookPage />} /><Route path="/dynamic" element={<DynamicPage />} /><Route path="/dynamic/comments" element={<DynamicPage />} /><Route path="/gallery" element={<GalleryPage />} /><Route path="/gallery/:album" element={<GalleryPage />} /><Route path="/booknav" element={<BooknavPage />} /><Route path="/sponsor" element={<SponsorPage />} /><Route path="/rss" element={<RssPage />} /><Route path="/rss.xml" element={<RssPage />} /><Route path="/404" element={<EmptyState title="页面不存在" description="这个地址没有对应的页面。" />} /><Route path="*" element={<EmptyState title="页面不存在" description="这个地址没有对应的页面。" />} /></Route></Routes></AuthProvider>; }

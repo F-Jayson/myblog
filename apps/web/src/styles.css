@@ -114,7 +114,7 @@ img { display: block; max-width: 100%; }
 .hero { position: relative; height: min(65vh, 43rem); min-height: 25rem; margin-top: calc(var(--navbar-height) * -1); overflow: hidden; background: #152320; }
 .hero.hero-inner { height: min(48vh, 32rem); min-height: 22rem; }
 .hero.hero-full { position: fixed; inset: 0; z-index: -1; height: 100vh; }
-.hero-image { position: absolute; inset: 0; background-image: var(--hero-desktop-image, url("/images/DesktopWallpaper/d2.avif")); background-position: center 35%; background-size: cover; background-repeat: no-repeat; }
+.hero-image { position: absolute; inset: 0; background-image: var(--hero-desktop-image); background-position: center 35%; background-size: cover; background-repeat: no-repeat; }
 .hero-scrim { position: absolute; inset: 0; background: linear-gradient(to bottom, rgb(0 0 0 / .18), rgb(0 0 0 / .25) 48%, color-mix(in srgb, var(--page-bg) 100%, transparent) 100%); }
 .hero-content { position: absolute; inset: 0; z-index: 2; display: grid; place-content: center; padding: 4rem 1rem 3rem; text-align: center; color: #fff; text-shadow: 0 2px 16px rgb(0 0 0 / .48); }
 .hero-content h1 { margin: 0; font-size: clamp(2.2rem, 5vw, 4rem); line-height: 1.12; font-weight: 680; }
@@ -531,7 +531,7 @@ img { display: block; max-width: 100%; }
 	.icon-button { width: 2.45rem; height: 2.45rem; }
 	.hero { height: 65vh; min-height: 22rem; margin-top: -4.5rem; }
 	.hero-content { padding-top: 4rem; }
-	.hero-image { background-image: url("/images/MobileWallpaper/m6.avif"); background-position: center 42%; }
+	.hero-image { background-position: center 42%; }
 	.hero-content h1 { font-size: clamp(2.1rem, 9vw, 2.75rem); font-weight: 680; }
 	.hero-content p { margin-top: .5rem; font-size: .95rem; }
 	.hero-waves { height: 15vh; min-height: 3rem; }
