@@ -723,7 +723,7 @@ CREATE TABLE IF NOT EXISTS agent_device_requests (
   device_code_hash CHAR(64) NOT NULL UNIQUE,
   user_code CHAR(8) NOT NULL,
   client_name VARCHAR(120) NOT NULL DEFAULT 'Cursor 智能体',
-  requested_scopes VARCHAR(255) NOT NULL,
+  requested_scopes VARCHAR(500) NOT NULL,
   status ENUM('pending', 'approved', 'denied', 'expired') NOT NULL DEFAULT 'pending',
   admin_user_id BIGINT UNSIGNED NULL,
   grant_id BIGINT UNSIGNED NULL,
@@ -741,7 +741,7 @@ CREATE TABLE IF NOT EXISTS agent_grants (
   token_hash CHAR(64) NOT NULL UNIQUE,
   admin_user_id BIGINT UNSIGNED NOT NULL,
   client_name VARCHAR(120) NOT NULL DEFAULT 'Cursor 智能体',
-  scopes VARCHAR(255) NOT NULL,
+  scopes VARCHAR(500) NOT NULL,
   expires_at DATETIME NOT NULL,
   last_used_at DATETIME NULL,
   revoked_at DATETIME NULL,
@@ -778,5 +778,8 @@ CREATE TABLE IF NOT EXISTS agent_audit (
   INDEX idx_agent_audit_created (created_at, id),
   INDEX idx_agent_audit_grant (grant_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE agent_device_requests MODIFY requested_scopes VARCHAR(500) NOT NULL;
+ALTER TABLE agent_grants MODIFY scopes VARCHAR(500) NOT NULL;
 
 

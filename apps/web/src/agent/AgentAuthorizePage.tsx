@@ -5,7 +5,7 @@ import "../admin/admin.css";
 
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN ?? "").trim().replace(/\/+$/u, "");
 
-type ScopeChoice = { id: string; label: string; description: string };
+type ScopeChoice = { id: string; label: string; description: string; sensitive?: boolean; requested?: boolean };
 type DeviceInfo = {
 	userCodeDisplay: string;
 	clientName: string;
@@ -50,7 +50,7 @@ export default function AgentAuthorizePage() {
 				const next = await readJson<DeviceInfo>(await fetch(`${API_ORIGIN}/api/agent/device/${encodeURIComponent(code)}`));
 				if (cancelled) return;
 				setInfo(next);
-				setSelected(next.scopes.map((item) => item.id));
+				setSelected(next.scopes.filter((item) => item.requested !== false && !item.sensitive).map((item) => item.id));
 			} catch (reason) {
 				if (!cancelled) setError(reason instanceof Error ? reason.message : "无法读取授权请求");
 			} finally {
@@ -162,10 +162,21 @@ export default function AgentAuthorizePage() {
 				) : null}
 				{pending && token ? (
 					<div className="agent-decision">
-						<p>将以 {signedInAs} 的身份授权。</p>
+						<p>将以 {signedInAs} 的身份授权。敏感权限默认不勾选，需要时再单独允许。</p>
 						<ul className="agent-scope-list">
-							{info?.scopes.map((scope) => (
+							{info?.scopes.filter((scope) => !scope.sensitive).map((scope) => (
 								<li key={scope.id}>
+									<label>
+										<input type="checkbox" checked={selected.includes(scope.id)} onChange={() => setSelected((current) => current.includes(scope.id) ? current.filter((item) => item !== scope.id) : [...current, scope.id])} />
+										<span>{scope.label}<small>{scope.description}</small></span>
+									</label>
+								</li>
+							))}
+						</ul>
+						<p className="agent-scope-group">敏感权限</p>
+						<ul className="agent-scope-list">
+							{info?.scopes.filter((scope) => scope.sensitive).map((scope) => (
+								<li key={scope.id} className="is-sensitive">
 									<label>
 										<input type="checkbox" checked={selected.includes(scope.id)} onChange={() => setSelected((current) => current.includes(scope.id) ? current.filter((item) => item !== scope.id) : [...current, scope.id])} />
 										<span>{scope.label}<small>{scope.description}</small></span>

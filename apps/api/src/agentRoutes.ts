@@ -4,6 +4,38 @@ import express from "express";
 import type { Multer } from "multer";
 import { z } from "zod";
 import {
+	agentAnnouncementDisplay,
+	agentAnnouncements,
+	agentChangelogs,
+	agentComments,
+	agentDeleteAnnouncement,
+	agentDeleteChangelog,
+	agentDeleteComment,
+	agentDeleteDynamic,
+	agentDeleteFeedback,
+	agentDeletePage,
+	agentDeleteTaxonomy,
+	agentDeleteUser,
+	agentDynamics,
+	agentFeedback,
+	agentModerateComment,
+	agentPage,
+	agentPages,
+	agentPublishAnnouncement,
+	agentSaveAnnouncement,
+	agentSaveChangelog,
+	agentSaveDynamic,
+	agentSavePage,
+	agentSiteOverview,
+	agentUpdateCommentSettings,
+	agentUpdateFeatures,
+	agentUpdateFeedback,
+	agentUpdateSite,
+	agentUpdateTaxonomy,
+	agentUpdateUser,
+	agentUsers,
+} from "./agentContent.js";
+import {
 	AgentError,
 	assertDeviceStartAllowed,
 	approveDeviceRequest,
@@ -199,6 +231,129 @@ export function mountAgentRoutes(app: express.Express, options: { requireAdmin: 
 	router.post("/tags", requireAgent("posts:write"), asyncRoute(async (req, res) => {
 		const name = typeof req.body?.name === "string" ? req.body.name : "";
 		res.status(201).json(await ensureAgentTag(req.agentGrant!, { name }));
+	}));
+
+	router.put("/categories/:id", requireAgent("taxonomy:manage"), asyncRoute(async (req, res) => {
+		res.json(await agentUpdateTaxonomy(req.agentGrant!, "category", positiveId(req.params.id), req.body));
+	}));
+	router.delete("/categories/:id", requireAgent("taxonomy:manage"), asyncRoute(async (req, res) => {
+		res.json(await agentDeleteTaxonomy(req.agentGrant!, "category", positiveId(req.params.id)));
+	}));
+	router.put("/tags/:id", requireAgent("taxonomy:manage"), asyncRoute(async (req, res) => {
+		res.json(await agentUpdateTaxonomy(req.agentGrant!, "tag", positiveId(req.params.id), req.body));
+	}));
+	router.delete("/tags/:id", requireAgent("taxonomy:manage"), asyncRoute(async (req, res) => {
+		res.json(await agentDeleteTaxonomy(req.agentGrant!, "tag", positiveId(req.params.id)));
+	}));
+
+	router.get("/comments", requireAgent("comments:read"), asyncRoute(async (req, res) => {
+		res.json(await agentComments(req.agentGrant!, typeof req.query.status === "string" ? req.query.status : undefined));
+	}));
+	router.post("/comments/:id/status", requireAgent("comments:moderate"), asyncRoute(async (req, res) => {
+		res.json(await agentModerateComment(req.agentGrant!, positiveId(req.params.id), req.body?.status));
+	}));
+	router.delete("/comments/:id", requireAgent("comments:moderate"), asyncRoute(async (req, res) => {
+		res.json(await agentDeleteComment(req.agentGrant!, positiveId(req.params.id)));
+	}));
+
+	router.get("/dynamics", requireAgent("content:read"), asyncRoute(async (req, res) => {
+		res.json(await agentDynamics(req.agentGrant!));
+	}));
+	router.post("/dynamics", requireAgent("content:publish"), asyncRoute(async (req, res) => {
+		const saved = await agentSaveDynamic(req.agentGrant!, undefined, req.body);
+		res.status(201).json(saved);
+	}));
+	router.put("/dynamics/:id", requireAgent("content:publish"), asyncRoute(async (req, res) => {
+		res.json(await agentSaveDynamic(req.agentGrant!, positiveId(req.params.id), req.body));
+	}));
+	router.delete("/dynamics/:id", requireAgent("content:delete"), asyncRoute(async (req, res) => {
+		res.json(await agentDeleteDynamic(req.agentGrant!, positiveId(req.params.id)));
+	}));
+
+	router.get("/pages", requireAgent("content:read"), asyncRoute(async (req, res) => {
+		res.json(await agentPages(req.agentGrant!));
+	}));
+	router.get("/pages/:page", requireAgent("content:read"), asyncRoute(async (req, res) => {
+		res.json(await agentPage(req.agentGrant!, String(req.params.page ?? "")));
+	}));
+	router.put("/pages", requireAgent("content:publish"), asyncRoute(async (req, res) => {
+		res.json(await agentSavePage(req.agentGrant!, req.body));
+	}));
+	router.delete("/pages/:page", requireAgent("content:delete"), asyncRoute(async (req, res) => {
+		res.json(await agentDeletePage(req.agentGrant!, String(req.params.page ?? "")));
+	}));
+
+	router.get("/changelogs", requireAgent("content:read"), asyncRoute(async (req, res) => {
+		res.json(await agentChangelogs(req.agentGrant!));
+	}));
+	router.post("/changelogs", requireAgent("content:write"), asyncRoute(async (req, res) => {
+		const saved = await agentSaveChangelog(req.agentGrant!, undefined, req.body);
+		res.status(201).json(saved);
+	}));
+	router.put("/changelogs/:id", requireAgent("content:write"), asyncRoute(async (req, res) => {
+		res.json(await agentSaveChangelog(req.agentGrant!, positiveId(req.params.id), req.body));
+	}));
+	router.delete("/changelogs/:id", requireAgent("content:delete"), asyncRoute(async (req, res) => {
+		res.json(await agentDeleteChangelog(req.agentGrant!, positiveId(req.params.id)));
+	}));
+
+	router.get("/announcements", requireAgent("content:read"), asyncRoute(async (req, res) => {
+		const page = Number(req.query.page ?? 1);
+		res.json(await agentAnnouncements(req.agentGrant!, Number.isInteger(page) && page > 0 ? page : 1, typeof req.query.q === "string" ? req.query.q : undefined));
+	}));
+	router.post("/announcements", requireAgent("content:write"), asyncRoute(async (req, res) => {
+		const saved = await agentSaveAnnouncement(req.agentGrant!, undefined, req.body);
+		res.status(201).json(saved);
+	}));
+	router.put("/announcements/:id", requireAgent("content:write"), asyncRoute(async (req, res) => {
+		res.json(await agentSaveAnnouncement(req.agentGrant!, positiveId(req.params.id), req.body));
+	}));
+	router.patch("/announcements/:id/display", requireAgent("content:publish"), asyncRoute(async (req, res) => {
+		res.json(await agentAnnouncementDisplay(req.agentGrant!, positiveId(req.params.id), req.body));
+	}));
+	router.post("/announcements/:id/publish", requireAgent("content:publish"), asyncRoute(async (req, res) => {
+		res.json(await agentPublishAnnouncement(req.agentGrant!, positiveId(req.params.id)));
+	}));
+	router.delete("/announcements/:id", requireAgent("content:delete"), asyncRoute(async (req, res) => {
+		res.json(await agentDeleteAnnouncement(req.agentGrant!, positiveId(req.params.id)));
+	}));
+
+	router.get("/feedback", requireAgent("content:read"), asyncRoute(async (req, res) => {
+		const page = Number(req.query.page ?? 1);
+		res.json(await agentFeedback(req.agentGrant!, {
+			page: Number.isInteger(page) && page > 0 ? page : 1,
+			status: typeof req.query.status === "string" ? req.query.status : undefined,
+			keyword: typeof req.query.q === "string" ? req.query.q : undefined,
+		}));
+	}));
+	router.post("/feedback/:id/status", requireAgent("content:write"), asyncRoute(async (req, res) => {
+		res.json(await agentUpdateFeedback(req.agentGrant!, positiveId(req.params.id), req.body?.status));
+	}));
+	router.delete("/feedback/:id", requireAgent("content:delete"), asyncRoute(async (req, res) => {
+		res.json(await agentDeleteFeedback(req.agentGrant!, positiveId(req.params.id)));
+	}));
+
+	router.get("/site", requireAgent("site:read"), asyncRoute(async (req, res) => {
+		res.json(await agentSiteOverview(req.agentGrant!));
+	}));
+	router.patch("/site", requireAgent("site:write"), asyncRoute(async (req, res) => {
+		res.json(await agentUpdateSite(req.agentGrant!, req.body));
+	}));
+	router.patch("/features", requireAgent("site:write"), asyncRoute(async (req, res) => {
+		res.json(await agentUpdateFeatures(req.agentGrant!, req.body));
+	}));
+	router.patch("/comment-settings", requireAgent("site:write"), asyncRoute(async (req, res) => {
+		res.json(await agentUpdateCommentSettings(req.agentGrant!, req.body));
+	}));
+
+	router.get("/users", requireAgent("users:read"), asyncRoute(async (req, res) => {
+		res.json(await agentUsers(req.agentGrant!));
+	}));
+	router.patch("/users/:id", requireAgent("users:manage"), asyncRoute(async (req, res) => {
+		res.json(await agentUpdateUser(req.agentGrant!, positiveId(req.params.id), req.body));
+	}));
+	router.delete("/users/:id", requireAgent("users:manage"), asyncRoute(async (req, res) => {
+		res.json(await agentDeleteUser(req.agentGrant!, positiveId(req.params.id)));
 	}));
 
 	router.post("/images", requireAgent("media:write"), (req, res, next) => {

@@ -4,11 +4,22 @@ import { Bot, RefreshCw } from "lucide-react";
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN ?? "").trim().replace(/\/+$/u, "");
 
 const SCOPE_LABELS: Record<string, string> = {
-	"posts:read": "读取",
+	"posts:read": "读取文章",
 	"posts:write": "草稿",
-	"posts:publish": "发布",
-	"posts:delete": "删除",
+	"posts:publish": "发布文章",
+	"posts:delete": "删除文章",
 	"media:write": "图片",
+	"taxonomy:manage": "分类标签",
+	"comments:read": "读取评论",
+	"comments:moderate": "审核评论",
+	"content:read": "读取内容",
+	"content:write": "编辑内容",
+	"content:publish": "发布内容",
+	"content:delete": "删除内容",
+	"site:read": "读取站点",
+	"site:write": "修改站点",
+	"users:read": "读取用户",
+	"users:manage": "管理用户",
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -23,6 +34,26 @@ const ACTION_LABELS: Record<string, string> = {
 	upload: "上传图片",
 	category: "创建分类",
 	tag: "创建标签",
+	"category-delete": "删除分类",
+	"tag-delete": "删除标签",
+	comment: "审核评论",
+	"comment-delete": "删除评论",
+	dynamic: "编辑动态",
+	"dynamic-delete": "删除动态",
+	page: "编辑页面",
+	"page-delete": "删除页面",
+	changelog: "编辑更新日志",
+	"changelog-delete": "删除更新日志",
+	announcement: "编辑公告",
+	"announcement-publish": "发布公告",
+	"announcement-delete": "删除公告",
+	feedback: "处理反馈",
+	"feedback-delete": "删除反馈",
+	site: "修改站点",
+	features: "修改功能开关",
+	"comments-settings": "修改评论设置",
+	user: "修改用户",
+	"user-delete": "删除用户",
 };
 
 type Grant = {

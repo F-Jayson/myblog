@@ -5,11 +5,23 @@ const SCOPE_LABELS: Record<string, string> = {
 	"posts:read": "读取文章",
 	"posts:write": "写入草稿",
 	"posts:publish": "发布文章",
-	"posts:delete": "删除同步文章",
+	"posts:delete": "删除文章",
 	"media:write": "上传图片",
+	"taxonomy:manage": "管理分类标签",
+	"comments:read": "读取评论",
+	"comments:moderate": "审核评论",
+	"content:read": "读取站点内容",
+	"content:write": "编辑未公开内容",
+	"content:publish": "发布站点内容",
+	"content:delete": "删除站点内容",
+	"site:read": "读取站点设置",
+	"site:write": "修改站点设置",
+	"users:read": "读取用户",
+	"users:manage": "管理用户",
 };
 
-export const DEFAULT_SCOPES = ["posts:read", "posts:write", "media:write"];
+export const DEFAULT_SCOPES = ["posts:read", "posts:write", "media:write", "content:read", "site:read"];
+export const AGENT_SCOPE_IDS = Object.keys(SCOPE_LABELS);
 
 type ErrorBody = { error?: string; message?: string; interval?: number };
 

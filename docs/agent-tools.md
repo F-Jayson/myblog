@@ -34,17 +34,32 @@ apps/web  /admin/agents    查看和撤销授权
 
 ## 权限
 
-| 权限 | 能做的事 |
-| --- | --- |
-| `posts:read` | 读取文章、分类和标签 |
-| `posts:write` | 创建和更新文章、分类、标签；把同步过的文章转回草稿 |
-| `posts:publish` | 发布同步过的文章，以及修改已经发布的同步文章 |
-| `posts:delete` | 删除同步过的文章 |
-| `media:write` | 上传 jpeg、png、gif、webp、avif，单张不超过 8MB |
+授权页会列出全部权限。智能体默认申请的权限会预先勾选。标为敏感的权限即使被申请，也保持未勾选，管理员可以单独允许，也可以额外勾选这次没有申请的权限。勾选发布或管理类权限时，会自动带上完成该操作所需的读取和写入权限。
 
-默认申请读取、写入草稿和上传图片。发布和删除必须在授权页里被勾选。勾选发布时会同时带上写入和读取。
+| 权限 | 敏感 | 能做的事 |
+| --- | --- | --- |
+| `posts:read` | 否 | 读取文章、分类和标签 |
+| `posts:write` | 否 | 创建和更新文章、分类、标签；把智能体同步的文章转回草稿 |
+| `posts:publish` | 是 | 发布、撤回或修改任何文章 |
+| `posts:delete` | 是 | 删除任何文章 |
+| `media:write` | 否 | 上传 jpeg、png、gif、webp、avif，单张不超过 8MB |
+| `taxonomy:manage` | 是 | 修改或删除分类和标签 |
+| `comments:read` | 否 | 读取评论，不返回原始 IP 和浏览器标识 |
+| `comments:moderate` | 是 | 通过、标记垃圾或删除评论 |
+| `content:read` | 否 | 读取动态、页面、更新日志、公告和反馈 |
+| `content:write` | 否 | 保存更新日志草稿、公告草稿，处理反馈状态 |
+| `content:publish` | 是 | 发布公告和更新日志，编辑会立即公开的动态和页面 |
+| `content:delete` | 是 | 删除动态、页面自定义内容、更新日志、公告和反馈 |
+| `site:read` | 否 | 查看站点概况、功能开关和作者资料 |
+| `site:write` | 是 | 修改站点外观、作者资料、功能开关和评论开关 |
+| `users:read` | 否 | 查看前台用户 |
+| `users:manage` | 是 | 修改昵称、停用或删除前台用户 |
 
-发布、转草稿和删除只作用于 `agent_documents` 里属于该管理员的文章。后台手工写的文章不会被这些操作删掉或改状态。读取接口可以查看全部文章，方便同步前核对标题。
+默认申请读取文章、写入草稿、上传图片、读取站点内容和读取站点设置。已经连上的授权不会自动获得新权限，需要断开后重新连接，再在授权页确认。
+
+新文章在没有传入 `status` 时保存为草稿。更新时如果不传 `status`，保持文章当前的发布状态。不传摘要时，会根据正文重新生成摘要。已经发布的文章被修改时，仍然需要发布权限。
+
+以下操作故意不向智能体开放：后台管理员账号的创建和改密、前台用户密码重置、邮件密码和其他密钥、清空审计日志、网盘分片上传，以及用户剪贴板和私有文件的内容。
 
 新文章在没有传入 `status` 时保存为草稿。更新时如果不传 `status`，保持文章当前的发布状态。不传摘要时，会根据正文重新生成摘要。
 
@@ -81,8 +96,32 @@ POST /api/agent/posts/:id/publish
 POST /api/agent/posts/:id/unpublish
 DELETE /api/agent/posts/:id
 GET/POST /api/agent/categories
+PUT/DELETE /api/agent/categories/:id
 GET/POST /api/agent/tags
+PUT/DELETE /api/agent/tags/:id
 POST /api/agent/images
+GET /api/agent/comments
+POST /api/agent/comments/:id/status
+DELETE /api/agent/comments/:id
+GET/POST /api/agent/dynamics
+PUT/DELETE /api/agent/dynamics/:id
+GET /api/agent/pages
+GET/DELETE /api/agent/pages/:page
+PUT /api/agent/pages
+GET/POST /api/agent/changelogs
+PUT/DELETE /api/agent/changelogs/:id
+GET/POST /api/agent/announcements
+PUT/DELETE /api/agent/announcements/:id
+PATCH /api/agent/announcements/:id/display
+POST /api/agent/announcements/:id/publish
+GET /api/agent/feedback
+POST /api/agent/feedback/:id/status
+DELETE /api/agent/feedback/:id
+GET/PATCH /api/agent/site
+PATCH /api/agent/features
+PATCH /api/agent/comment-settings
+GET /api/agent/users
+PATCH/DELETE /api/agent/users/:id
 GET  /api/admin/agent-grants
 DELETE /api/admin/agent-grants/:id
 GET  /api/admin/agent-audit
@@ -117,11 +156,21 @@ GET  /api/admin/agent-audit
 | `blog_list_posts` / `blog_get_post` | 搜索和读取文章 |
 | `blog_upsert_post` | 写入一篇文章，可传正文或本机 `path` |
 | `blog_sync_markdown` | 同步多个文件或一个目录，跳过 `node_modules`、`dist`、`.git` |
-| `blog_publish_post` / `blog_unpublish_post` | 更改同步文章的发布状态 |
-| `blog_delete_post` | 删除同步文章 |
+| `blog_publish_post` / `blog_unpublish_post` | 更改文章发布状态。撤回后台文章需要发布权限 |
+| `blog_delete_post` | 删除文章，包含后台手工创建的文章 |
 | `blog_upload_image` | 上传本机图片或 base64 |
 | `blog_list_categories` / `blog_ensure_category` | 查看或补齐分类 |
+| `blog_update_category` / `blog_delete_category` | 修改或删除分类 |
 | `blog_list_tags` / `blog_ensure_tag` | 查看或补齐标签 |
+| `blog_update_tag` / `blog_delete_tag` | 修改或删除标签 |
+| `blog_list_comments` / `blog_moderate_comment` / `blog_delete_comment` | 读取、审核和删除评论 |
+| `blog_list_dynamics` / `blog_save_dynamic` / `blog_delete_dynamic` | 读取、发布和删除动态 |
+| `blog_list_pages` / `blog_get_page` / `blog_save_page` / `blog_delete_page` | 管理关于、传送和问题总结页面 |
+| `blog_list_changelogs` / `blog_save_changelog` / `blog_delete_changelog` | 管理更新日志 |
+| `blog_list_announcements` / `blog_save_announcement` / `blog_publish_announcement` / `blog_delete_announcement` | 管理公告草稿和发布 |
+| `blog_list_feedback` / `blog_update_feedback` / `blog_delete_feedback` | 处理访客反馈 |
+| `blog_site_overview` / `blog_update_site` / `blog_update_features` / `blog_update_comment_settings` | 查看或修改站点设置 |
+| `blog_list_users` / `blog_update_user` / `blog_delete_user` | 查看或管理前台用户 |
 
 `blog_connect` 会在工具内部最多等待 8 分钟。超时后授权请求仍保留在本机，再次调用会打开同一个页面并继续等待。
 
@@ -134,7 +183,7 @@ pnpm install
 pnpm --filter @jayson-blog/mcp build
 ```
 
-开发环境已经在 `.cursor/mcp.json` 里指向本机 API：
+开发环境可以在 `.cursor/mcp.json` 里指向本机或已部署的 API：
 
 ```json
 {

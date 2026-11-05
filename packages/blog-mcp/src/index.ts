@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
-import { blogJson, connectBlog, currentProfile, disconnectBlog, scopeText } from "./blogClient.js";
+import { AGENT_SCOPE_IDS, blogJson, connectBlog, currentProfile, disconnectBlog, scopeText } from "./blogClient.js";
+import { contentTools } from "./contentTools.js";
 import { collectMarkdown, readMarkdown } from "./files.js";
 
 const IMAGE_TYPES: Record<string, string> = {
@@ -61,7 +62,7 @@ function describePost(result: PostResult) {
 	return `${action}《${result.post.title}》\n状态：${status}\n地址：${result.post.path}\n编号：${result.post.id}`;
 }
 
-const scopeSchema = { type: "array", items: { type: "string", enum: ["posts:read", "posts:write", "posts:publish", "posts:delete", "media:write"] }, description: "要申请的权限。默认是读取、写入草稿和上传图片" };
+const scopeSchema = { type: "array", items: { type: "string", enum: AGENT_SCOPE_IDS }, description: "要申请的权限。默认是读取文章、写入草稿、上传图片、读取站点内容和读取站点设置。发布、删除、修改站点和用户管理即使写在这里，也要管理员在授权页额外勾选" };
 
 const tools: Tool[] = [
 	{
@@ -76,7 +77,7 @@ const tools: Tool[] = [
 	},
 	{
 		name: "blog_connect",
-		description: "打开浏览器授权页。管理员登录并允许后，智能体才能写入博客。密码不会进入聊天或本工具。",
+		description: "打开浏览器授权页。管理员登录并允许后，智能体才能管理博客。密码不会进入聊天或本工具。发布、删除、修改站点和管理用户默认不勾选，需要管理员在授权页额外允许。",
 		inputSchema: objectSchema({ force: { type: "boolean", description: "为 true 时撤销当前授权并重新登录" }, scopes: scopeSchema }),
 		call: async (args) => text((await connectBlog({ force: booleanArg(args, "force"), scopes: stringList(args, "scopes") })).message),
 	},
@@ -203,7 +204,7 @@ const tools: Tool[] = [
 	},
 	{
 		name: "blog_publish_post",
-		description: "发布一篇已经由智能体同步过的文章。需要授权里包含发布权限。",
+		description: "发布一篇文章。需要授权里额外包含发布文章权限，对智能体同步的文章和后台文章都有效。",
 		inputSchema: objectSchema({ id: { type: "integer", minimum: 1 } }, ["id"]),
 		call: async (args) => {
 			const id = integerArg(args, "id");
@@ -213,7 +214,7 @@ const tools: Tool[] = [
 	},
 	{
 		name: "blog_unpublish_post",
-		description: "把一篇智能体同步过的文章转回草稿。",
+		description: "把文章转回草稿。智能体同步过的文章使用写入权限即可；撤回后台文章需要发布文章权限。",
 		inputSchema: objectSchema({ id: { type: "integer", minimum: 1 } }, ["id"]),
 		call: async (args) => {
 			const id = integerArg(args, "id");
@@ -223,13 +224,13 @@ const tools: Tool[] = [
 	},
 	{
 		name: "blog_delete_post",
-		description: "删除一篇由智能体同步过的文章。需要授权里包含删除权限，不能删除后台手工创建的文章。",
+		description: "删除一篇文章。需要授权里额外包含删除文章权限，后台手工创建的文章也可以删除。",
 		inputSchema: objectSchema({ id: { type: "integer", minimum: 1 } }, ["id"]),
 		call: async (args) => {
 			const id = integerArg(args, "id");
 			if (!id) return text("请提供文章 id。", true);
-			const result = await blogJson<{ externalKey: string }>(`/api/agent/posts/${id}`, { method: "DELETE" });
-			return text(`已删除文章 ${id}（来源 ${result.externalKey}）`);
+			const result = await blogJson<{ externalKey: string | null }>(`/api/agent/posts/${id}`, { method: "DELETE" });
+			return text(`已删除文章 ${id}${result.externalKey ? `（来源 ${result.externalKey}）` : ""}`);
 		},
 	},
 	{
@@ -295,7 +296,8 @@ const tools: Tool[] = [
 	},
 ];
 
-const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
+const allTools: Tool[] = [...tools, ...contentTools];
+const toolMap = new Map(allTools.map((tool) => [tool.name, tool]));
 
 function send(message: unknown) {
 	const json = JSON.stringify(message);
@@ -319,7 +321,7 @@ async function handleMessage(raw: string) {
 		}
 		if (message.method === "ping") { respond({}); return; }
 		if (message.method === "tools/list") {
-			respond({ tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
+			respond({ tools: allTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
 			return;
 		}
 		if (message.method === "tools/call") {

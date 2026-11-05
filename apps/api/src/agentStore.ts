@@ -15,17 +15,45 @@ import {
 	updatePostReadingStats,
 } from "./repository.js";
 
-export const AGENT_SCOPES = ["posts:read", "posts:write", "posts:publish", "posts:delete", "media:write"] as const;
+export const AGENT_SCOPES = [
+	"posts:read",
+	"posts:write",
+	"posts:publish",
+	"posts:delete",
+	"media:write",
+	"taxonomy:manage",
+	"comments:read",
+	"comments:moderate",
+	"content:read",
+	"content:write",
+	"content:publish",
+	"content:delete",
+	"site:read",
+	"site:write",
+	"users:read",
+	"users:manage",
+] as const;
 export type AgentScope = (typeof AGENT_SCOPES)[number];
 
-export const DEFAULT_AGENT_SCOPES: AgentScope[] = ["posts:read", "posts:write", "media:write"];
+export const DEFAULT_AGENT_SCOPES: AgentScope[] = ["posts:read", "posts:write", "media:write", "content:read", "site:read"];
 
-export const AGENT_SCOPE_CATALOG: Array<{ id: AgentScope; label: string; description: string }> = [
-	{ id: "posts:read", label: "读取文章", description: "查看文章标题、正文、分类和发布状态" },
-	{ id: "posts:write", label: "写入草稿", description: "创建或更新文章、分类和标签。未单独授权发布时，新文章保存为草稿" },
-	{ id: "posts:publish", label: "发布文章", description: "把智能体同步的文章发布到前台，并修改已经发布的同步文章" },
-	{ id: "posts:delete", label: "删除同步文章", description: "删除由智能体同步到博客的文章" },
-	{ id: "media:write", label: "上传图片", description: "上传文章配图并取得可写入 Markdown 的地址" },
+export const AGENT_SCOPE_CATALOG: Array<{ id: AgentScope; label: string; description: string; sensitive: boolean }> = [
+	{ id: "posts:read", label: "读取文章", description: "查看文章标题、正文、分类和发布状态", sensitive: false },
+	{ id: "posts:write", label: "写入草稿", description: "创建或更新文章、分类和标签。未单独授权发布时，新文章保存为草稿", sensitive: false },
+	{ id: "posts:publish", label: "发布文章", description: "发布、撤回或修改任何文章，包括不是智能体同步的文章", sensitive: true },
+	{ id: "posts:delete", label: "删除文章", description: "删除任何文章，包括后台手工创建的文章", sensitive: true },
+	{ id: "media:write", label: "上传图片", description: "上传文章配图并取得可写入 Markdown 的地址", sensitive: false },
+	{ id: "taxonomy:manage", label: "管理分类标签", description: "修改或删除分类和标签。新建仍然属于写入草稿", sensitive: true },
+	{ id: "comments:read", label: "读取评论", description: "查看评论内容和状态，不包含原始 IP 和浏览器标识", sensitive: false },
+	{ id: "comments:moderate", label: "审核评论", description: "通过、标记垃圾或删除评论", sensitive: true },
+	{ id: "content:read", label: "读取站点内容", description: "查看动态、页面、更新日志、公告和反馈", sensitive: false },
+	{ id: "content:write", label: "编辑未公开内容", description: "保存更新日志草稿、公告草稿，以及处理反馈状态", sensitive: false },
+	{ id: "content:publish", label: "发布站点内容", description: "发布公告和更新日志，并编辑会立即公开的动态和页面", sensitive: true },
+	{ id: "content:delete", label: "删除站点内容", description: "删除动态、页面自定义内容、更新日志、公告和反馈", sensitive: true },
+	{ id: "site:read", label: "读取站点设置", description: "查看站点概况、功能开关和作者资料，不返回密码或密钥", sensitive: false },
+	{ id: "site:write", label: "修改站点设置", description: "修改站点外观、作者资料、功能开关和评论开关", sensitive: true },
+	{ id: "users:read", label: "读取用户", description: "查看前台用户的昵称、邮箱和状态", sensitive: false },
+	{ id: "users:manage", label: "管理用户", description: "修改昵称、停用或删除前台用户。不能重置密码，也不能管理后台管理员", sensitive: true },
 ];
 
 const DEVICE_MINUTES = 10;
@@ -107,8 +135,13 @@ function parseScopeList(value: unknown): AgentScope[] {
 
 export function expandScopes(scopes: AgentScope[]) {
 	const selected = new Set<AgentScope>(scopes);
-	if (selected.has("posts:write") || selected.has("posts:publish") || selected.has("posts:delete") || selected.has("media:write")) selected.add("posts:read");
+	if (selected.has("posts:write") || selected.has("posts:publish") || selected.has("posts:delete") || selected.has("media:write") || selected.has("taxonomy:manage")) selected.add("posts:read");
 	if (selected.has("posts:publish")) selected.add("posts:write");
+	if (selected.has("comments:moderate")) selected.add("comments:read");
+	if (selected.has("content:write") || selected.has("content:publish") || selected.has("content:delete")) selected.add("content:read");
+	if (selected.has("content:publish")) selected.add("content:write");
+	if (selected.has("site:write")) selected.add("site:read");
+	if (selected.has("users:manage")) selected.add("users:read");
 	return AGENT_SCOPES.filter((scope) => selected.has(scope));
 }
 
@@ -150,7 +183,7 @@ async function expireDeviceRequests() {
 }
 
 function scopeViews(scopes: AgentScope[]) {
-	return AGENT_SCOPE_CATALOG.filter((item) => scopes.includes(item.id));
+	return AGENT_SCOPE_CATALOG.map((item) => ({ ...item, requested: scopes.includes(item.id) }));
 }
 
 async function siteTitle() {
@@ -228,9 +261,7 @@ export async function approveDeviceRequest(userCode: string, adminUserId: number
 	if (!row) throw new AgentError(404, "not_found", "授权请求已过期或不存在，请回到智能体重新发起");
 	const allowed = normalizeScopes(String(row.requestedScopes ?? ""), []);
 	const chosen = requested === undefined ? allowed : expandScopes(parseScopeList(requested));
-	if (!chosen.length || chosen.some((scope) => !allowed.includes(scope))) {
-		throw new AgentError(400, "invalid_scope", "只能同意这次申请里列出的权限");
-	}
+	if (!chosen.length) throw new AgentError(400, "invalid_scope", "请至少选择一项权限");
 	const token = `ag_${randomBytes(32).toString("base64url")}`;
 	const clientName = String(row.clientName);
 	const [grant] = await pool.execute<ResultSetHeader>(
@@ -400,7 +431,15 @@ function requireScope(grant: AgentGrant, scope: AgentScope, message: string) {
 	if (!grant.scopes.includes(scope)) throw new AgentError(403, "insufficient_scope", message);
 }
 
-function taxonomySlug(value: string) {
+export function assertAgentScope(grant: AgentGrant, scope: AgentScope, message: string) {
+	requireScope(grant, scope, message);
+}
+
+export async function recordAgentAudit(grant: AgentGrant, action: string, target: string, detail: string) {
+	await recordAudit({ grantId: grant.id, adminUserId: grant.adminUserId, action, target, detail });
+}
+
+export function taxonomySlug(value: string) {
 	const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 88);
 	if (normalized) return normalized;
 	const bytes = Buffer.from(value.trim(), "utf8").toString("hex").slice(0, 88);
@@ -687,16 +726,16 @@ export async function lookupAgentPost(grant: AgentGrant, query: { id?: number; s
 }
 
 export async function setAgentPostStatus(grant: AgentGrant, postId: number, status: "draft" | "published") {
-	if (status === "published") requireScope(grant, "posts:publish", "当前授权不能发布文章");
-	else requireScope(grant, "posts:write", "当前授权不能把文章转为草稿");
 	const externalKey = await findDocumentByPost(grant.adminUserId, postId);
-	if (!externalKey) throw new AgentError(404, "not_linked", "只能更改由当前管理员的智能体同步过的文章");
+	if (status === "published") requireScope(grant, "posts:publish", "当前授权不能发布文章");
+	else if (externalKey) requireScope(grant, "posts:write", "当前授权不能把文章转为草稿");
+	else requireScope(grant, "posts:publish", "当前授权不能更改这篇后台文章的发布状态");
 	const current = await getAdminPost(postId);
 	if (!current) throw new AgentError(404, "not_found", "文章不存在");
 	if (current.status !== status) {
 		if (status === "published") await pool.execute("UPDATE posts SET status = 'published', published_at = COALESCE(published_at, NOW()) WHERE id = ?", [postId]);
 		else await pool.execute("UPDATE posts SET status = 'draft' WHERE id = ?", [postId]);
-		await recordAudit({ grantId: grant.id, adminUserId: grant.adminUserId, action: status === "published" ? "publish" : "unpublish", target: externalKey, detail: current.title });
+		await recordAudit({ grantId: grant.id, adminUserId: grant.adminUserId, action: status === "published" ? "publish" : "unpublish", target: externalKey || `post:${postId}`, detail: current.title });
 	}
 	const saved = await getAdminPost(postId);
 	if (!saved) throw new AgentError(404, "not_found", "文章不存在");
@@ -706,11 +745,10 @@ export async function setAgentPostStatus(grant: AgentGrant, postId: number, stat
 export async function deleteAgentPost(grant: AgentGrant, postId: number) {
 	requireScope(grant, "posts:delete", "当前授权不能删除文章");
 	const externalKey = await findDocumentByPost(grant.adminUserId, postId);
-	if (!externalKey) throw new AgentError(404, "not_linked", "只能删除由当前管理员的智能体同步过的文章");
 	const current = await getAdminPost(postId);
 	const removed = await deletePost(postId);
 	if (!removed) throw new AgentError(404, "not_found", "文章不存在");
-	await recordAudit({ grantId: grant.id, adminUserId: grant.adminUserId, action: "delete", target: externalKey, detail: current?.title ?? "" });
+	await recordAudit({ grantId: grant.id, adminUserId: grant.adminUserId, action: "delete", target: externalKey || `post:${postId}`, detail: current?.title ?? "" });
 	return { deleted: true, id: postId, externalKey };
 }
 

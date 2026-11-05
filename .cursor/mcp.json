@@ -4,7 +4,7 @@
       "command": "node",
       "args": ["./packages/blog-mcp/dist/index.js"],
       "env": {
-        "BLOG_ORIGIN": "http://127.0.0.1:5180"
+        "BLOG_ORIGIN": "https://blog.fjayson.com"
       }
     }
   }
