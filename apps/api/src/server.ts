@@ -34,6 +34,7 @@ import { pool } from "./db.js";
 import { getDatabaseStatus, pingDatabase } from "./db.js";
 import { getProcessSnapshot, getRequestMetrics, recordRequest } from "./telemetry.js";
 import { CompilerError, executeCompiler, formatCompilerCode, listCompilerLanguages } from "./compiler.js";
+import { knowledgeRoutes, UserDeletionBlockedError, recordUserDailyLogin, recordWhitelistActivity } from "./knowledge/index.js";
 import { gameRouter } from "./games.js";
 import { locateIp, warmIpLocation } from "./ipLocation.js";
 import {
@@ -230,6 +231,8 @@ function auditExcludedRequest(method: string, path: string) {
 	if (path.startsWith("/api/compiler/") || path.startsWith("/api/user/compiler/")) return true;
 	// Agent bodies contain article markdown and one-time device secrets.
 	if (path.startsWith("/api/agent/")) return true;
+	// Knowledge base bodies contain private notes, search terms, and tokens.
+	if (path.startsWith("/api/knowledge/") || path.startsWith("/api/kb-agent/")) return true;
 	// Reading the audit stream must not add another row on every refresh. Keep
 	// mutating audit actions (such as clear) observable through the same hook.
 	if ((method === "GET" || method === "HEAD") && (path === "/api/admin/audit-logs" || path === "/api/admin/audit")) return true;
@@ -481,6 +484,7 @@ app.get("/api/admin/me", requireAdmin, (req: RequestWithAdmin, res) => {
 });
 
 app.use("/api/games", requireFeature("gamesEnabled", "小游戏当前已关闭"), loadCommentUser, gameRouter);
+app.use("/api/knowledge", loadCommentUser, knowledgeRoutes);
 
 app.get("/api/features", async (_req, res, next) => {
 	try {
@@ -582,6 +586,7 @@ app.post("/api/auth/login", async (req, res, next) => {
 		const input = commentLoginInput.parse(req.body);
 		const result = await authenticateCommentUser(input.account ?? input.username ?? input.email ?? "", input.password);
 		if (!result) { res.status(401).json({ error: "账号或密码错误" }); return; }
+		void recordUserDailyLogin(result.user.id).catch(() => undefined);
 		res.json(result);
 	} catch (error) { next(error); }
 });
@@ -602,6 +607,7 @@ app.post("/api/user/auth/login", async (req, res, next) => {
 		const input = commentLoginInput.parse(req.body);
 		const result = await authenticateCommentUser(input.account ?? input.username ?? input.email ?? "", input.password);
 		if (!result) { res.status(401).json({ error: "账号或密码错误" }); return; }
+		void recordUserDailyLogin(result.user.id).catch(() => undefined);
 		res.json(result);
 	} catch (error) { next(error); }
 });
@@ -2220,7 +2226,18 @@ async function resetCommentUserRoute(req: Request, res: Response, next: NextFunc
 app.post("/api/admin/users/:id/reset-password", requireAdmin, resetCommentUserRoute);
 app.post("/api/admin/comment-users/:id/reset-password", requireAdmin, resetCommentUserRoute);
 async function deleteCommentUserRoute(req: Request, res: Response, next: NextFunction) {
-	try { const id = parseCommentUserId(String(req.params.id)); if (!id) { res.status(400).json({ error: "用户编号无效" }); return; } const ok = await deleteCommentUser(id); res.status(ok ? 204 : 404).end(); } catch (error) { next(error); }
+	try {
+		const id = parseCommentUserId(String(req.params.id));
+		if (!id) { res.status(400).json({ error: "用户编号无效" }); return; }
+		const ok = await deleteCommentUser(id);
+		res.status(ok ? 204 : 404).end();
+	} catch (error) {
+		if (error instanceof UserDeletionBlockedError) {
+			res.status(409).json({ error: error.code, message: error.message });
+			return;
+		}
+		next(error);
+	}
 }
 app.delete("/api/admin/users/:id", requireAdmin, deleteCommentUserRoute);
 app.delete("/api/admin/comment-users/:id", requireAdmin, deleteCommentUserRoute);

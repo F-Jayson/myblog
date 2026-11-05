@@ -3,6 +3,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import nodemailer from "nodemailer";
 import { renderVerificationCodeEmail, renderNotificationEmail } from "./mailTemplates.js";
 import { resolveAccessSecret } from "./accessPassword.js";
+import { UserDeletionBlockedError, userOwnsKnowledgeData } from "./knowledge/index.js";
 import { pool } from "./db.js";
 import { displayIpLocation, locateIp } from "./ipLocation.js";
 import type { AuthorActivityDay, AuthorLearningProgress, AuthorProfile, AuthorProfileDetails, AuthorSkill, Category, Changelog, ClipboardContentType, FeedbackEntry, FriendLink, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, Tag, UserClipboard, UserStorageItem } from "./types.js";
@@ -1196,6 +1197,9 @@ export async function updateCommentUser(id: number, input: { account?: string; n
 }
 
 export async function deleteCommentUser(id: number) {
+	if (await userOwnsKnowledgeData(id)) {
+		throw new UserDeletionBlockedError();
+	}
 	const [result] = await pool.execute<ResultSetHeader>("DELETE FROM comment_users WHERE id = ?", [id]);
 	return result.affectedRows > 0;
 }

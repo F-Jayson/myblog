@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { UserDeletionBlockedError } from "./knowledge/index.js";
 import { AgentError, type AgentGrant, assertAgentScope, normalizeSlug, recordAgentAudit, taxonomySlug } from "./agentStore.js";
 import {
 	createAnnouncementHistory,
@@ -463,7 +464,14 @@ export async function agentUpdateUser(grant: AgentGrant, id: number, body: unkno
 
 export async function agentDeleteUser(grant: AgentGrant, id: number) {
 	assertAgentScope(grant, "users:manage", "当前授权不能删除用户");
-	if (!await deleteCommentUser(id)) throw new AgentError(404, "not_found", "用户不存在");
+	try {
+		if (!await deleteCommentUser(id)) throw new AgentError(404, "not_found", "用户不存在");
+	} catch (error) {
+		if (error instanceof UserDeletionBlockedError) {
+			throw new AgentError(409, "user_owns_knowledge_data", error.message);
+		}
+		throw error;
+	}
 	await recordAgentAudit(grant, "user-delete", String(id), "");
 	return { deleted: true, id };
 }
