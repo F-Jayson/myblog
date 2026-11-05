@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { PoolConnection } from "mysql2/promise";
 import { evaluateAccess } from "./acl.js";
 import { KB_DEFAULTS } from "./constants.js";
@@ -28,10 +28,15 @@ import {
 	countLibraryDocuments,
 	countUserLibraries,
 	createAttachment,
+	createCommentRecord,
 	createDocumentRecord,
 	createLibrary,
 	createRevisionRecord,
+	createShareLinkRecord,
+	deleteCommentRecord,
+	findShareLinkByHash,
 	getAttachment,
+	getCommentRecord,
 	getDailyActivitiesForPast30Days,
 	getDocumentAncestors,
 	getDocumentDetail,
@@ -42,23 +47,37 @@ import {
 	getLibraryMemberRole,
 	getLibraryRecord,
 	getLibraryTreeNodes,
+	getPublicDocumentSnapshot,
 	getRevisionDetail,
+	getShareLinkById,
 	getUserRegistrationInfo,
 	incrementDailyServiceScore,
 	insertActivityEvent,
+	listCommentsRecord,
+	listDocumentAccessEntries,
 	listDocumentAttachments,
+	listDocumentShareLinks,
 	listLibrariesForUser,
+	listLibraryMembers,
 	listTrashedDocuments,
 	moveDocumentNode,
 	pool,
 	recordDailyLogin,
+	removeDocumentExplicitAccess,
+	removeLibraryMember,
+	resolveCommentRecord,
 	restoreDocumentTree,
+	revokeShareLinkRecord,
 	searchUserAccessibleDocuments,
+	setDocumentAccessMode,
+	setDocumentExplicitAccess,
+	setDocumentPublishedRevision,
 	softDeleteDocumentTree,
 	softDeleteLibrary,
 	updateDocumentCurrentRevision,
 	updateLibrary,
 	upsertKbEntitlement,
+	upsertLibraryMember,
 	userOwnsKnowledgeData,
 } from "./repository.js";
 import type {
@@ -67,11 +86,18 @@ import type {
 	ActivityType,
 	AttachmentSummary,
 	DocumentDetail,
+	KbAccessMode,
+	KbCommentItem,
+	KbDocumentAccessItem,
 	KbDocumentKind,
 	KbEligibilityResponse,
 	KbEntitlement,
+	KbMemberItem,
+	KbMemberRole,
+	KbShareLinkItem,
 	KbVisibility,
 	LibrarySummary,
+	PublicDocumentSnapshot,
 	RevisionSummary,
 	SearchResultItem,
 	TreeNode,
@@ -283,12 +309,12 @@ export async function checkDocumentAccess(
 	if (principal.userId) {
 		libraryMemberRole = await getLibraryMemberRole(doc.libraryId, principal.userId);
 		documentExplicitRoles = await getDocumentExplicitRoles(allNodeIds, principal.userId);
-		const actorEnt = await getKbEntitlement(principal.userId);
-		actorEntitlement = actorEnt?.status;
+		const actorEnt = await getUserEligibility(principal.userId);
+		actorEntitlement = actorEnt.status;
 	}
 
-	const ownerEnt = await getKbEntitlement(lib.ownerUserId);
-	ownerEntitlement = ownerEnt?.status;
+	const ownerEnt = await getUserEligibility(lib.ownerUserId);
+	ownerEntitlement = ownerEnt.status;
 
 	return evaluateAccess(principal, {
 		targetDocument: {
@@ -880,4 +906,366 @@ export async function listDocumentAttachmentsService(
 	}
 	return listDocumentAttachments(documentId);
 }
+
+/**
+ * =========================================================================
+ * P3: 成员管理、单篇ACL、快照发布、分享链接与多通道评论服务
+ * =========================================================================
+ */
+
+export async function listLibraryMembersService(
+	userId: number,
+	libraryId: number,
+): Promise<KbMemberItem[]> {
+	const lib = await getLibraryRecord(libraryId);
+	if (!lib || lib.deletedAt) throw new KbNotFoundError("知识库不存在");
+	const role = await getLibraryMemberRole(libraryId, userId);
+	if (lib.ownerUserId !== userId && !role) {
+		throw new KbAccessDeniedError("无权查看该知识库的成员列表");
+	}
+	return listLibraryMembers(libraryId);
+}
+
+export async function upsertLibraryMemberService(
+	userId: number,
+	libraryId: number,
+	targetUserId: number,
+	role: KbMemberRole,
+): Promise<void> {
+	const lib = await getLibraryRecord(libraryId);
+	if (!lib || lib.deletedAt) throw new KbNotFoundError("知识库不存在");
+	const isOwner = lib.ownerUserId === userId;
+	const myRole = await getLibraryMemberRole(libraryId, userId);
+
+	if (!isOwner && myRole !== "manager") {
+		throw new KbAccessDeniedError("仅所有者或管理员可添加/修改协作者");
+	}
+
+	if (targetUserId === lib.ownerUserId) {
+		throw new Error("知识库所有者角色不可更改");
+	}
+
+	if (!isOwner && role === "manager") {
+		throw new KbAccessDeniedError("仅知识库所有者可委任 manager 管理员");
+	}
+
+	await upsertLibraryMember(libraryId, targetUserId, role, userId);
+}
+
+export async function removeLibraryMemberService(
+	userId: number,
+	libraryId: number,
+	targetUserId: number,
+): Promise<void> {
+	const lib = await getLibraryRecord(libraryId);
+	if (!lib || lib.deletedAt) throw new KbNotFoundError("知识库不存在");
+	const isOwner = lib.ownerUserId === userId;
+	const myRole = await getLibraryMemberRole(libraryId, userId);
+
+	if (targetUserId === lib.ownerUserId) {
+		throw new Error("不可移除知识库所有者");
+	}
+
+	const isSelfLeaving = userId === targetUserId;
+	if (!isSelfLeaving && !isOwner && myRole !== "manager") {
+		throw new KbAccessDeniedError("没有移除协作者的权限");
+	}
+
+	await removeLibraryMember(libraryId, targetUserId);
+}
+
+export async function getDocumentAccessService(
+	userId: number,
+	documentId: number,
+): Promise<{
+	accessMode: KbAccessMode;
+	entries: KbDocumentAccessItem[];
+}> {
+	const access = await checkDocumentAccess({ userId }, documentId);
+	if (!access.canRead) {
+		throw new KbAccessDeniedError(access.denyReason || "没有查看权限设置的权限");
+	}
+	const doc = await getDocumentRecord(documentId);
+	if (!doc || doc.deletedAt) throw new KbNotFoundError("文档不存在");
+
+	const entries = await listDocumentAccessEntries(documentId);
+	return {
+		accessMode: doc.accessMode,
+		entries,
+	};
+}
+
+export async function updateDocumentAccessService(
+	userId: number,
+	documentId: number,
+	data: {
+		accessMode: KbAccessMode;
+		explicitRoles?: Array<{ userId: number; role: "editor" | "commenter" | "viewer" }>;
+	},
+): Promise<void> {
+	const access = await checkDocumentAccess({ userId }, documentId);
+	if (!access.canManage) {
+		throw new KbAccessDeniedError(access.denyReason || "仅库所有者或管理员可配置单篇受限名单");
+	}
+
+	await setDocumentAccessMode(documentId, data.accessMode);
+
+	if (data.explicitRoles !== undefined) {
+		const currentEntries = await listDocumentAccessEntries(documentId);
+		for (const current of currentEntries) {
+			await removeDocumentExplicitAccess(documentId, current.userId);
+		}
+		for (const entry of data.explicitRoles) {
+			await setDocumentExplicitAccess(documentId, entry.userId, entry.role);
+		}
+	}
+}
+
+export async function publishKnowledgeDocumentService(
+	userId: number,
+	documentId: number,
+	revisionId?: number,
+): Promise<{ publishedRevisionId: number }> {
+	const access = await checkDocumentAccess({ userId }, documentId);
+	if (!access.canPublish && !access.canManage) {
+		throw new KbAccessDeniedError(access.denyReason || "没有发布快照的权限");
+	}
+
+	const doc = await getDocumentDetail(documentId);
+	if (!doc || doc.deletedAt) throw new KbNotFoundError("文档不存在");
+
+	let targetRevisionId = revisionId;
+	if (!targetRevisionId) {
+		if (!doc.currentRevisionId) {
+			throw new Error("文档没有可发布的版本");
+		}
+		targetRevisionId = doc.currentRevisionId;
+	} else {
+		const rev = await getRevisionDetail(targetRevisionId);
+		if (!rev || rev.documentId !== documentId) {
+			throw new Error("指定的版本不属于该文档");
+		}
+	}
+
+	await setDocumentPublishedRevision(documentId, targetRevisionId);
+	return { publishedRevisionId: targetRevisionId };
+}
+
+export async function unpublishKnowledgeDocumentService(
+	userId: number,
+	documentId: number,
+): Promise<void> {
+	const access = await checkDocumentAccess({ userId }, documentId);
+	if (!access.canPublish && !access.canManage) {
+		throw new KbAccessDeniedError(access.denyReason || "没有撤回发布的权限");
+	}
+
+	await setDocumentPublishedRevision(documentId, null);
+}
+
+export async function getPublicDocumentSnapshotService(
+	documentId: number,
+): Promise<PublicDocumentSnapshot> {
+	const snapshot = await getPublicDocumentSnapshot(documentId);
+	if (!snapshot) {
+		throw new KbNotFoundError("公开快照不存在或已被撤回");
+	}
+	return snapshot;
+}
+
+export async function createShareLinkService(
+	userId: number,
+	documentId: number,
+	options: {
+		expiresInDays?: number;
+		includeDescendants?: boolean;
+	} = {},
+): Promise<{ id: number; token: string; url: string; expiresAt: string | null }> {
+	const access = await checkDocumentAccess({ userId }, documentId);
+	if (!access.canRead) {
+		throw new KbAccessDeniedError(access.denyReason || "没有访问该文档的权限");
+	}
+
+	const doc = await getDocumentRecord(documentId);
+	if (!doc || doc.deletedAt) throw new KbNotFoundError("文档不存在");
+
+	const token = randomBytes(32).toString("hex");
+	const tokenHash = createHash("sha256").update(token).digest("hex");
+
+	const days = options.expiresInDays && options.expiresInDays > 0 ? options.expiresInDays : KB_DEFAULTS.DEFAULT_SHARE_LINK_EXPIRY_DAYS;
+	const expiresDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+	const expiresAt = expiresDate.toISOString().slice(0, 19).replace("T", " ");
+
+	const linkId = await createShareLinkRecord({
+		libraryId: doc.libraryId,
+		targetDocumentId: documentId,
+		tokenHash,
+		expiresAt,
+		includeDescendants: Boolean(options.includeDescendants),
+	});
+
+	return {
+		id: linkId,
+		token,
+		url: `/ks/${token}`,
+		expiresAt,
+	};
+}
+
+export async function listDocumentShareLinksService(
+	userId: number,
+	documentId: number,
+): Promise<KbShareLinkItem[]> {
+	const access = await checkDocumentAccess({ userId }, documentId);
+	if (!access.canRead) {
+		throw new KbAccessDeniedError("无权查看该文档的分享链接");
+	}
+	return listDocumentShareLinks(documentId);
+}
+
+export async function revokeShareLinkService(
+	userId: number,
+	linkId: number,
+): Promise<void> {
+	const link = await getShareLinkById(linkId);
+	if (!link) throw new KbNotFoundError("分享链接不存在");
+	const lib = await getLibraryRecord(link.libraryId);
+	if (!lib) throw new KbNotFoundError("知识库不存在");
+
+	const isOwner = lib.ownerUserId === userId;
+	const memberRole = await getLibraryMemberRole(link.libraryId, userId);
+	if (!isOwner && memberRole !== "manager") {
+		throw new KbAccessDeniedError("仅所有者或管理员可撤回分享链接");
+	}
+
+	await revokeShareLinkRecord(linkId);
+}
+
+export async function getSharedDocumentSnapshotService(
+	token: string,
+): Promise<{
+	document: DocumentDetail;
+	library: LibrarySummary;
+	includeDescendants: boolean;
+}> {
+	const tokenHash = createHash("sha256").update(token).digest("hex");
+	const link = await findShareLinkByHash(tokenHash);
+	if (!link || link.revokedAt) {
+		throw new KbNotFoundError("分享链接无效或已被撤回");
+	}
+
+	if (link.expiresAt) {
+		const expTime = new Date(link.expiresAt).getTime();
+		if (Date.now() > expTime) {
+			throw new KbNotFoundError("分享链接已过期");
+		}
+	}
+
+	if (!link.targetDocumentId) {
+		throw new KbNotFoundError("分享链接未指向有效文档");
+	}
+
+	const doc = await getDocumentDetail(link.targetDocumentId);
+	if (!doc || doc.deletedAt) {
+		throw new KbNotFoundError("文档不存在或已被删除");
+	}
+
+	const lib = await getLibraryRecord(link.libraryId);
+	if (!lib || lib.deletedAt) {
+		throw new KbNotFoundError("知识库不存在");
+	}
+
+	return {
+		document: doc,
+		library: lib,
+		includeDescendants: link.includeDescendants,
+	};
+}
+
+export async function addCommentService(
+	userId: number,
+	documentId: number,
+	data: {
+		body: string;
+		channel: "internal" | "public";
+		parentId?: number | null;
+	},
+): Promise<number> {
+	const cleanBody = data.body.trim();
+	if (!cleanBody) throw new Error("评论内容不能为空");
+	if (cleanBody.length > 5000) throw new Error("评论内容不能超过 5000 字");
+
+	const doc = await getDocumentDetail(documentId);
+	if (!doc || doc.deletedAt) throw new KbNotFoundError("文档不存在");
+	const lib = await getLibraryRecord(doc.libraryId);
+	if (!lib || lib.deletedAt) throw new KbNotFoundError("知识库不存在");
+
+	const byteSize = Buffer.byteLength(cleanBody, "utf8");
+
+	if (data.channel === "internal") {
+		const access = await checkDocumentAccess({ userId }, documentId);
+		if (!access.canComment) {
+			throw new KbAccessDeniedError(access.denyReason || "没有在该文档添加内部评论的权限");
+		}
+	} else {
+		if (!doc.publishedRevisionId) {
+			throw new Error("未发布的文档不可添加公开评论");
+		}
+	}
+
+	const conn = await pool.getConnection();
+	try {
+		await acquireKnowledgeLocks(conn, { ownerUserId: lib.ownerUserId, libraryId: lib.id, documentId });
+		await assertOwnerQuotaAvailable(conn, lib.ownerUserId, byteSize);
+	} finally {
+		conn.release();
+	}
+
+	const currentRevId = data.channel === "internal" ? (doc.currentRevisionId ?? 0) : doc.publishedRevisionId!;
+
+	return createCommentRecord({
+		libraryId: doc.libraryId,
+		documentId,
+		revisionId: currentRevId,
+		parentId: data.parentId,
+		authorUserId: userId,
+		body: cleanBody,
+		byteSize,
+		channel: data.channel,
+		moderationStatus: "approved",
+	});
+}
+
+export async function listCommentsService(
+	userId: number | null,
+	documentId: number,
+	channel: "internal" | "public",
+): Promise<KbCommentItem[]> {
+	if (channel === "internal") {
+		if (!userId) throw new KbAccessDeniedError("请先登录查看内部评论");
+		const access = await checkDocumentAccess({ userId }, documentId);
+		if (!access.canRead) throw new KbAccessDeniedError("无权查看内部评论");
+		return listCommentsRecord(documentId, { channel: "internal" });
+	}
+
+	return listCommentsRecord(documentId, { channel: "public" });
+}
+
+export async function resolveCommentService(
+	userId: number,
+	commentId: number,
+): Promise<void> {
+	const comment = await getCommentRecord(commentId);
+	if (!comment) throw new KbNotFoundError("评论不存在");
+
+	const access = await checkDocumentAccess({ userId }, comment.documentId);
+	const isAuthor = comment.authorUserId === userId;
+
+	if (!access.canManage && !access.canEdit && !isAuthor) {
+		throw new KbAccessDeniedError("没有标记该评论为已解决的权限");
+	}
+
+	await resolveCommentRecord(commentId);
+}
+
 

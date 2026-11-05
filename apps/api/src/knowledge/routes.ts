@@ -5,24 +5,39 @@ import multer from "multer";
 import { z } from "zod";
 import { isFeatureKbEnabled, isFeatureKbWriteEnabled } from "./constants.js";
 import {
+	addCommentService,
 	createKnowledgeDocument,
+	createShareLinkService,
 	createUserLibrary,
 	getAuthorizedAttachment,
+	getDocumentAccessService,
 	getKnowledgeDocument,
 	getKnowledgeDocumentRevisions,
+	getPublicDocumentSnapshotService,
+	getSharedDocumentSnapshotService,
 	getUserEligibility,
 	getUserLibraryTree,
 	getUserQuotaUsageService,
+	listCommentsService,
 	listDocumentAttachmentsService,
+	listDocumentShareLinksService,
+	listLibraryMembersService,
 	listTrashedDocumentsService,
 	listUserLibraries,
 	moveKnowledgeDocument,
+	publishKnowledgeDocumentService,
 	registerAttachment,
+	removeLibraryMemberService,
+	resolveCommentService,
 	restoreDocumentRevision,
 	restoreKnowledgeDocument,
+	revokeShareLinkService,
 	saveKnowledgeDocument,
 	searchKnowledge,
 	trashKnowledgeDocument,
+	unpublishKnowledgeDocumentService,
+	updateDocumentAccessService,
+	upsertLibraryMemberService,
 } from "./service.js";
 import { getLibraryRecord, softDeleteLibrary, updateLibrary } from "./repository.js";
 import { saveUserSpaceFile } from "../storage.js";
@@ -532,3 +547,277 @@ knowledgeRoutes.get("/attachments/:id", async (req: Request, res: Response, next
 		next(error);
 	}
 });
+
+/**
+ * =========================================================================
+ * P3: 协作、单篇ACL、快照发布、分享链接与多通道评论路由
+ * =========================================================================
+ */
+
+/**
+ * 列出知识库所有成员
+ * GET /api/knowledge/libraries/:id/members
+ */
+knowledgeRoutes.get("/libraries/:id/members", async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const id = Number(req.params.id);
+		const members = await listLibraryMembersService(userId, id);
+		res.json({ members });
+	} catch (error) {
+		next(error);
+	}
+});
+
+const memberSchema = z.object({
+	userId: z.number().int().positive(),
+	role: z.enum(["manager", "editor", "commenter", "viewer"]),
+});
+
+/**
+ * 添加或更新知识库成员
+ * POST /api/knowledge/libraries/:id/members
+ */
+knowledgeRoutes.post("/libraries/:id/members", requireKnowledgeBaseWriteEnabled, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const id = Number(req.params.id);
+		const input = memberSchema.parse(req.body);
+		await upsertLibraryMemberService(userId, id, input.userId, input.role);
+		res.status(200).json({ message: "成员设置成功" });
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 移除知识库成员
+ * DELETE /api/knowledge/libraries/:id/members/:memberUserId
+ */
+knowledgeRoutes.delete("/libraries/:id/members/:memberUserId", requireKnowledgeBaseWriteEnabled, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const id = Number(req.params.id);
+		const memberUserId = Number(req.params.memberUserId);
+		await removeLibraryMemberService(userId, id, memberUserId);
+		res.status(200).json({ message: "成员已移除" });
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 获取单篇文档权限与受限名单
+ * GET /api/knowledge/documents/:id/access
+ */
+knowledgeRoutes.get("/documents/:id/access", async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const docId = Number(req.params.id);
+		const result = await getDocumentAccessService(userId, docId);
+		res.json(result);
+	} catch (error) {
+		next(error);
+	}
+});
+
+const updateAccessSchema = z.object({
+	accessMode: z.enum(["inherit", "members_only", "restricted"]),
+	explicitRoles: z.array(z.object({
+		userId: z.number().int().positive(),
+		role: z.enum(["editor", "commenter", "viewer"]),
+	})).optional(),
+});
+
+/**
+ * 更新文档权限继承模式与受限名单
+ * PUT /api/knowledge/documents/:id/access
+ */
+knowledgeRoutes.put("/documents/:id/access", requireKnowledgeBaseWriteEnabled, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const docId = Number(req.params.id);
+		const input = updateAccessSchema.parse(req.body);
+		await updateDocumentAccessService(userId, docId, input);
+		res.json({ message: "文档权限已更新" });
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 发布文档快照到公开通道
+ * POST /api/knowledge/documents/:id/publish
+ */
+knowledgeRoutes.post("/documents/:id/publish", requireKnowledgeBaseWriteEnabled, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const docId = Number(req.params.id);
+		const revisionId = req.body?.revisionId ? Number(req.body.revisionId) : undefined;
+		const result = await publishKnowledgeDocumentService(userId, docId, revisionId);
+		res.json({ message: "文档快照已公开发布", ...result });
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 撤回公开发布快照
+ * POST /api/knowledge/documents/:id/unpublish
+ */
+knowledgeRoutes.post("/documents/:id/unpublish", requireKnowledgeBaseWriteEnabled, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const docId = Number(req.params.id);
+		await unpublishKnowledgeDocumentService(userId, docId);
+		res.json({ message: "文档快照已撤回" });
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 获取公开快照（免登录只读接口，未发布或私有库草稿返回 404）
+ * GET /api/knowledge/public/documents/:id
+ */
+knowledgeRoutes.get("/public/documents/:id", async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const docId = Number(req.params.id);
+		const snapshot = await getPublicDocumentSnapshotService(docId);
+		res.json(snapshot);
+	} catch (error) {
+		next(error);
+	}
+});
+
+const createShareLinkSchema = z.object({
+	expiresInDays: z.number().int().min(1).max(30).optional(),
+	includeDescendants: z.boolean().optional(),
+});
+
+/**
+ * 创建安全分享链接
+ * POST /api/knowledge/documents/:id/share
+ */
+knowledgeRoutes.post("/documents/:id/share", requireKnowledgeBaseWriteEnabled, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const docId = Number(req.params.id);
+		const input = createShareLinkSchema.parse(req.body || {});
+		const link = await createShareLinkService(userId, docId, input);
+		res.status(201).json(link);
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 获取文档已创建的分享链接列表
+ * GET /api/knowledge/documents/:id/share-links
+ */
+knowledgeRoutes.get("/documents/:id/share-links", async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const docId = Number(req.params.id);
+		const links = await listDocumentShareLinksService(userId, docId);
+		res.json({ links });
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 撤销分享链接
+ * DELETE /api/knowledge/share-links/:id
+ */
+knowledgeRoutes.delete("/share-links/:id", requireKnowledgeBaseWriteEnabled, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const linkId = Number(req.params.id);
+		await revokeShareLinkService(userId, linkId);
+		res.json({ message: "分享链接已撤销" });
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 通过分享链接安全只读访问文档
+ * GET /api/knowledge/shared/:token
+ */
+knowledgeRoutes.get("/shared/:token", async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const token = String(req.params.token);
+		const data = await getSharedDocumentSnapshotService(token);
+		res.setHeader("Referrer-Policy", "no-referrer");
+		res.json(data);
+	} catch (error) {
+		next(error);
+	}
+});
+
+const createCommentSchema = z.object({
+	body: z.string().trim().min(1, "评论正文不能为空").max(5000),
+	channel: z.enum(["internal", "public"]),
+	parentId: z.number().int().positive().optional(),
+});
+
+/**
+ * 添加评论 (支持 internal 与 public 两个通道)
+ * POST /api/knowledge/documents/:id/comments
+ */
+knowledgeRoutes.post("/documents/:id/comments", requireKnowledgeBaseWriteEnabled, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const docId = Number(req.params.id);
+		const input = createCommentSchema.parse(req.body);
+		const commentId = await addCommentService(userId, docId, input);
+		res.status(201).json({ id: commentId, message: "评论发表成功" });
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 获取文档评论列表
+ * GET /api/knowledge/documents/:id/comments
+ */
+knowledgeRoutes.get("/documents/:id/comments", async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = (req as Request & { commentUser?: { id: number } }).commentUser?.id ?? null;
+		const docId = Number(req.params.id);
+		const channel = (req.query.channel === "internal" ? "internal" : "public") as "internal" | "public";
+		const comments = await listCommentsService(userId, docId, channel);
+		res.json({ comments });
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 标记评论已解决
+ * POST /api/knowledge/comments/:id/resolve
+ */
+knowledgeRoutes.post("/comments/:id/resolve", requireKnowledgeBaseWriteEnabled, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const commentId = Number(req.params.id);
+		await resolveCommentService(userId, commentId);
+		res.json({ message: "评论已标记为已解决" });
+	} catch (error) {
+		next(error);
+	}
+});
+

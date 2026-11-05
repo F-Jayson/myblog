@@ -142,3 +142,74 @@ export interface TrashedDocumentItem {
 	deletedAt: string;
 }
 
+export type KbMemberRole = "manager" | "editor" | "commenter" | "viewer";
+
+export interface KbMemberItem {
+	id: number;
+	libraryId: number;
+	userId: number;
+	username: string;
+	nickname: string;
+	avatar: string;
+	role: KbMemberRole;
+	createdAt: string;
+}
+
+export interface KbDocumentAccessItem {
+	id: number;
+	documentId: number;
+	userId: number;
+	username: string;
+	nickname: string;
+	avatar: string;
+	role: "editor" | "commenter" | "viewer";
+	createdAt: string;
+}
+
+export interface KbShareLinkItem {
+	id: number;
+	libraryId: number;
+	targetDocumentId: number | null;
+	token?: string;
+	url?: string;
+	expiresAt: string | null;
+	revokedAt: string | null;
+	includeDescendants: boolean;
+	createdAt: string;
+}
+
+export interface KbCommentItem {
+	id: number;
+	libraryId: number;
+	documentId: number;
+	revisionId: number;
+	parentId: number | null;
+	authorUserId: number;
+	authorName: string;
+	authorAvatar: string;
+	body: string;
+	byteSize: number;
+	channel: "internal" | "public";
+	moderationStatus: "pending" | "approved" | "spam";
+	resolvedAt: string | null;
+	version: number;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface PublicDocumentSnapshot {
+	id: number;
+	libraryId: number;
+	libraryTitle: string;
+	title: string;
+	markdown: string;
+	tags: string[];
+	publishedRevisionId: number;
+	version: number;
+	authorName: string;
+	authorAvatar: string;
+	updatedAt: string;
+	createdAt: string;
+}
+
+

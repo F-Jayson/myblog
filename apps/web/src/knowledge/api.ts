@@ -1,11 +1,18 @@
 import type {
 	AttachmentSummary,
 	DocumentDetail,
+	KbAccessMode,
+	KbCommentItem,
+	KbDocumentAccessItem,
 	KbDocumentKind,
 	KbEligibilityResponse,
+	KbMemberItem,
+	KbMemberRole,
 	KbQuotaUsage,
+	KbShareLinkItem,
 	KbVisibility,
 	LibrarySummary,
+	PublicDocumentSnapshot,
 	RevisionSummary,
 	SearchResultItem,
 	TrashedDocumentItem,
@@ -213,5 +220,138 @@ export const kbApi = {
 	async listTrash(libraryId: number): Promise<TrashedDocumentItem[]> {
 		const res = await kbRequest<{ items: TrashedDocumentItem[] }>(`/api/knowledge/libraries/${libraryId}/trash`);
 		return res.items;
+	},
+
+	// =========================================================================
+	// P3: 成员协作、单篇ACL、快照发布、分享链接与评论
+	// =========================================================================
+
+	async listMembers(libraryId: number): Promise<KbMemberItem[]> {
+		const res = await kbRequest<{ members: KbMemberItem[] }>(`/api/knowledge/libraries/${libraryId}/members`);
+		return res.members;
+	},
+
+	async upsertMember(libraryId: number, userId: number, role: KbMemberRole): Promise<void> {
+		await kbRequest(`/api/knowledge/libraries/${libraryId}/members`, {
+			method: "POST",
+			body: { userId, role } as unknown as BodyInit,
+		});
+	},
+
+	async removeMember(libraryId: number, userId: number): Promise<void> {
+		await kbRequest(`/api/knowledge/libraries/${libraryId}/members/${userId}`, {
+			method: "DELETE",
+		});
+	},
+
+	async getDocumentAccess(documentId: number): Promise<{
+		accessMode: KbAccessMode;
+		entries: KbDocumentAccessItem[];
+	}> {
+		return kbRequest<{
+			accessMode: KbAccessMode;
+			entries: KbDocumentAccessItem[];
+		}>(`/api/knowledge/documents/${documentId}/access`);
+	},
+
+	async updateDocumentAccess(
+		documentId: number,
+		data: {
+			accessMode: KbAccessMode;
+			explicitRoles?: Array<{ userId: number; role: "editor" | "commenter" | "viewer" }>;
+		},
+	): Promise<void> {
+		await kbRequest(`/api/knowledge/documents/${documentId}/access`, {
+			method: "PUT",
+			body: data as unknown as BodyInit,
+		});
+	},
+
+	async publishDocument(
+		documentId: number,
+		revisionId?: number,
+	): Promise<{ publishedRevisionId: number }> {
+		return kbRequest<{ publishedRevisionId: number }>(`/api/knowledge/documents/${documentId}/publish`, {
+			method: "POST",
+			body: (revisionId ? { revisionId } : {}) as unknown as BodyInit,
+		});
+	},
+
+	async unpublishDocument(documentId: number): Promise<void> {
+		await kbRequest(`/api/knowledge/documents/${documentId}/unpublish`, {
+			method: "POST",
+		});
+	},
+
+	async getPublicDocument(documentId: number): Promise<PublicDocumentSnapshot> {
+		return kbRequest<PublicDocumentSnapshot>(`/api/knowledge/public/documents/${documentId}`);
+	},
+
+	async createShareLink(
+		documentId: number,
+		options: { expiresInDays?: number; includeDescendants?: boolean } = {},
+	): Promise<{ id: number; token: string; url: string; expiresAt: string | null }> {
+		return kbRequest<{ id: number; token: string; url: string; expiresAt: string | null }>(
+			`/api/knowledge/documents/${documentId}/share`,
+			{
+				method: "POST",
+				body: options as unknown as BodyInit,
+			},
+		);
+	},
+
+	async listShareLinks(documentId: number): Promise<KbShareLinkItem[]> {
+		const res = await kbRequest<{ links: KbShareLinkItem[] }>(
+			`/api/knowledge/documents/${documentId}/share-links`,
+		);
+		return res.links;
+	},
+
+	async revokeShareLink(linkId: number): Promise<void> {
+		await kbRequest(`/api/knowledge/share-links/${linkId}`, {
+			method: "DELETE",
+		});
+	},
+
+	async getSharedDocument(token: string): Promise<{
+		document: DocumentDetail;
+		library: LibrarySummary;
+		includeDescendants: boolean;
+	}> {
+		return kbRequest<{
+			document: DocumentDetail;
+			library: LibrarySummary;
+			includeDescendants: boolean;
+		}>(`/api/knowledge/shared/${token}`);
+	},
+
+	async addComment(
+		documentId: number,
+		data: {
+			body: string;
+			channel: "internal" | "public";
+			parentId?: number | null;
+		},
+	): Promise<{ id: number }> {
+		return kbRequest<{ id: number }>(`/api/knowledge/documents/${documentId}/comments`, {
+			method: "POST",
+			body: data as unknown as BodyInit,
+		});
+	},
+
+	async listComments(
+		documentId: number,
+		channel: "internal" | "public" = "internal",
+	): Promise<KbCommentItem[]> {
+		const res = await kbRequest<{ comments: KbCommentItem[] }>(
+			`/api/knowledge/documents/${documentId}/comments?channel=${channel}`,
+		);
+		return res.comments;
+	},
+
+	async resolveComment(commentId: number): Promise<void> {
+		await kbRequest(`/api/knowledge/comments/${commentId}/resolve`, {
+			method: "POST",
+		});
 	},
 };

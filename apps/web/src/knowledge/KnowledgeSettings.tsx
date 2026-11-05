@@ -17,11 +17,16 @@ import {
 	Settings,
 	ShieldAlert,
 	Trash2,
+	UserPlus,
+	Users,
+	UserX,
 } from "lucide-react";
 import { useAuth } from "../auth";
 import { kbApi, KbApiError } from "./api";
 import "./knowledge.css";
 import type {
+	KbMemberItem,
+	KbMemberRole,
 	KbQuotaUsage,
 	KbVisibility,
 	LibrarySummary,
@@ -37,6 +42,7 @@ export default function KnowledgeSettings() {
 	const [library, setLibrary] = useState<LibrarySummary | null>(null);
 	const [quota, setQuota] = useState<KbQuotaUsage | null>(null);
 	const [trashedItems, setTrashedItems] = useState<TrashedDocumentItem[]>([]);
+	const [members, setMembers] = useState<KbMemberItem[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 
@@ -46,6 +52,11 @@ export default function KnowledgeSettings() {
 	const [visibility, setVisibility] = useState<KbVisibility>("private");
 	const [saving, setSaving] = useState(false);
 	const [saveSuccess, setSaveSuccess] = useState(false);
+
+	// 协作者添加状态
+	const [newUserId, setNewUserId] = useState<string>("");
+	const [newRole, setNewRole] = useState<KbMemberRole>("editor");
+	const [addingMember, setAddingMember] = useState(false);
 
 	// 危险操作：删除知识库状态
 	const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -60,10 +71,11 @@ export default function KnowledgeSettings() {
 		setLoading(true);
 		setError(null);
 		try {
-			const [lib, quotaRes, trashRes] = await Promise.all([
+			const [lib, quotaRes, trashRes, membersRes] = await Promise.all([
 				kbApi.getLibrary(libraryId),
 				kbApi.getQuota().catch(() => null),
 				kbApi.listTrash(libraryId).catch(() => []),
+				kbApi.listMembers(libraryId).catch(() => []),
 			]);
 			setLibrary(lib);
 			setTitle(lib.title);
@@ -71,6 +83,7 @@ export default function KnowledgeSettings() {
 			setVisibility(lib.visibility);
 			setQuota(quotaRes);
 			setTrashedItems(trashRes);
+			setMembers(membersRes);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "加载知识库信息失败");
 		} finally {
@@ -100,6 +113,38 @@ export default function KnowledgeSettings() {
 			alert(err instanceof Error ? err.message : "保存设置失败");
 		} finally {
 			setSaving(false);
+		}
+	};
+
+	// 添加或修改成员
+	const handleAddMember = async (e: React.FormEvent) => {
+		e.preventDefault();
+		const uid = Number(newUserId.trim());
+		if (!uid || Number.isNaN(uid)) {
+			alert("请输入有效的用户数字 ID");
+			return;
+		}
+		setAddingMember(true);
+		try {
+			await kbApi.upsertMember(libraryId, uid, newRole);
+			setNewUserId("");
+			const updatedMembers = await kbApi.listMembers(libraryId);
+			setMembers(updatedMembers);
+		} catch (err) {
+			alert(err instanceof Error ? err.message : "添加协作者失败");
+		} finally {
+			setAddingMember(false);
+		}
+	};
+
+	// 移除协作者
+	const handleRemoveMember = async (memberUserId: number) => {
+		if (!confirm("确定要移除该协作者吗？")) return;
+		try {
+			await kbApi.removeMember(libraryId, memberUserId);
+			setMembers((prev) => prev.filter((m) => m.userId !== memberUserId));
+		} catch (err) {
+			alert(err instanceof Error ? err.message : "移除失败");
 		}
 	};
 
@@ -181,7 +226,7 @@ export default function KnowledgeSettings() {
 						<Settings className="w-7 h-7 text-primary" />
 						知识库设置 - {library.title}
 					</h1>
-					<p className="kb-page-subtitle">管理知识库基本信息、存储配额与回收站</p>
+					<p className="kb-page-subtitle">管理知识库基本信息、成员协作者、存储配额与回收站</p>
 				</div>
 			</div>
 
@@ -298,7 +343,105 @@ export default function KnowledgeSettings() {
 					</form>
 				</div>
 
-				{/* 2. 存储配额与空间占用卡片 */}
+				{/* 2. 协作者成员管理卡片 (P3 新增) */}
+				<div className="kb-card">
+					<h2 style={{ fontSize: "1.15rem", fontWeight: 700, margin: "0 0 0.5rem 0", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+						<Users className="w-5 h-5 text-primary" />
+						协作者管理 ({members.length})
+					</h2>
+					<p style={{ fontSize: "0.85rem", color: "var(--muted-text)", margin: "0 0 1.25rem 0" }}>
+						为其他注册用户授予知识库访问与协作角色（管理员 Manager、编辑员 Editor、评论员 Commenter、只读者 Viewer）。
+					</p>
+
+					{/* 添加新协作者表单 */}
+					<form onSubmit={handleAddMember} style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center", marginBottom: "1.5rem", padding: "1rem", borderRadius: "0.75rem", background: "color-mix(in srgb, var(--card-bg-solid) 80%, transparent)", border: "1px solid var(--line)" }}>
+						<input
+							type="number"
+							className="kb-input"
+							style={{ maxWidth: "14rem" }}
+							placeholder="输入用户数字 ID"
+							value={newUserId}
+							onChange={(e) => setNewUserId(e.target.value)}
+							required
+						/>
+
+						<select
+							className="kb-select"
+							style={{ maxWidth: "10rem" }}
+							value={newRole}
+							onChange={(e) => setNewRole(e.target.value as KbMemberRole)}
+						>
+							<option value="editor">编辑员 (Editor)</option>
+							<option value="commenter">评论员 (Commenter)</option>
+							<option value="viewer">只读者 (Viewer)</option>
+							<option value="manager">管理员 (Manager)</option>
+						</select>
+
+						<button
+							type="submit"
+							className="kb-btn kb-btn-primary kb-btn-sm"
+							disabled={addingMember || !newUserId.trim()}
+						>
+							<UserPlus className="w-4 h-4" />
+							{addingMember ? "添加中..." : "添加协作者"}
+						</button>
+					</form>
+
+					{/* 协作者列表 */}
+					{members.length === 0 ? (
+						<div style={{ textAlign: "center", padding: "1.5rem 0", color: "var(--muted-text)", fontSize: "0.85rem" }}>
+							当前知识库尚无其他协作者，仅所有者可访问
+						</div>
+					) : (
+						<div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+							{members.map((m) => (
+								<div
+									key={m.userId}
+									style={{
+										display: "flex",
+										alignItems: "center",
+										justifyContent: "space-between",
+										padding: "0.75rem 1rem",
+										borderRadius: "0.65rem",
+										border: "1px solid var(--line)",
+										background: "color-mix(in srgb, var(--card-bg-solid) 80%, transparent)",
+									}}
+								>
+									<div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+										<div style={{ width: "2rem", height: "2rem", borderRadius: "9999px", background: "var(--btn-bg)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.85rem", fontWeight: 700 }}>
+											{m.nickname.slice(0, 1).toUpperCase()}
+										</div>
+										<div>
+											<strong style={{ fontSize: "0.9rem", display: "block" }}>{m.nickname}</strong>
+											<span style={{ fontSize: "0.75rem", color: "var(--muted-text)" }}>@{m.username} (ID: {m.userId})</span>
+										</div>
+									</div>
+
+									<div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+										<span className="kb-status-badge">
+											{m.role === "manager" && "管理员"}
+											{m.role === "editor" && "编辑员"}
+											{m.role === "commenter" && "评论员"}
+											{m.role === "viewer" && "只读者"}
+										</span>
+
+										<button
+											type="button"
+											className="kb-btn kb-btn-ghost kb-btn-sm"
+											style={{ color: "#ef4444" }}
+											onClick={() => handleRemoveMember(m.userId)}
+											title="移除协作者"
+										>
+											<UserX className="w-4 h-4" />
+										</button>
+									</div>
+								</div>
+							))}
+						</div>
+					)}
+				</div>
+
+				{/* 3. 存储配额与空间占用卡片 */}
 				<div className="kb-card">
 					<h2 style={{ fontSize: "1.15rem", fontWeight: 700, margin: "0 0 1.25rem 0", display: "flex", alignItems: "center", gap: "0.5rem" }}>
 						<HardDrive className="w-5 h-5 text-primary" />
@@ -350,7 +493,7 @@ export default function KnowledgeSettings() {
 					)}
 				</div>
 
-				{/* 3. 回收站列表 */}
+				{/* 4. 回收站列表 */}
 				<div className="kb-card">
 					<div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
 						<h2 style={{ fontSize: "1.15rem", fontWeight: 700, margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -405,7 +548,7 @@ export default function KnowledgeSettings() {
 					)}
 				</div>
 
-				{/* 4. 危险操作区 (软删除整个库) */}
+				{/* 5. 危险操作区 (软删除整个库) */}
 				<div className="kb-card" style={{ borderColor: "color-mix(in srgb, #ef4444 30%, var(--line))", background: "color-mix(in srgb, #ef4444 4%, var(--card-bg))" }}>
 					<h2 style={{ fontSize: "1.15rem", fontWeight: 700, margin: "0 0 0.5rem 0", color: "#ef4444", display: "flex", alignItems: "center", gap: "0.5rem" }}>
 						<ShieldAlert className="w-5 h-5 text-error" />

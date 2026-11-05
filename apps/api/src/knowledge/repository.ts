@@ -8,12 +8,17 @@ import type {
 	AttachmentSummary,
 	DocumentDetail,
 	KbAccessMode,
+	KbCommentItem,
+	KbDocumentAccessItem,
 	KbDocumentKind,
 	KbEffectiveRole,
 	KbEntitlement,
+	KbMemberItem,
 	KbMemberRole,
+	KbShareLinkItem,
 	KbVisibility,
 	LibrarySummary,
+	PublicDocumentSnapshot,
 	RevisionSummary,
 	SearchResultItem,
 	TreeNode,
@@ -1190,4 +1195,445 @@ export async function bindAttachmentsToRevision(
 		[attachmentIds],
 	);
 }
+
+/**
+ * =========================================================================
+ * P3: 成员管理、单篇ACL、快照发布、分享链接与评论仓储
+ * =========================================================================
+ */
+
+export async function listLibraryMembers(
+	libraryId: number,
+	connection?: PoolConnection,
+): Promise<KbMemberItem[]> {
+	const conn = connection ?? pool;
+	const [rows] = await conn.query<RowDataPacket[]>(
+		`SELECT m.id, m.library_id, m.user_id, m.role,
+		        DATE_FORMAT(m.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+		        u.account, u.nickname, u.avatar_url AS avatar
+		 FROM kb_members m
+		 INNER JOIN comment_users u ON u.id = m.user_id
+		 WHERE m.library_id = ?
+		 ORDER BY m.created_at ASC`,
+		[libraryId],
+	);
+	return (rows as RowDataPacket[]).map((r) => ({
+		id: Number(r.id),
+		libraryId: Number(r.library_id),
+		userId: Number(r.user_id),
+		username: String(r.account),
+		nickname: String(r.nickname || r.account),
+		avatar: String(r.avatar || ""),
+		role: r.role as KbMemberRole,
+		createdAt: String(r.created_at),
+	}));
+}
+
+export async function upsertLibraryMember(
+	libraryId: number,
+	userId: number,
+	role: KbMemberRole,
+	createdBy: number,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		`INSERT INTO kb_members (library_id, user_id, role, created_by)
+		 VALUES (?, ?, ?, ?)
+		 ON DUPLICATE KEY UPDATE role = VALUES(role), updated_at = NOW()`,
+		[libraryId, userId, role, createdBy],
+	);
+}
+
+export async function removeLibraryMember(
+	libraryId: number,
+	userId: number,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		"DELETE FROM kb_members WHERE library_id = ? AND user_id = ?",
+		[libraryId, userId],
+	);
+}
+
+export async function listDocumentAccessEntries(
+	documentId: number,
+	connection?: PoolConnection,
+): Promise<KbDocumentAccessItem[]> {
+	const conn = connection ?? pool;
+	const [rows] = await conn.query<RowDataPacket[]>(
+		`SELECT a.id, a.document_id, a.user_id, a.role,
+		        DATE_FORMAT(a.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+		        u.account, u.nickname, u.avatar_url AS avatar
+		 FROM kb_document_access a
+		 INNER JOIN comment_users u ON u.id = a.user_id
+		 WHERE a.document_id = ?
+		 ORDER BY a.created_at ASC`,
+		[documentId],
+	);
+	return (rows as RowDataPacket[]).map((r) => ({
+		id: Number(r.id),
+		documentId: Number(r.document_id),
+		userId: Number(r.user_id),
+		username: String(r.account),
+		nickname: String(r.nickname || r.account),
+		avatar: String(r.avatar || ""),
+		role: r.role as "editor" | "commenter" | "viewer",
+		createdAt: String(r.created_at),
+	}));
+}
+
+export async function setDocumentAccessMode(
+	documentId: number,
+	accessMode: KbAccessMode,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		"UPDATE kb_documents SET access_mode = ? WHERE id = ?",
+		[accessMode, documentId],
+	);
+}
+
+export async function setDocumentExplicitAccess(
+	documentId: number,
+	userId: number,
+	role: "editor" | "commenter" | "viewer",
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		`INSERT INTO kb_document_access (document_id, user_id, role)
+		 VALUES (?, ?, ?)
+		 ON DUPLICATE KEY UPDATE role = VALUES(role)`,
+		[documentId, userId, role],
+	);
+}
+
+export async function removeDocumentExplicitAccess(
+	documentId: number,
+	userId: number,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		"DELETE FROM kb_document_access WHERE document_id = ? AND user_id = ?",
+		[documentId, userId],
+	);
+}
+
+export async function setDocumentPublishedRevision(
+	documentId: number,
+	revisionId: number | null,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		"UPDATE kb_documents SET published_revision_id = ? WHERE id = ?",
+		[revisionId, documentId],
+	);
+}
+
+export async function getPublicDocumentSnapshot(
+	documentId: number,
+	connection?: PoolConnection,
+): Promise<PublicDocumentSnapshot | null> {
+	const conn = connection ?? pool;
+	const [[row]] = await conn.query<RowDataPacket[]>(
+		`SELECT d.id, d.library_id, d.version, d.published_revision_id, d.deleted_at,
+		        k.title AS library_title, k.visibility, k.deleted_at AS lib_deleted_at,
+		        r.title, r.markdown, r.tags,
+		        DATE_FORMAT(r.created_at, '%Y-%m-%d %H:%i:%s') AS revision_time,
+		        u.account, u.nickname, u.avatar_url AS avatar
+		 FROM kb_documents d
+		 INNER JOIN knowledge_bases k ON k.id = d.library_id
+		 INNER JOIN kb_revisions r ON r.id = d.published_revision_id
+		 INNER JOIN comment_users u ON u.id = k.owner_user_id
+		 WHERE d.id = ? AND d.deleted_at IS NULL AND k.deleted_at IS NULL`,
+		[documentId],
+	);
+	if (!row || !row.published_revision_id) return null;
+
+	let tags: string[] = [];
+	try {
+		tags = typeof row.tags === "string" ? JSON.parse(row.tags) : row.tags;
+	} catch {
+		tags = [];
+	}
+
+	return {
+		id: Number(row.id),
+		libraryId: Number(row.library_id),
+		libraryTitle: String(row.library_title),
+		title: String(row.title),
+		markdown: String(row.markdown),
+		tags,
+		publishedRevisionId: Number(row.published_revision_id),
+		version: Number(row.version),
+		authorName: String(row.nickname || row.account),
+		authorAvatar: String(row.avatar || ""),
+		updatedAt: String(row.revision_time),
+		createdAt: String(row.revision_time),
+	};
+}
+
+export async function createShareLinkRecord(
+	data: {
+		libraryId: number;
+		targetDocumentId: number | null;
+		tokenHash: string;
+		expiresAt: string | null;
+		includeDescendants?: boolean;
+	},
+	connection?: PoolConnection,
+): Promise<number> {
+	const conn = connection ?? pool;
+	const [result] = await conn.execute<ResultSetHeader>(
+		`INSERT INTO kb_share_links (library_id, target_document_id, token_hash, expires_at, include_descendants)
+		 VALUES (?, ?, ?, ?, ?)`,
+		[
+			data.libraryId,
+			data.targetDocumentId,
+			data.tokenHash,
+			data.expiresAt,
+			data.includeDescendants ? 1 : 0,
+		],
+	);
+	return Number(result.insertId);
+}
+
+export async function findShareLinkByHash(
+	tokenHash: string,
+	connection?: PoolConnection,
+): Promise<{
+	id: number;
+	libraryId: number;
+	targetDocumentId: number | null;
+	expiresAt: string | null;
+	revokedAt: string | null;
+	includeDescendants: boolean;
+} | null> {
+	const conn = connection ?? pool;
+	const [[row]] = await conn.query<RowDataPacket[]>(
+		`SELECT id, library_id, target_document_id,
+		        DATE_FORMAT(expires_at, '%Y-%m-%d %H:%i:%s') AS expires_at,
+		        DATE_FORMAT(revoked_at, '%Y-%m-%d %H:%i:%s') AS revoked_at,
+		        include_descendants
+		 FROM kb_share_links
+		 WHERE token_hash = ?`,
+		[tokenHash],
+	);
+	if (!row) return null;
+	return {
+		id: Number(row.id),
+		libraryId: Number(row.library_id),
+		targetDocumentId: row.target_document_id !== null ? Number(row.target_document_id) : null,
+		expiresAt: row.expires_at ? String(row.expires_at) : null,
+		revokedAt: row.revoked_at ? String(row.revoked_at) : null,
+		includeDescendants: Boolean(row.include_descendants),
+	};
+}
+
+export async function listDocumentShareLinks(
+	documentId: number,
+	connection?: PoolConnection,
+): Promise<KbShareLinkItem[]> {
+	const conn = connection ?? pool;
+	const [rows] = await conn.query<RowDataPacket[]>(
+		`SELECT id, library_id, target_document_id,
+		        DATE_FORMAT(expires_at, '%Y-%m-%d %H:%i:%s') AS expires_at,
+		        DATE_FORMAT(revoked_at, '%Y-%m-%d %H:%i:%s') AS revoked_at,
+		        include_descendants,
+		        DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+		 FROM kb_share_links
+		 WHERE target_document_id = ?
+		 ORDER BY created_at DESC`,
+		[documentId],
+	);
+	return (rows as RowDataPacket[]).map((r) => ({
+		id: Number(r.id),
+		libraryId: Number(r.library_id),
+		targetDocumentId: Number(r.target_document_id),
+		expiresAt: r.expires_at ? String(r.expires_at) : null,
+		revokedAt: r.revoked_at ? String(r.revoked_at) : null,
+		includeDescendants: Boolean(r.include_descendants),
+		createdAt: String(r.created_at),
+	}));
+}
+
+export async function revokeShareLinkRecord(
+	linkId: number,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		"UPDATE kb_share_links SET revoked_at = NOW() WHERE id = ?",
+		[linkId],
+	);
+}
+
+export async function getShareLinkById(
+	linkId: number,
+	connection?: PoolConnection,
+): Promise<{
+	id: number;
+	libraryId: number;
+	targetDocumentId: number | null;
+	expiresAt: string | null;
+	revokedAt: string | null;
+} | null> {
+	const conn = connection ?? pool;
+	const [[row]] = await conn.query<RowDataPacket[]>(
+		`SELECT id, library_id, target_document_id,
+		        DATE_FORMAT(expires_at, '%Y-%m-%d %H:%i:%s') AS expires_at,
+		        DATE_FORMAT(revoked_at, '%Y-%m-%d %H:%i:%s') AS revoked_at
+		 FROM kb_share_links WHERE id = ?`,
+		[linkId],
+	);
+	if (!row) return null;
+	return {
+		id: Number(row.id),
+		libraryId: Number(row.library_id),
+		targetDocumentId: row.target_document_id !== null ? Number(row.target_document_id) : null,
+		expiresAt: row.expires_at ? String(row.expires_at) : null,
+		revokedAt: row.revoked_at ? String(row.revoked_at) : null,
+	};
+}
+
+export async function createCommentRecord(
+	data: {
+		libraryId: number;
+		documentId: number;
+		revisionId: number;
+		parentId?: number | null;
+		authorUserId: number;
+		body: string;
+		byteSize: number;
+		channel: "internal" | "public";
+		moderationStatus: "pending" | "approved" | "spam";
+	},
+	connection?: PoolConnection,
+): Promise<number> {
+	const conn = connection ?? pool;
+	const [res] = await conn.execute<ResultSetHeader>(
+		`INSERT INTO kb_comments (library_id, document_id, revision_id, parent_id, author_user_id, body, byte_size, channel, moderation_status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		[
+			data.libraryId,
+			data.documentId,
+			data.revisionId,
+			data.parentId ?? null,
+			data.authorUserId,
+			data.body.trim(),
+			data.byteSize,
+			data.channel,
+			data.moderationStatus,
+		],
+	);
+	return Number(res.insertId);
+}
+
+export async function listCommentsRecord(
+	documentId: number,
+	options: {
+		channel?: "internal" | "public";
+		includeUnapproved?: boolean;
+	} = {},
+	connection?: PoolConnection,
+): Promise<KbCommentItem[]> {
+	const conn = connection ?? pool;
+	const params: unknown[] = [documentId];
+	let channelFilter = "";
+	if (options.channel) {
+		channelFilter = "AND c.channel = ?";
+		params.push(options.channel);
+	}
+	let modFilter = "";
+	if (!options.includeUnapproved) {
+		modFilter = "AND c.moderation_status = 'approved'";
+	}
+
+	const [rows] = await conn.query<RowDataPacket[]>(
+		`SELECT c.id, c.library_id, c.document_id, c.revision_id, c.parent_id,
+		        c.author_user_id, c.body, c.byte_size, c.channel, c.moderation_status,
+		        DATE_FORMAT(c.resolved_at, '%Y-%m-%d %H:%i:%s') AS resolved_at,
+		        c.version,
+		        DATE_FORMAT(c.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+		        DATE_FORMAT(c.updated_at, '%Y-%m-%d %H:%i:%s') AS updated_at,
+		        u.account, u.nickname, u.avatar_url AS avatar
+		 FROM kb_comments c
+		 INNER JOIN comment_users u ON u.id = c.author_user_id
+		 WHERE c.document_id = ? ${channelFilter} ${modFilter}
+		 ORDER BY c.created_at ASC`,
+		params,
+	);
+
+	return (rows as RowDataPacket[]).map((r) => ({
+		id: Number(r.id),
+		libraryId: Number(r.library_id),
+		documentId: Number(r.document_id),
+		revisionId: Number(r.revision_id),
+		parentId: r.parent_id !== null ? Number(r.parent_id) : null,
+		authorUserId: Number(r.author_user_id),
+		authorName: String(r.nickname || r.account),
+		authorAvatar: String(r.avatar || ""),
+		body: String(r.body),
+		byteSize: Number(r.byte_size),
+		channel: r.channel as "internal" | "public",
+		moderationStatus: r.moderation_status as "pending" | "approved" | "spam",
+		resolvedAt: r.resolved_at ? String(r.resolved_at) : null,
+		version: Number(r.version),
+		createdAt: String(r.created_at),
+		updatedAt: String(r.updated_at),
+	}));
+}
+
+export async function resolveCommentRecord(
+	commentId: number,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		"UPDATE kb_comments SET resolved_at = NOW() WHERE id = ?",
+		[commentId],
+	);
+}
+
+export async function deleteCommentRecord(
+	commentId: number,
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute("DELETE FROM kb_comments WHERE id = ?", [commentId]);
+}
+
+export async function getCommentRecord(
+	commentId: number,
+	connection?: PoolConnection,
+): Promise<{
+	id: number;
+	libraryId: number;
+	documentId: number;
+	authorUserId: number;
+	channel: "internal" | "public";
+	resolvedAt: string | null;
+} | null> {
+	const conn = connection ?? pool;
+	const [[row]] = await conn.query<RowDataPacket[]>(
+		`SELECT id, library_id, document_id, author_user_id, channel, resolved_at
+		 FROM kb_comments WHERE id = ?`,
+		[commentId],
+	);
+	if (!row) return null;
+	return {
+		id: Number(row.id),
+		libraryId: Number(row.library_id),
+		documentId: Number(row.document_id),
+		authorUserId: Number(row.author_user_id),
+		channel: row.channel as "internal" | "public",
+		resolvedAt: row.resolved_at ? String(row.resolved_at) : null,
+	};
+}
+
 

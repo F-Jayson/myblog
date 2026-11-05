@@ -10,17 +10,21 @@ import {
 	Clock,
 	Copy,
 	Download,
+	Eye,
 	FileText,
 	Folder,
 	FolderPlus,
+	Globe,
 	History,
 	Menu,
+	MessageCircle,
 	Paperclip,
 	Plus,
 	RefreshCw,
 	Save,
 	Search,
 	Settings,
+	Share2,
 	Trash2,
 	Upload,
 	X,
@@ -31,6 +35,8 @@ import "./knowledge.css";
 import type {
 	AttachmentSummary,
 	DocumentDetail,
+	KbCommentItem,
+	KbShareLinkItem,
 	LibrarySummary,
 	RevisionSummary,
 	SearchResultItem,
@@ -75,12 +81,32 @@ export default function KnowledgeWorkspace() {
 
 	// 侧边栏与抽屉响应式控制
 	const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
-	const [rightTab, setRightTab] = useState<"toc" | "revisions" | "attachments" | null>("toc");
+	const [rightTab, setRightTab] = useState<"toc" | "revisions" | "attachments" | "comments" | null>("toc");
 
 	// 历史版本与附件
 	const [revisions, setRevisions] = useState<RevisionSummary[]>([]);
 	const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
 	const [uploadingAttachment, setUploadingAttachment] = useState(false);
+
+	// 内部工作评论
+	const [comments, setComments] = useState<KbCommentItem[]>([]);
+	const [commentsLoading, setCommentsLoading] = useState(false);
+	const [commentBody, setCommentBody] = useState("");
+	const [submittingComment, setSubmittingComment] = useState(false);
+
+	// 受限分享链接弹窗
+	const [shareModalOpen, setShareModalOpen] = useState(false);
+	const [shareLinks, setShareLinks] = useState<KbShareLinkItem[]>([]);
+	const [shareLinksLoading, setShareLinksLoading] = useState(false);
+	const [shareExpiryDays, setShareExpiryDays] = useState(7);
+	const [newShareToken, setNewShareToken] = useState<string | null>(null);
+	const [shareActionLoading, setShareActionLoading] = useState(false);
+	const [copiedShareLink, setCopiedShareLink] = useState(false);
+
+	// 公开快照发布弹窗
+	const [publishModalOpen, setPublishModalOpen] = useState(false);
+	const [publishing, setPublishing] = useState(false);
+	const [copiedPublishLink, setCopiedPublishLink] = useState(false);
 
 	// 搜索弹窗
 	const [searchQuery, setSearchQuery] = useState("");
@@ -333,6 +359,119 @@ export default function KnowledgeWorkspace() {
 		}
 		return items;
 	}, [editMarkdown]);
+
+	// 11. 内部评论加载与管理
+	const loadComments = useCallback(async (docId: number) => {
+		setCommentsLoading(true);
+		try {
+			const list = await kbApi.listComments(docId, "internal");
+			setComments(list);
+		} catch (err) {
+			console.error("加载评论失败", err);
+		} finally {
+			setCommentsLoading(false);
+		}
+	}, []);
+
+	useEffect(() => {
+		if (activeDocId && rightTab === "comments") {
+			loadComments(activeDocId);
+		}
+	}, [activeDocId, rightTab, loadComments]);
+
+	const handleAddComment = async (e: React.FormEvent) => {
+		e.preventDefault();
+		if (!currentDoc || !commentBody.trim() || submittingComment) return;
+		setSubmittingComment(true);
+		try {
+			await kbApi.addComment(currentDoc.id, {
+				body: commentBody.trim(),
+				channel: "internal",
+			});
+			setCommentBody("");
+			await loadComments(currentDoc.id);
+		} catch (err: any) {
+			alert(err.message || "发表评论失败");
+		} finally {
+			setSubmittingComment(false);
+		}
+	};
+
+	const handleToggleResolve = async (comment: KbCommentItem) => {
+		if (!currentDoc) return;
+		try {
+			await kbApi.resolveComment(comment.id);
+			await loadComments(currentDoc.id);
+		} catch (err: any) {
+			alert(err.message || "更新评论状态失败");
+		}
+	};
+
+	// 12. 受限分享链接管理
+	const loadShareLinks = useCallback(async (docId: number) => {
+		setShareLinksLoading(true);
+		try {
+			const links = await kbApi.listShareLinks(docId);
+			setShareLinks(links);
+		} catch (err) {
+			console.error("加载分享链接失败", err);
+		} finally {
+			setShareLinksLoading(false);
+		}
+	}, []);
+
+	const handleCreateShareLink = async () => {
+		if (!currentDoc || shareActionLoading) return;
+		setShareActionLoading(true);
+		try {
+			const res = await kbApi.createShareLink(currentDoc.id, { expiresInDays: shareExpiryDays });
+			setNewShareToken(res.token);
+			await loadShareLinks(currentDoc.id);
+		} catch (err: any) {
+			alert(err.message || "创建分享链接失败");
+		} finally {
+			setShareActionLoading(false);
+		}
+	};
+
+	const handleRevokeShareLink = async (linkId: number) => {
+		if (!currentDoc || !window.confirm("确定要作废该分享链接吗？作废后持有链接的人将无法访问。")) return;
+		try {
+			await kbApi.revokeShareLink(linkId);
+			await loadShareLinks(currentDoc.id);
+		} catch (err: any) {
+			alert(err.message || "撤销失败");
+		}
+	};
+
+	// 13. 公开快照发布管理
+	const handlePublishSnapshot = async () => {
+		if (!currentDoc || publishing) return;
+		setPublishing(true);
+		try {
+			const res = await kbApi.publishDocument(currentDoc.id, currentDoc.currentRevisionId ?? undefined);
+			setCurrentDoc((prev) => (prev ? { ...prev, publishedRevisionId: res.publishedRevisionId } : null));
+			alert("已成功发布为公开快照！任何人可通过公开链接阅读当前版本。");
+		} catch (err: any) {
+			alert(err.message || "发布失败");
+		} finally {
+			setPublishing(false);
+		}
+	};
+
+	const handleUnpublishSnapshot = async () => {
+		if (!currentDoc || publishing || !window.confirm("确定要撤回公开快照吗？撤回后外部访问将返回 404。")) return;
+		setPublishing(true);
+		try {
+			await kbApi.unpublishDocument(currentDoc.id);
+			setCurrentDoc((prev) => (prev ? { ...prev, publishedRevisionId: null } : null));
+			alert("已撤回公开快照。");
+		} catch (err: any) {
+			alert(err.message || "撤回失败");
+		} finally {
+			setPublishing(false);
+		}
+	};
 
 	// 目录树递归渲染
 	const renderTreeNodes = (parentId: number | null = null, depth = 0) => {
@@ -616,6 +755,29 @@ export default function KnowledgeWorkspace() {
 								<span className="hidden sm:inline">导出</span>
 							</button>
 
+							<button
+								type="button"
+								onClick={() => {
+									setShareModalOpen(true);
+									if (currentDoc) loadShareLinks(currentDoc.id);
+								}}
+								className="btn btn-ghost btn-xs gap-1"
+								title="受限只读分享链接"
+							>
+								<Share2 className="w-3.5 h-3.5" />
+								<span className="hidden sm:inline">分享</span>
+							</button>
+
+							<button
+								type="button"
+								onClick={() => setPublishModalOpen(true)}
+								className={`btn btn-xs gap-1 ${currentDoc.publishedRevisionId ? "btn-outline btn-success" : "btn-ghost"}`}
+								title="公开快照发布"
+							>
+								<Globe className="w-3.5 h-3.5" />
+								<span className="hidden sm:inline">{currentDoc.publishedRevisionId ? "已发布" : "公开"}</span>
+							</button>
+
 							<div className="divider divider-horizontal my-1" />
 
 							<button
@@ -643,6 +805,21 @@ export default function KnowledgeWorkspace() {
 								title="附件"
 							>
 								<Paperclip className="w-3.5 h-3.5" />
+							</button>
+
+							<button
+								type="button"
+								onClick={() => {
+									const next = rightTab === "comments" ? null : "comments";
+									setRightTab(next);
+									if (next === "comments" && currentDoc) {
+										loadComments(currentDoc.id);
+									}
+								}}
+								className={`btn btn-xs ${rightTab === "comments" ? "btn-primary" : "btn-ghost"}`}
+								title="工作评论"
+							>
+								<MessageCircle className="w-3.5 h-3.5" />
 							</button>
 						</div>
 					)}
@@ -700,6 +877,7 @@ export default function KnowledgeWorkspace() {
 									{rightTab === "toc" && "文章大纲"}
 									{rightTab === "revisions" && "版本追溯 (不可变快照)"}
 									{rightTab === "attachments" && "文档附件"}
+									{rightTab === "comments" && "工作评论 (内部)"}
 								</span>
 								<button
 									type="button"
@@ -823,6 +1001,77 @@ export default function KnowledgeWorkspace() {
 										</div>
 									</div>
 								)}
+
+								{/* 内部工作评论 Tab */}
+								{rightTab === "comments" && (
+									<div className="space-y-4">
+										<form onSubmit={handleAddComment} className="space-y-2">
+											<textarea
+												className="textarea textarea-bordered textarea-xs w-full min-h-[4.5rem] text-xs"
+												placeholder="输入内部工作评论..."
+												value={commentBody}
+												onChange={(e) => setCommentBody(e.target.value)}
+												maxLength={5000}
+												required
+											/>
+											<button
+												type="submit"
+												disabled={submittingComment || !commentBody.trim()}
+												className="btn btn-primary btn-xs w-full"
+											>
+												{submittingComment ? "发表中..." : "发表评论"}
+											</button>
+										</form>
+
+										{commentsLoading ? (
+											<div className="text-center py-4 text-base-content/40">加载评论中...</div>
+										) : comments.length === 0 ? (
+											<div className="text-center py-6 text-base-content/40">
+												暂无评论，协作时可在此交流
+											</div>
+										) : (
+											<div className="space-y-2">
+												{comments.map((c) => (
+													<div
+														key={c.id}
+														className={`p-2 rounded-lg border text-xs ${
+															c.resolvedAt
+																? "bg-base-200/20 border-base-content/10 opacity-70"
+																: "bg-base-200/50 border-base-content/20"
+														}`}
+													>
+														<div className="flex items-center justify-between mb-1">
+															<span className="font-semibold text-primary truncate max-w-[100px]">
+																{c.authorName}
+															</span>
+															<span className="text-[10px] text-base-content/40">
+																{c.createdAt.slice(5, 16)}
+															</span>
+														</div>
+														<p
+															className={`whitespace-pre-wrap mb-1.5 text-base-content/85 ${
+																c.resolvedAt ? "line-through text-base-content/50" : ""
+															}`}
+														>
+															{c.body}
+														</p>
+														<div className="flex items-center justify-end">
+															<button
+																type="button"
+																onClick={() => handleToggleResolve(c)}
+																className={`btn btn-xs py-0 h-5 min-h-0 text-[10px] ${
+																	c.resolvedAt ? "btn-ghost" : "btn-outline btn-success"
+																}`}
+															>
+																{c.resolvedAt ? "已解决" : "标为已解决"}
+															</button>
+														</div>
+													</div>
+												))}
+											</div>
+										)}
+									</div>
+								)}
 							</div>
 						</aside>
 					)}
@@ -894,6 +1143,238 @@ export default function KnowledgeWorkspace() {
 							>
 								基于新版本重新提交本地草稿
 							</button>
+						</div>
+					</div>
+				</div>
+			)}
+
+			{/* ============================================================== */}
+			{/* A10: 受限分享链接弹窗 */}
+			{/* ============================================================== */}
+			{shareModalOpen && currentDoc && (
+				<div className="modal modal-open backdrop-blur-sm z-50">
+					<div className="modal-box max-w-lg rounded-2xl">
+						<div className="flex items-center justify-between mb-4">
+							<h3 className="font-bold text-base flex items-center gap-2">
+								<Share2 className="w-4 h-4 text-primary" />
+								受限只读分享
+							</h3>
+							<button
+								type="button"
+								onClick={() => {
+									setShareModalOpen(false);
+									setNewShareToken(null);
+									setCopiedShareLink(false);
+								}}
+								className="btn btn-ghost btn-circle btn-xs"
+							>
+								<X className="w-4 h-4" />
+							</button>
+						</div>
+
+						<p className="text-xs text-base-content/70 mb-4">
+							生成高熵只读访问 Token，获取链接者可在有效期内免登录只读访问该文档当前版本。系统仅存储 Token 的 SHA-256 哈希值防猜解泄露。
+						</p>
+
+						{/* 新建分享链接区 */}
+						<div className="p-3 bg-base-200/50 rounded-xl border border-base-content/10 mb-4">
+							<div className="flex items-center justify-between gap-3">
+								<div className="flex items-center gap-2 text-xs">
+									<span>有效期:</span>
+									<select
+										className="select select-bordered select-xs"
+										value={shareExpiryDays}
+										onChange={(e) => setShareExpiryDays(Number(e.target.value))}
+										disabled={shareActionLoading}
+									>
+										<option value={1}>1 天</option>
+										<option value={7}>7 天</option>
+										<option value={30}>30 天</option>
+									</select>
+								</div>
+								<button
+									type="button"
+									onClick={handleCreateShareLink}
+									disabled={shareActionLoading}
+									className="btn btn-primary btn-xs"
+								>
+									{shareActionLoading ? "生成中..." : "生成新链接"}
+								</button>
+							</div>
+
+							{newShareToken && (
+								<div className="mt-3 p-2 bg-success/10 border border-success/30 rounded-lg text-xs">
+									<div className="text-success font-medium mb-1">
+										链接生成成功（仅在此展示一次）：
+									</div>
+									<div className="flex items-center gap-2">
+										<input
+											type="text"
+											readOnly
+											value={`${window.location.origin}/ks/${newShareToken}`}
+											className="input input-bordered input-xs flex-1 font-mono text-[11px]"
+										/>
+										<button
+											type="button"
+											onClick={() => {
+												navigator.clipboard.writeText(`${window.location.origin}/ks/${newShareToken}`);
+												setCopiedShareLink(true);
+												setTimeout(() => setCopiedShareLink(false), 2000);
+											}}
+											className="btn btn-xs btn-primary gap-1"
+										>
+											{copiedShareLink ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+											{copiedShareLink ? "已复制" : "复制"}
+										</button>
+									</div>
+								</div>
+							)}
+						</div>
+
+						{/* 现有链接列表 */}
+						<div className="space-y-2">
+							<div className="text-xs font-semibold text-base-content/70">已生成的有效分享链接:</div>
+							{shareLinksLoading ? (
+								<div className="text-center py-4 text-xs text-base-content/40">加载中...</div>
+							) : shareLinks.length === 0 ? (
+								<div className="text-center py-4 text-xs text-base-content/40">当前暂无活跃的分享链接</div>
+							) : (
+								<div className="space-y-2 max-h-48 overflow-y-auto">
+									{shareLinks.map((link) => (
+										<div
+											key={link.id}
+											className="flex items-center justify-between p-2 rounded-lg border border-base-content/10 bg-base-200/30 text-xs"
+										>
+											<div className="truncate mr-2">
+												<div className="font-mono text-[11px] truncate">
+													分享记录 #{link.id} · 创建于 {link.createdAt.slice(0, 16)}
+												</div>
+												<div className="text-[10px] text-base-content/50">
+													过期时间: {link.expiresAt ? link.expiresAt.slice(0, 16) : "永久有效"}
+												</div>
+											</div>
+											<button
+												type="button"
+												onClick={() => handleRevokeShareLink(link.id)}
+												className="btn btn-outline btn-error btn-xs py-0 h-6 min-h-0 text-[10px]"
+											>
+												作废
+											</button>
+										</div>
+									))}
+								</div>
+							)}
+						</div>
+					</div>
+				</div>
+			)}
+
+			{/* ============================================================== */}
+			{/* A09: 公开快照发布弹窗 */}
+			{/* ============================================================== */}
+			{publishModalOpen && currentDoc && (
+				<div className="modal modal-open backdrop-blur-sm z-50">
+					<div className="modal-box max-w-lg rounded-2xl">
+						<div className="flex items-center justify-between mb-4">
+							<h3 className="font-bold text-base flex items-center gap-2">
+								<Globe className="w-4 h-4 text-primary" />
+								公开快照发布
+							</h3>
+							<button
+								type="button"
+								onClick={() => {
+									setPublishModalOpen(false);
+									setCopiedPublishLink(false);
+								}}
+								className="btn btn-ghost btn-circle btn-xs"
+							>
+								<X className="w-4 h-4" />
+							</button>
+						</div>
+
+						<div className="p-3 rounded-xl bg-info/10 border border-info/20 text-xs text-info-content mb-4 space-y-1">
+							<p className="font-semibold">草稿与快照彻底隔离说明 (A09)：</p>
+							<p className="text-base-content/70">
+								公开发布后，系统将把当前不可变版本 (v{currentDoc.version}) 冻结为公开快照。您后续在工作台中继续编辑草稿、保存修改均不会影响已公开的内容，机密与草稿绝对不外泄。
+							</p>
+						</div>
+
+						<div className="space-y-4 text-xs">
+							<div className="flex items-center justify-between p-3 rounded-xl bg-base-200/40 border border-base-content/10">
+								<div>
+									<div className="font-medium">当前发布状态</div>
+									<div className="text-[11px] text-base-content/50">
+										{currentDoc.publishedRevisionId
+											? `已发布快照 (关联不可变版本 ID: ${currentDoc.publishedRevisionId})`
+											: "当前未公开发布（草稿私密）"}
+									</div>
+								</div>
+								<div className="badge badge-sm font-medium">
+									{currentDoc.publishedRevisionId ? "已上线" : "未发布"}
+								</div>
+							</div>
+
+							{currentDoc.publishedRevisionId && (
+								<div className="p-3 bg-base-200/50 rounded-xl border border-base-content/10">
+									<div className="text-xs font-semibold mb-1">公开阅读地址:</div>
+									<div className="flex items-center gap-2">
+										<input
+											type="text"
+											readOnly
+											value={`${window.location.origin}/k/${libraryId}/${currentDoc.id}`}
+											className="input input-bordered input-xs flex-1 font-mono text-[11px]"
+										/>
+										<button
+											type="button"
+											onClick={() => {
+												navigator.clipboard.writeText(
+													`${window.location.origin}/k/${libraryId}/${currentDoc.id}`,
+												);
+												setCopiedPublishLink(true);
+												setTimeout(() => setCopiedPublishLink(false), 2000);
+											}}
+											className="btn btn-xs btn-primary gap-1"
+										>
+											{copiedPublishLink ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+											{copiedPublishLink ? "已复制" : "复制"}
+										</button>
+										<a
+											href={`/k/${libraryId}/${currentDoc.id}`}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="btn btn-xs btn-outline"
+											title="新标签页打开"
+										>
+											<Eye className="w-3 h-3" />
+										</a>
+									</div>
+								</div>
+							)}
+
+							<div className="flex items-center justify-end gap-2 pt-2 border-t border-base-content/10">
+								{currentDoc.publishedRevisionId && (
+									<button
+										type="button"
+										onClick={handleUnpublishSnapshot}
+										disabled={publishing}
+										className="btn btn-outline btn-error btn-sm"
+									>
+										撤回公开快照
+									</button>
+								)}
+								<button
+									type="button"
+									onClick={handlePublishSnapshot}
+									disabled={publishing}
+									className="btn btn-primary btn-sm"
+								>
+									{publishing
+										? "发布中..."
+										: currentDoc.publishedRevisionId
+											? "更新公开快照至当前版本"
+											: "发布当前版本为公开快照"}
+								</button>
+							</div>
 						</div>
 					</div>
 				</div>
