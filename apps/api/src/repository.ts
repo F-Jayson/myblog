@@ -1192,7 +1192,10 @@ export async function updateCommentUser(id: number, input: { account?: string; n
 	if (!fields.length) return false;
 	values.push(id);
 	const [result] = await pool.execute<ResultSetHeader>(`UPDATE comment_users SET ${fields.join(", ")} WHERE id = ?`, values);
-	if (input.password !== undefined || input.isActive === false) await pool.execute("DELETE FROM comment_sessions WHERE user_id = ?", [id]);
+	if (input.password !== undefined || input.isActive === false) {
+		await pool.execute("DELETE FROM comment_sessions WHERE user_id = ?", [id]);
+		await pool.execute("UPDATE kb_user_grants SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL", [id]);
+	}
 	return result.affectedRows > 0;
 }
 
@@ -1206,7 +1209,10 @@ export async function deleteCommentUser(id: number) {
 
 export async function resetCommentUserPassword(id: number, password: string) {
 	const [result] = await pool.execute<ResultSetHeader>("UPDATE comment_users SET password_hash = ? WHERE id = ?", [hashCommentPassword(password), id]);
-	if (result.affectedRows) await pool.execute("DELETE FROM comment_sessions WHERE user_id = ?", [id]);
+	if (result.affectedRows) {
+		await pool.execute("DELETE FROM comment_sessions WHERE user_id = ?", [id]);
+		await pool.execute("UPDATE kb_user_grants SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL", [id]);
+	}
 	return result.affectedRows > 0;
 }
 

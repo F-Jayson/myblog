@@ -4,6 +4,7 @@ import {
 	AlertTriangle,
 	ArrowLeft,
 	BookOpen,
+	Bot,
 	Check,
 	Clock,
 	Database,
@@ -84,10 +85,45 @@ export default function KnowledgeSettings() {
 			setQuota(quotaRes);
 			setTrashedItems(trashRes);
 			setMembers(membersRes);
+			await loadConnections();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "加载知识库信息失败");
 		} finally {
 			setLoading(false);
+		}
+	};
+
+	// AI 客户端连接管理
+	const [connections, setConnections] = useState<Array<{
+		id: number;
+		clientName: string;
+		scopes: string[];
+		allowedLibraryIds: number[];
+		expiresAt: string;
+		lastUsedAt: string | null;
+		createdAt: string;
+	}>>([]);
+	const [revokingConnId, setRevokingConnId] = useState<number | null>(null);
+
+	const loadConnections = async () => {
+		try {
+			const list = await kbApi.listAgentConnections();
+			setConnections(list);
+		} catch (err) {
+			console.error("加载 AI 授权连接失败", err);
+		}
+	};
+
+	const handleRevokeConnection = async (id: number) => {
+		if (!window.confirm("确定要撤销该 AI 客户端的知识库访问权限吗？")) return;
+		setRevokingConnId(id);
+		try {
+			await kbApi.revokeAgentConnection(id);
+			await loadConnections();
+		} catch (err: any) {
+			alert(err.message || "撤销失败");
+		} finally {
+			setRevokingConnId(null);
 		}
 	};
 
@@ -548,7 +584,68 @@ export default function KnowledgeSettings() {
 					)}
 				</div>
 
-				{/* 5. 危险操作区 (软删除整个库) */}
+				{/* 5. AI 客户端连接 (MCP Connections) */}
+				<div className="kb-card">
+					<div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
+						<h2 style={{ fontSize: "1.15rem", fontWeight: 700, margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+							<Bot className="w-5 h-5 text-primary" />
+							AI 客户端连接 (MCP 授权)
+						</h2>
+						<Link to="/knowledge/authorize" className="kb-btn kb-btn-primary kb-btn-xs" style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+							授权新客户端
+						</Link>
+					</div>
+
+					<p style={{ fontSize: "0.85rem", color: "var(--muted-text)", margin: "0 0 1rem 0" }}>
+						您已授权给本地 AI 智能体（如 Claude Desktop、Cursor、Antigravity）的访问凭据。每个凭据拥有独立的 Scope 与库范围。
+					</p>
+
+					{connections.length === 0 ? (
+						<div style={{ textAlign: "center", padding: "1.5rem 0", color: "var(--muted-text)", fontSize: "0.85rem" }}>
+							当前暂无活跃的 AI 客户端连接。可在 AI 客户端运行 <code>kb_connect</code> 并在此网页完成配对。
+						</div>
+					) : (
+						<div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+							{connections.map((conn) => (
+								<div
+									key={conn.id}
+									style={{
+										display: "flex",
+										alignItems: "center",
+										justifyContent: "space-between",
+										padding: "0.75rem 1rem",
+										borderRadius: "0.5rem",
+										border: "1px solid var(--line)",
+										background: "color-mix(in srgb, var(--card-bg-solid) 80%, transparent)",
+									}}
+								>
+									<div>
+										<div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+											<strong style={{ fontSize: "0.9rem" }}>{conn.clientName}</strong>
+											<span style={{ fontSize: "0.7rem", padding: "0.1rem 0.35rem", borderRadius: "0.25rem", background: "color-mix(in srgb, var(--primary) 15%, transparent)", color: "var(--primary)" }}>
+												{conn.scopes.join(", ")}
+											</span>
+										</div>
+										<div style={{ fontSize: "0.75rem", color: "var(--muted-text)", marginTop: "0.25rem" }}>
+											到期时间: {conn.expiresAt.slice(0, 16)} · 最后活跃: {conn.lastUsedAt ? conn.lastUsedAt.slice(0, 16) : "尚未调用"}
+										</div>
+									</div>
+									<button
+										type="button"
+										className="kb-btn kb-btn-ghost kb-btn-xs"
+										style={{ color: "var(--error)" }}
+										disabled={revokingConnId === conn.id}
+										onClick={() => handleRevokeConnection(conn.id)}
+									>
+										{revokingConnId === conn.id ? "撤销中..." : "撤销授权"}
+									</button>
+								</div>
+							))}
+						</div>
+					)}
+				</div>
+
+				{/* 6. 危险操作区 (软删除整个库) */}
 				<div className="kb-card" style={{ borderColor: "color-mix(in srgb, #ef4444 30%, var(--line))", background: "color-mix(in srgb, #ef4444 4%, var(--card-bg))" }}>
 					<h2 style={{ fontSize: "1.15rem", fontWeight: 700, margin: "0 0 0.5rem 0", color: "#ef4444", display: "flex", alignItems: "center", gap: "0.5rem" }}>
 						<ShieldAlert className="w-5 h-5 text-error" />

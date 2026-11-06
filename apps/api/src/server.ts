@@ -34,7 +34,7 @@ import { pool } from "./db.js";
 import { getDatabaseStatus, pingDatabase } from "./db.js";
 import { getProcessSnapshot, getRequestMetrics, recordRequest } from "./telemetry.js";
 import { CompilerError, executeCompiler, formatCompilerCode, listCompilerLanguages } from "./compiler.js";
-import { knowledgeRoutes, UserDeletionBlockedError, recordUserDailyLogin, recordWhitelistActivity } from "./knowledge/index.js";
+import { knowledgeRoutes, kbAgentRoutes, UserDeletionBlockedError, recordUserDailyLogin, recordWhitelistActivity } from "./knowledge/index.js";
 import { gameRouter } from "./games.js";
 import { locateIp, warmIpLocation } from "./ipLocation.js";
 import {
@@ -485,6 +485,7 @@ app.get("/api/admin/me", requireAdmin, (req: RequestWithAdmin, res) => {
 
 app.use("/api/games", requireFeature("gamesEnabled", "小游戏当前已关闭"), loadCommentUser, gameRouter);
 app.use("/api/knowledge", loadCommentUser, knowledgeRoutes);
+app.use("/api/kb-agent", loadCommentUser, kbAgentRoutes);
 
 app.get("/api/features", async (_req, res, next) => {
 	try {

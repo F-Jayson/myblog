@@ -871,6 +871,7 @@ export async function getAuthorizedAttachment(
 	attachmentId: number,
 ): Promise<{
 	id: number;
+	libraryId: number;
 	filename: string;
 	mimeType: string;
 	byteSize: number;
@@ -886,6 +887,7 @@ export async function getAuthorizedAttachment(
 
 	return {
 		id: att.id,
+		libraryId: att.libraryId,
 		filename: att.filename,
 		mimeType: att.mimeType,
 		byteSize: att.byteSize,
@@ -1177,7 +1179,19 @@ export async function getSharedDocumentSnapshotService(
 
 	return {
 		document: doc,
-		library: lib,
+		library: {
+			id: lib.id,
+			ownerUserId: lib.ownerUserId,
+			title: lib.title,
+			description: "",
+			coverUrl: "",
+			visibility: lib.visibility,
+			discoveryEnabled: lib.discoveryEnabled,
+			publicCommentsEnabled: lib.publicCommentsEnabled,
+			documentCount: 0,
+			createdAt: "",
+			updatedAt: "",
+		},
 		includeDescendants: link.includeDescendants,
 	};
 }

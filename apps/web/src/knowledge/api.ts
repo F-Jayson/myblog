@@ -354,4 +354,33 @@ export const kbApi = {
 			method: "POST",
 		});
 	},
+
+	// =========================================================================
+	// P4: MCP 智能体连接管理
+	// =========================================================================
+
+	async listAgentConnections(): Promise<Array<{
+		id: number;
+		clientName: string;
+		scopes: string[];
+		allowedLibraryIds: number[];
+		expiresAt: string;
+		lastUsedAt: string | null;
+		createdAt: string;
+	}>> {
+		const res = await kbRequest<{ connections: any[] }>("/api/knowledge/agent/connections");
+		return res.connections;
+	},
+
+	async revokeAgentConnection(grantId: number): Promise<void> {
+		await kbRequest(`/api/knowledge/agent/connections/${grantId}`, {
+			method: "DELETE",
+		});
+	},
+
+	async revokeAllAgentConnections(): Promise<void> {
+		await kbRequest("/api/knowledge/agent/connections", {
+			method: "DELETE",
+		});
+	},
 };
