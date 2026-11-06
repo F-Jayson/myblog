@@ -321,4 +321,12 @@ describe("P4: 普通用户本地MCP适配器、RFC 8628设备流、细粒度Scop
 		assert.ok(typeof cleanedRequests === "number");
 		assert.ok(typeof cleanedGrants === "number");
 	});
+
+	after(async () => {
+		try {
+			await pool.end();
+		} catch {
+			// ignore pool close errors
+		}
+	});
 });

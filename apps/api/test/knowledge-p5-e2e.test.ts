@@ -344,4 +344,12 @@ describe("P5: V1 综合端到端全链路验收测试 (覆盖 A01–A22 闭环)"
 		const restored = await getKnowledgeDocument(ownerUserId, docId);
 		assert.equal(restored.id, docId);
 	});
+
+	after(async () => {
+		try {
+			await pool.end();
+		} catch {
+			// ignore pool close errors
+		}
+	});
 });

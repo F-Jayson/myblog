@@ -316,4 +316,12 @@ describe("P3: 协作、受限ACL、草稿公开彻底隔离、分享链接与评
 		const targetComment = updatedComments.find((c) => c.id === commentId);
 		assert.ok(targetComment?.resolvedAt !== null);
 	});
+
+	after(async () => {
+		try {
+			await pool.end();
+		} catch {
+			// ignore pool close errors
+		}
+	});
 });

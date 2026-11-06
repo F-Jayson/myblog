@@ -8,10 +8,12 @@
     "build": "tsc -p tsconfig.json",
     "type-check": "tsc -p tsconfig.json --noEmit",
     "db:migrate": "tsx src/cli.ts migrate",
-    "db:seed": "tsx src/cli.ts seed"
+    "db:seed": "tsx src/cli.ts seed",
+    "test:knowledge": "node --test --import tsx test/knowledge-p*.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1159.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",

@@ -225,4 +225,12 @@ describe("P2: 知识库单人闭环、文档树、Markdown 保存与版本冲突
 		const afterRestoreList = await listTrashedDocumentsService(ownerUserId, libraryId);
 		assert.ok(!afterRestoreList.some((t) => t.id === documentId));
 	});
+
+	after(async () => {
+		try {
+			await pool.end();
+		} catch {
+			// ignore pool close errors
+		}
+	});
 });

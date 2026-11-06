@@ -9,3 +9,6 @@ export * from "./service.js";
 export * from "./routes.js";
 export * from "./agentStore.js";
 export * from "./agentRoutes.js";
+export * from "./remoteOAuthStore.js";
+export * from "./remoteOAuthRoutes.js";
+export * from "./remoteMcpServer.js";
