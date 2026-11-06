@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS kb_revisions (
   CONSTRAINT fk_kb_revisions_doc FOREIGN KEY (document_id) REFERENCES kb_documents(id) ON DELETE CASCADE,
   UNIQUE KEY uniq_doc_version (document_id, version),
   INDEX idx_revisions_created (document_id, created_at),
-  FULLTEXT KEY ft_revision_search (title, markdown) /*!50100 WITH PARSER ngram */
+  FULLTEXT KEY ft_revision_search (title, markdown)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 8. 附件元数据与版本关联表
