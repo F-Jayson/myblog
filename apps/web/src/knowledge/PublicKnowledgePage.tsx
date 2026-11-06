@@ -136,7 +136,7 @@ export default function PublicKnowledgePage() {
 	}
 
 	return (
-		<div className="kb-container" style={{ maxWidth: "56rem", margin: "2rem auto 4rem auto" }}>
+		<div className="kb-ui kb-container" style={{ maxWidth: "56rem", margin: "0 auto 2rem" }}>
 			{/* 顶部面包屑与通道标识 */}
 			<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.5rem", flexWrap: "wrap", gap: "0.75rem" }}>
 				<Link to="/" className="kb-btn kb-btn-ghost kb-btn-sm">

@@ -44,6 +44,7 @@ import {
 	getDocumentRecord,
 	getDocumentRevisions,
 	getKbEntitlement,
+	hasKbAdminGrant,
 	getLibraryMemberRole,
 	getLibraryRecord,
 	getLibraryTreeNodes,
@@ -191,6 +192,7 @@ export async function getUserEligibility(userId: number, now = new Date()): Prom
 
 	// 6. 读取既有资格并推演状态机
 	const existing = await getKbEntitlement(userId);
+	const adminGranted = await hasKbAdminGrant(userId);
 	const statusOutcome = computeEntitlementStatus({
 		isSuspended: !regInfo.isActive,
 		isAgeQualified: isAgeQual,
@@ -199,11 +201,16 @@ export async function getUserEligibility(userId: number, now = new Date()): Prom
 		graceStartedAt: existing?.graceStartedAt ?? null,
 		now,
 	});
+	const grantedOpen = adminGranted && regInfo.isActive && statusOutcome.status !== "suspended";
+	const effectiveStatus = grantedOpen
+		? (existing?.activatedAt ? "active" : "eligible")
+		: statusOutcome.status;
+	const effectiveGraceStartedAt = grantedOpen ? null : statusOutcome.graceStartedAt;
 
 	// 7. 持久化资格快照
 	const entitlementSnapshot: KbEntitlement = {
 		userId,
-		status: statusOutcome.status,
+		status: effectiveStatus,
 		score,
 		loginDaysD: d,
 		serviceScoreU: u,
@@ -212,7 +219,7 @@ export async function getUserEligibility(userId: number, now = new Date()): Prom
 		statDateCutoff: cutoffDate,
 		ruleVersion: KB_DEFAULTS.RULE_VERSION,
 		activatedAt: existing?.activatedAt ?? null,
-		graceStartedAt: statusOutcome.graceStartedAt ? (typeof statusOutcome.graceStartedAt === "object" ? statusOutcome.graceStartedAt.toISOString() : statusOutcome.graceStartedAt) : null,
+		graceStartedAt: effectiveGraceStartedAt ? (typeof effectiveGraceStartedAt === "object" ? effectiveGraceStartedAt.toISOString() : effectiveGraceStartedAt) : null,
 		restrictionReason: !regInfo.isActive ? "账号已被禁用" : null,
 	};
 	await upsertKbEntitlement(entitlementSnapshot);
@@ -228,8 +235,8 @@ export async function getUserEligibility(userId: number, now = new Date()): Prom
 	});
 
 	let graceDaysRemaining: number | null = null;
-	if (statusOutcome.status === "grace" && statusOutcome.graceStartedAt) {
-		const graceStartMs = new Date(statusOutcome.graceStartedAt).getTime();
+	if (effectiveStatus === "grace" && effectiveGraceStartedAt) {
+		const graceStartMs = new Date(effectiveGraceStartedAt).getTime();
 		const elapsed = now.getTime() - graceStartMs;
 		const remainingMs = Math.max(0, KB_DEFAULTS.GRACE_PERIOD_MS - elapsed);
 		graceDaysRemaining = Math.ceil(remainingMs / (86400 * 1000));
@@ -237,7 +244,7 @@ export async function getUserEligibility(userId: number, now = new Date()): Prom
 
 	return {
 		userId,
-		status: statusOutcome.status,
+		status: effectiveStatus,
 		isQualified: isAgeQual && isActQualified && regInfo.isActive,
 		isAgeQualified: isAgeQual,
 		isActivityQualified: isActQualified,
@@ -260,6 +267,7 @@ export async function getUserEligibility(userId: number, now = new Date()): Prom
 		statDateCutoff: cutoffDate,
 		graceDaysRemaining,
 		ruleVersion: KB_DEFAULTS.RULE_VERSION,
+		adminGranted: grantedOpen,
 	};
 }
 

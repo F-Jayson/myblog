@@ -1175,8 +1175,8 @@ export async function verifyCommentUserPassword(id: number, password: string) {
 }
 
 export async function listAdminCommentUsers() {
-	const [rows] = await pool.query<RowDataPacket[]>("SELECT u.id, u.account, u.nickname, u.email, u.avatar_url AS avatar, u.is_active AS isActive, u.created_at AS createdAt, u.last_login_at AS lastLoginAt, COUNT(c.id) AS commentCount FROM comment_users u LEFT JOIN comments c ON c.user_id = u.id GROUP BY u.id ORDER BY u.created_at DESC");
-	return rows.map((row) => { const count = Number(row.commentCount); return { id: Number(row.id), account: String(row.account), nickname: String(row.nickname), email: row.email ? String(row.email) : null, avatar: String(row.avatar), isActive: Boolean(Number(row.isActive)), status: Number(row.isActive) ? "active" : "disabled", createdAt: String(row.createdAt), lastLoginAt: row.lastLoginAt ? String(row.lastLoginAt) : null, commentCount: count, commentsCount: count }; });
+	const [rows] = await pool.query<RowDataPacket[]>("SELECT u.id, u.account, u.nickname, u.email, u.avatar_url AS avatar, u.is_active AS isActive, u.created_at AS createdAt, u.last_login_at AS lastLoginAt, COUNT(c.id) AS commentCount, IF(g.user_id IS NULL, 0, 1) AS knowledgeOpen FROM comment_users u LEFT JOIN comments c ON c.user_id = u.id LEFT JOIN kb_admin_grants g ON g.user_id = u.id GROUP BY u.id, g.user_id ORDER BY u.created_at DESC");
+	return rows.map((row) => { const count = Number(row.commentCount); return { id: Number(row.id), account: String(row.account), nickname: String(row.nickname), email: row.email ? String(row.email) : null, avatar: String(row.avatar), isActive: Boolean(Number(row.isActive)), status: Number(row.isActive) ? "active" : "disabled", createdAt: String(row.createdAt), lastLoginAt: row.lastLoginAt ? String(row.lastLoginAt) : null, commentCount: count, commentsCount: count, knowledgeOpen: Boolean(Number(row.knowledgeOpen)) }; });
 }
 
 export async function updateCommentUser(id: number, input: { account?: string; nickname?: string; email?: string | null; avatar?: string | null; password?: string; isActive?: boolean; isAdmin?: boolean }) {

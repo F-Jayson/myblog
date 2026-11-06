@@ -835,6 +835,14 @@ CREATE TABLE IF NOT EXISTS kb_entitlements (
   CONSTRAINT fk_kb_entitlements_user FOREIGN KEY (user_id) REFERENCES comment_users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 管理员直接开通，不参与活跃度门槛计算
+CREATE TABLE IF NOT EXISTS kb_admin_grants (
+  user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  granted_by BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_kb_admin_grants_user FOREIGN KEY (user_id) REFERENCES comment_users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 3. 知识库主表 (owner 外键 RESTRICT，杜绝级联误删整库)
 CREATE TABLE IF NOT EXISTS knowledge_bases (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,

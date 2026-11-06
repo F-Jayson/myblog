@@ -216,6 +216,34 @@ function formatMysqlDatetime(val: Date | string | null | undefined): string | nu
 }
 
 /**
+ * 管理员是否直接开通了该用户的知识库
+ */
+export async function hasKbAdminGrant(userId: number, connection?: PoolConnection): Promise<boolean> {
+	const conn = connection ?? pool;
+	const [[row]] = await conn.query<RowDataPacket[]>(
+		"SELECT user_id FROM kb_admin_grants WHERE user_id = ?",
+		[userId],
+	);
+	return Boolean(row);
+}
+
+/**
+ * 打开或关闭管理员直通资格。关闭后恢复按活跃度计算。
+ */
+export async function setKbAdminGrant(userId: number, enabled: boolean, grantedBy: number | null, connection?: PoolConnection): Promise<void> {
+	const conn = connection ?? pool;
+	if (!enabled) {
+		await conn.execute("DELETE FROM kb_admin_grants WHERE user_id = ?", [userId]);
+		return;
+	}
+	await conn.execute(
+		`INSERT INTO kb_admin_grants (user_id, granted_by) VALUES (?, ?)
+		 ON DUPLICATE KEY UPDATE granted_by = VALUES(granted_by)`,
+		[userId, grantedBy],
+	);
+}
+
+/**
  * 获取知识库资格记录
  */
 export async function getKbEntitlement(

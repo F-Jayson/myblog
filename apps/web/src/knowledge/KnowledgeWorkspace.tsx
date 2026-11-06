@@ -563,7 +563,7 @@ export default function KnowledgeWorkspace() {
 	};
 
 	return (
-		<div className="flex h-[calc(100vh-4.5rem)] overflow-hidden bg-base-100">
+		<div className="kb-ui flex overflow-hidden bg-base-100">
 			{/* ============================================================== */}
 			{/* 左侧栏：目录树与库导航 */}
 			{/* ============================================================== */}

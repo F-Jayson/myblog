@@ -120,6 +120,7 @@ export interface KbEligibilityResponse {
 	statDateCutoff: string;
 	graceDaysRemaining: number | null;
 	ruleVersion: string;
+	adminGranted?: boolean;
 }
 
 export interface KbQuotaUsage {

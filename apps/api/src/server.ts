@@ -37,6 +37,7 @@ import { CompilerError, executeCompiler, formatCompilerCode, listCompilerLanguag
 import {
 	knowledgeRoutes,
 	kbAgentRoutes,
+	setKbAdminGrant,
 	UserDeletionBlockedError,
 	recordUserDailyLogin,
 	recordWhitelistActivity,
@@ -2161,6 +2162,20 @@ async function updateCommentUserRoute(req: Request, res: Response, next: NextFun
 		res.status(ok ? 204 : 404).end();
 	} catch (error) { next(error); }
 }
+const adminKnowledgeGrantInput = z.object({ enabled: z.boolean() });
+async function setCommentUserKnowledgeRoute(req: RequestWithAdmin, res: Response, next: NextFunction) {
+	try {
+		const id = parseCommentUserId(String(req.params.id));
+		if (!id) { res.status(400).json({ error: "用户编号无效" }); return; }
+		const { enabled } = adminKnowledgeGrantInput.parse(req.body);
+		const [rows] = await pool.query("SELECT id FROM comment_users WHERE id = ? LIMIT 1", [id]);
+		if (!Array.isArray(rows) || rows.length === 0) { res.status(404).json({ error: "用户不存在" }); return; }
+		await setKbAdminGrant(id, enabled, req.adminUser?.id ?? null);
+		res.json({ id, knowledgeOpen: enabled });
+	} catch (error) { next(error); }
+}
+app.patch("/api/admin/users/:id/knowledge", requireAdmin, setCommentUserKnowledgeRoute);
+app.patch("/api/admin/comment-users/:id/knowledge", requireAdmin, setCommentUserKnowledgeRoute);
 app.patch("/api/admin/users/:id", requireAdmin, updateCommentUserRoute);
 app.put("/api/admin/users/:id", requireAdmin, updateCommentUserRoute);
 app.patch("/api/admin/comment-users/:id", requireAdmin, updateCommentUserRoute);

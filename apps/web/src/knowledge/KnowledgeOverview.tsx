@@ -147,12 +147,19 @@ export default function KnowledgeOverview() {
 							<div>
 								<div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
 									<h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 700 }}>
-										{eligibility.status === "active" && "知识库已开通 (正常使用中)"}
-										{eligibility.status === "eligible" && "准入达标，可创建个人知识库"}
-										{eligibility.status === "grace" && "活跃度下降 (14 天宽限期中)"}
-										{eligibility.status === "read_only" && "宽限期到期 (只读保护模式)"}
-										{eligibility.status === "locked" && "尚未达到知识库开通门槛"}
-										{eligibility.status === "suspended" && "账号权限受限"}
+										{eligibility.adminGranted && (eligibility.status === "active" || eligibility.status === "eligible")
+											? "管理员已直接开通知识库"
+											: eligibility.status === "active"
+												? "知识库已开通 (正常使用中)"
+												: eligibility.status === "eligible"
+													? "准入达标，可创建个人知识库"
+													: eligibility.status === "grace"
+														? "活跃度下降 (14 天宽限期中)"
+														: eligibility.status === "read_only"
+															? "宽限期到期 (只读保护模式)"
+															: eligibility.status === "suspended"
+																? "账号权限受限"
+																: "尚未达到知识库开通门槛"}
 									</h3>
 									<span className="kb-status-badge">
 										综合活跃分: {eligibility.metrics.score} 分
@@ -166,7 +173,9 @@ export default function KnowledgeOverview() {
 									{eligibility.status === "locked" &&
 										"要求账号注册满 30 天且近 30 个自然日活跃综合评分达标。"}
 									{(eligibility.status === "active" || eligibility.status === "eligible") &&
-										"您拥有独立的 100 MiB 知识库存储额度与版本追溯保护。"}
+										(eligibility.adminGranted
+											? "管理员已跳过注册时长和活跃度门槛。收回开通后，将重新按活跃度计算资格。"
+											: "您拥有独立的 100 MiB 知识库存储额度与版本追溯保护。")}
 								</p>
 							</div>
 						</div>
