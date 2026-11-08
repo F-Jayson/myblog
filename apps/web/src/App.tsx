@@ -336,11 +336,21 @@ type ButtonProps = {
 	onClick?: () => void;
 	active?: boolean;
 	className?: string;
+	onMouseEnter?: () => void;
+	onMouseLeave?: () => void;
 };
 
-function IconButton({ children, title, onClick, active, className = "" }: ButtonProps) {
+function IconButton({ children, title, onClick, active, className = "", onMouseEnter, onMouseLeave }: ButtonProps) {
 	return (
-		<button type="button" title={title} aria-label={title} onClick={onClick} className={`icon-button ${active ? "is-active" : ""} ${className}`}>
+		<button
+			type="button"
+			title={title}
+			aria-label={title}
+			onClick={onClick}
+			onMouseEnter={onMouseEnter}
+			onMouseLeave={onMouseLeave}
+			className={`icon-button ${active ? "is-active" : ""} ${className}`}
+		>
 			{children}
 		</button>
 	);
@@ -386,6 +396,8 @@ type DisplaySettingsProps = {
 	setOverlayBlur: (value: number) => void;
 	overlayCardOpacity: number;
 	setOverlayCardOpacity: (value: number) => void;
+	onMouseEnter?: () => void;
+	onMouseLeave?: () => void;
 };
 
 function SettingToggle({ icon: Icon, label, checked, onChange }: { icon: typeof Info; label: string; checked: boolean; onChange: (value: boolean) => void }) {
@@ -400,7 +412,7 @@ function SettingsSection({ title, onReset, children }: { title: string; onReset?
 
 function DisplaySettingsPanel(props: DisplaySettingsProps) {
 	const [tab, setTab] = useState<"appearance" | "wallpaper" | "effects">("appearance");
-	return <div className="floating-panel settings-panel settings-panel-rich">
+	return <div className="floating-panel settings-panel settings-panel-rich" onMouseEnter={props.onMouseEnter} onMouseLeave={props.onMouseLeave}>
 		<div className="settings-tabs"><button type="button" className={tab === "appearance" ? "selected" : ""} onClick={() => setTab("appearance")}><Palette size={17} />外观</button><button type="button" className={tab === "wallpaper" ? "selected" : ""} onClick={() => setTab("wallpaper")}><Image size={17} />壁纸</button><button type="button" className={tab === "effects" ? "selected" : ""} onClick={() => setTab("effects")}><Flower2 size={17} />特效</button></div>
 		{tab === "appearance" ? <>
 			<SettingsSection title="主题色相" onReset={() => props.setHue(240)}><div className="hue-heading"><span>{props.hue}</span></div><input className="hue-slider" aria-label="主题色相" type="range" min="0" max="360" step="5" value={props.hue} onChange={(event) => props.setHue(Number(event.target.value))} /></SettingsSection>
@@ -500,23 +512,19 @@ function Header({ dark, setDark, wallpaper, setWallpaper, settings }: { dark: bo
 					{music ? <IconButton title="音乐播放器" onClick={() => { setMusicOpen((open) => !open); setSearchOpen(false); setSettingsOpen(false); }} active={musicOpen}><Music2 size={19} /></IconButton> : null}
 					{music ? <IconButton title={playing ? "暂停音乐" : "播放音乐"} onClick={toggle}>{playing ? <Pause size={18} /> : <Play size={18} />}</IconButton> : null}
 					<IconButton title={dark ? "切换为浅色模式" : "切换为深色模式"} onClick={() => setDark(!dark)}>{dark ? <Moon size={19} /> : <Sun size={19} />}</IconButton>
-					<div
-						className="nav-settings-wrap"
+					<IconButton
+						title="显示设置"
+						onClick={() => {
+							setSettingsOpen((open) => !open);
+							setSearchOpen(false);
+							setMusicOpen(false);
+						}}
 						onMouseEnter={handleSettingsMouseEnter}
 						onMouseLeave={handleSettingsMouseLeave}
+						active={settingsOpen}
 					>
-						<IconButton
-							title="显示设置"
-							onClick={() => {
-								setSettingsOpen((open) => !open);
-								setSearchOpen(false);
-								setMusicOpen(false);
-							}}
-							active={settingsOpen}
-						>
-							<Palette size={19} />
-						</IconButton>
-					</div>
+						<Palette size={19} />
+					</IconButton>
 					<IconButton title="打开菜单" className="mobile-menu-button" onClick={() => setMobileOpen(true)}><Menu size={21} /></IconButton>
 				</div>
 				{searchOpen ? (
@@ -527,13 +535,11 @@ function Header({ dark, setDark, wallpaper, setWallpaper, settings }: { dark: bo
 					</form>
 				) : null}
 				{settingsOpen ? (
-					<div
-						className="nav-settings-panel-wrap"
+					<DisplaySettingsPanel
+						{...settings}
 						onMouseEnter={handleSettingsMouseEnter}
 						onMouseLeave={handleSettingsMouseLeave}
-					>
-						<DisplaySettingsPanel {...settings} />
-					</div>
+					/>
 				) : null}
 				{musicOpen ? <div className="floating-panel music-panel"><WidgetTitle icon={Music2}>背景音乐</WidgetTitle><ConfiguredMusicPlayer /></div> : null}
 			</nav>
