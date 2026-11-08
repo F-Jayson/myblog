@@ -9,6 +9,7 @@ import {
 	executeUserStorageMigration,
 	getActiveStorageMigration,
 	createUserStorageItem,
+	adminSetUserStorageLocation,
 	USER_SPACE_SERVER_LIMIT_BYTES,
 	USER_SPACE_CF_LIMIT_BYTES,
 } from "../src/repository.js";
@@ -154,5 +155,34 @@ describe("用户自主选择存储位置与资源迁移功能测试", { concurre
 		const newToken = rows[0].public_token;
 		assert.ok(newToken);
 		assert.notEqual(newToken, oldToken, "原有资源链接必须失效，生成全新 token");
+	});
+
+	it("7. 管理员控制用户存储位置与数据迁移（可绕过冷却期与直接配置）", async () => {
+		// 用户 A 当前已切换到 server，冷却期未到（普通用户会被拦截）
+		await assert.rejects(
+			async () => executeUserStorageMigration(testUserAId, "cloudflare"),
+			/每个用户每个月只能更改一次存储位置/
+		);
+
+		// 管理员通过 adminSetUserStorageLocation 绕过冷却期执行迁移 -> cloudflare
+		const adminResult = await adminSetUserStorageLocation(testUserAId, "cloudflare", {
+			migrateData: true,
+			ignoreCooldown: true,
+		});
+		assert.equal(adminResult.success, true);
+		assert.equal(adminResult.targetLocation, "cloudflare");
+
+		const userAfterAdmin = await getCommentUserById(testUserAId);
+		assert.equal(userAfterAdmin?.storageLocation, "cloudflare");
+
+		// 管理员仅修改配置，不执行物理迁移
+		const configOnlyResult = await adminSetUserStorageLocation(testUserAId, "server", {
+			migrateData: false,
+		});
+		assert.equal(configOnlyResult.success, true);
+		assert.equal(configOnlyResult.migrated, false);
+
+		const userFinal = await getCommentUserById(testUserAId);
+		assert.equal(userFinal?.storageLocation, "server");
 	});
 });

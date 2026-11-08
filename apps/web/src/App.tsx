@@ -403,7 +403,7 @@ function DisplaySettingsPanel(props: DisplaySettingsProps) {
 	return <div className="floating-panel settings-panel settings-panel-rich">
 		<div className="settings-tabs"><button type="button" className={tab === "appearance" ? "selected" : ""} onClick={() => setTab("appearance")}><Palette size={17} />外观</button><button type="button" className={tab === "wallpaper" ? "selected" : ""} onClick={() => setTab("wallpaper")}><Image size={17} />壁纸</button><button type="button" className={tab === "effects" ? "selected" : ""} onClick={() => setTab("effects")}><Flower2 size={17} />特效</button></div>
 		{tab === "appearance" ? <>
-			<SettingsSection title="主题色相" onReset={() => props.setHue(165)}><div className="hue-heading"><span>{props.hue}</span></div><input className="hue-slider" aria-label="主题色相" type="range" min="0" max="360" step="5" value={props.hue} onChange={(event) => props.setHue(Number(event.target.value))} /></SettingsSection>
+			<SettingsSection title="主题色相" onReset={() => props.setHue(240)}><div className="hue-heading"><span>{props.hue}</span></div><input className="hue-slider" aria-label="主题色相" type="range" min="0" max="360" step="5" value={props.hue} onChange={(event) => props.setHue(Number(event.target.value))} /></SettingsSection>
 			<SettingsSection title="文章布局" onReset={() => props.setLayout("list")}><div className="settings-choice-grid"><button type="button" className={props.layout === "list" ? "selected" : ""} onClick={() => props.setLayout("list")}><List size={19} />列表</button><button type="button" className={props.layout === "grid" ? "selected" : ""} onClick={() => props.setLayout("grid")}><Library size={19} />网格</button></div></SettingsSection>
 			<SettingsSection title="卡片样式" onReset={() => { props.setCardBorder(false); props.setCardFollowTheme(false); }}><SettingToggle icon={Library} label="卡片边框和阴影" checked={props.cardBorder} onChange={props.setCardBorder} /><SettingToggle icon={Palette} label="卡片跟随主题色" checked={props.cardFollowTheme} onChange={props.setCardFollowTheme} /></SettingsSection>
 		</> : null}
@@ -429,12 +429,33 @@ function Header({ dark, setDark, wallpaper, setWallpaper, settings }: { dark: bo
 	const [mobileOpen, setMobileOpen] = useState(false);
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const settingsHoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [musicOpen, setMusicOpen] = useState(false);
 	const [query, setQuery] = useState("");
 	const site = useSite();
 	const { music, playing, toggle } = useContext(MusicPlaybackContext);
 	const { features } = useAuth();
 	const navigate = useNavigate();
+
+	const handleSettingsMouseEnter = () => {
+		if (settingsHoverTimeoutRef.current) {
+			clearTimeout(settingsHoverTimeoutRef.current);
+			settingsHoverTimeoutRef.current = null;
+		}
+		setSettingsOpen(true);
+		setSearchOpen(false);
+		setMusicOpen(false);
+	};
+
+	const handleSettingsMouseLeave = () => {
+		if (settingsHoverTimeoutRef.current) {
+			clearTimeout(settingsHoverTimeoutRef.current);
+		}
+		settingsHoverTimeoutRef.current = setTimeout(() => {
+			setSettingsOpen(false);
+		}, 250);
+	};
+
 	const submitSearch = (event: FormEvent) => {
 		event.preventDefault();
 		const term = query.trim();
@@ -479,7 +500,23 @@ function Header({ dark, setDark, wallpaper, setWallpaper, settings }: { dark: bo
 					{music ? <IconButton title="音乐播放器" onClick={() => { setMusicOpen((open) => !open); setSearchOpen(false); setSettingsOpen(false); }} active={musicOpen}><Music2 size={19} /></IconButton> : null}
 					{music ? <IconButton title={playing ? "暂停音乐" : "播放音乐"} onClick={toggle}>{playing ? <Pause size={18} /> : <Play size={18} />}</IconButton> : null}
 					<IconButton title={dark ? "切换为浅色模式" : "切换为深色模式"} onClick={() => setDark(!dark)}>{dark ? <Moon size={19} /> : <Sun size={19} />}</IconButton>
-					<IconButton title="显示设置" onClick={() => { setSettingsOpen((open) => !open); setSearchOpen(false); setMusicOpen(false); }} active={settingsOpen}><Palette size={19} /></IconButton>
+					<div
+						className="nav-settings-wrap"
+						onMouseEnter={handleSettingsMouseEnter}
+						onMouseLeave={handleSettingsMouseLeave}
+					>
+						<IconButton
+							title="显示设置"
+							onClick={() => {
+								setSettingsOpen((open) => !open);
+								setSearchOpen(false);
+								setMusicOpen(false);
+							}}
+							active={settingsOpen}
+						>
+							<Palette size={19} />
+						</IconButton>
+					</div>
 					<IconButton title="打开菜单" className="mobile-menu-button" onClick={() => setMobileOpen(true)}><Menu size={21} /></IconButton>
 				</div>
 				{searchOpen ? (
@@ -489,7 +526,15 @@ function Header({ dark, setDark, wallpaper, setWallpaper, settings }: { dark: bo
 						<button type="submit" aria-label="提交搜索"><ChevronRight size={19} /></button>
 					</form>
 				) : null}
-				{settingsOpen ? <DisplaySettingsPanel {...settings} /> : null}
+				{settingsOpen ? (
+					<div
+						className="nav-settings-panel-wrap"
+						onMouseEnter={handleSettingsMouseEnter}
+						onMouseLeave={handleSettingsMouseLeave}
+					>
+						<DisplaySettingsPanel {...settings} />
+					</div>
+				) : null}
 				{musicOpen ? <div className="floating-panel music-panel"><WidgetTitle icon={Music2}>背景音乐</WidgetTitle><ConfiguredMusicPlayer /></div> : null}
 			</nav>
 			{mobileOpen ? (
@@ -1450,7 +1495,7 @@ function SiteShell() {
 	const [siteLoaded, setSiteLoaded] = useState(false);
 	const [dark, setDark] = useState(() => localStorage.getItem("site-theme") === "dark" || (!localStorage.getItem("site-theme") && window.matchMedia("(prefers-color-scheme: dark)").matches));
 	const [wallpaper, setWallpaperState] = useState(() => localStorage.getItem("site-wallpaper") ?? "banner");
-	const [hue, setHueState] = useState(() => Number(localStorage.getItem("site-hue") ?? 165));
+	const [hue, setHueState] = useState(() => Number(localStorage.getItem("site-hue") ?? 240));
 	const [layout, setLayout] = useState<"list" | "grid">(() => (localStorage.getItem("site-layout") as "list" | "grid") ?? "list");
 	const [cardBorder, setCardBorder] = useState(() => localStorage.getItem("site-card-border") === "true");
 	const [cardFollowTheme, setCardFollowTheme] = useState(() => localStorage.getItem("site-card-theme") === "true");

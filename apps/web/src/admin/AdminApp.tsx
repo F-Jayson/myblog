@@ -11,6 +11,7 @@ import {
 import {
   Activity,
   Archive,
+  ArrowRightLeft,
   Ban,
   Bell,
   BookOpen,
@@ -21,6 +22,7 @@ import {
   ChevronRight,
   CircleHelp,
   Clock3,
+  Cloud,
   Cpu,
   Database,
   Eye,
@@ -3578,24 +3580,48 @@ function AdminCommentSettings() {
   </div>;
 }
 
-type SiteUser = { id: string | number; username: string; nickname: string; email: string; avatar: string; role: string; isActive: boolean; status: string; createdAt: string | null; lastLoginAt: string | null; commentsCount: number; ip: string; knowledgeOpen: boolean };
-type SiteUserDraft = { username: string; nickname: string; email: string; avatar: string; password: string; isActive: boolean; role: string };
-const EMPTY_SITE_USER_DRAFT: SiteUserDraft = { username: "", nickname: "", email: "", avatar: "", password: "", isActive: true, role: "user" };
+type SiteUser = { id: string | number; username: string; nickname: string; email: string; avatar: string; role: string; isActive: boolean; status: string; createdAt: string | null; lastLoginAt: string | null; commentsCount: number; ip: string; knowledgeOpen: boolean; storageLocation?: "server" | "cloudflare" | null; storageLocationSwitchedAt?: string | null };
+type SiteUserDraft = { username: string; nickname: string; email: string; avatar: string; password: string; isActive: boolean; role: string; storageLocation: "server" | "cloudflare" | "" };
+const EMPTY_SITE_USER_DRAFT: SiteUserDraft = { username: "", nickname: "", email: "", avatar: "", password: "", isActive: true, role: "user", storageLocation: "" };
 function normalizeSiteUsers(value: unknown): SiteUser[] {
   const records = Array.isArray(value) ? value : value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).items) ? (value as { items: unknown[] }).items : [];
-  return records.flatMap((record) => { if (!record || typeof record !== "object") return []; const item = record as Record<string, unknown>; const rawId = item.id ?? item.userId; if (rawId === undefined || rawId === null) return []; return [{ id: typeof rawId === "string" || typeof rawId === "number" ? rawId : String(rawId), username: String(item.username ?? item.account ?? ""), nickname: String(item.nickname ?? item.displayName ?? item.name ?? item.username ?? ""), email: String(item.email ?? ""), avatar: String(item.avatar ?? item.avatarUrl ?? ""), role: String(item.role ?? (item.isAdmin ? "admin" : "user")), isActive: item.isActive === undefined ? item.status !== "disabled" : Boolean(item.isActive), status: String(item.status ?? "active"), createdAt: item.createdAt || item.created_at ? String(item.createdAt ?? item.created_at) : null, lastLoginAt: item.lastLoginAt || item.last_login_at ? String(item.lastLoginAt ?? item.last_login_at) : null, commentsCount: Number(item.commentsCount ?? item.comments_count ?? 0) || 0, ip: String(item.ip ?? item.lastIp ?? ""), knowledgeOpen: Boolean(item.knowledgeOpen) } satisfies SiteUser]; });
+  return records.flatMap((record) => {
+    if (!record || typeof record !== "object") return [];
+    const item = record as Record<string, unknown>;
+    const rawId = item.id ?? item.userId;
+    if (rawId === undefined || rawId === null) return [];
+    const rawLoc = item.storageLocation ?? item.storage_location;
+    const storageLocation = rawLoc === "cloudflare" ? "cloudflare" : rawLoc === "server" ? "server" : null;
+    return [{
+      id: typeof rawId === "string" || typeof rawId === "number" ? rawId : String(rawId),
+      username: String(item.username ?? item.account ?? ""),
+      nickname: String(item.nickname ?? item.displayName ?? item.name ?? item.username ?? ""),
+      email: String(item.email ?? ""),
+      avatar: String(item.avatar ?? item.avatarUrl ?? ""),
+      role: String(item.role ?? (item.isAdmin ? "admin" : "user")),
+      isActive: item.isActive === undefined ? item.status !== "disabled" : Boolean(item.isActive),
+      status: String(item.status ?? "active"),
+      createdAt: item.createdAt || item.created_at ? String(item.createdAt ?? item.created_at) : null,
+      lastLoginAt: item.lastLoginAt || item.last_login_at ? String(item.lastLoginAt ?? item.last_login_at) : null,
+      commentsCount: Number(item.commentsCount ?? item.comments_count ?? 0) || 0,
+      ip: String(item.ip ?? item.lastIp ?? ""),
+      knowledgeOpen: Boolean(item.knowledgeOpen),
+      storageLocation,
+      storageLocationSwitchedAt: item.storageLocationSwitchedAt || item.storage_location_switched_at ? String(item.storageLocationSwitchedAt ?? item.storage_location_switched_at) : null
+    } satisfies SiteUser];
+  });
 }
 
 const SITE_USERS_ENDPOINTS = ["/api/admin/users", "/api/admin/comment-users"] as const;
 function AdminUsers() {
   const [items, setItems] = useState<SiteUser[]>([]); const [keyword, setKeyword] = useState(""); const [status, setStatus] = useState(""); const [loading, setLoading] = useState(true); const [message, setMessage] = useState(""); const [dialog, setDialog] = useState<"create" | "edit" | "reset" | null>(null); const [selected, setSelected] = useState<SiteUser | null>(null); const [draft, setDraft] = useState<SiteUserDraft>(EMPTY_SITE_USER_DRAFT); const [saving, setSaving] = useState(false);
   const load = () => { setLoading(true); void adminRequestCompatible<unknown>(SITE_USERS_ENDPOINTS).then((value) => { setItems(normalizeSiteUsers(value)); setMessage(""); }).catch((error) => { setItems([]); setMessage(errorText(error, "用户列表加载失败。")); }).finally(() => setLoading(false)); }; useEffect(load, []);
-  const openCreate = () => { setSelected(null); setDraft({ ...EMPTY_SITE_USER_DRAFT }); setDialog("create"); }; const openEdit = (item: SiteUser) => { setSelected(item); setDraft({ username: item.username, nickname: item.nickname, email: item.email, avatar: item.avatar, password: "", isActive: item.isActive, role: item.role || "user" }); setDialog("edit"); }; const openReset = (item: SiteUser) => { setSelected(item); setDraft({ ...EMPTY_SITE_USER_DRAFT, username: item.username }); setDialog("reset"); };
-  const save = async (event: FormEvent) => { event.preventDefault(); if (!dialog) return; if (dialog === "reset" && draft.password.length < 8) { setMessage("新密码至少需要 8 位。"); return; } if (dialog !== "reset" && !draft.username.trim()) { setMessage("请输入用户账号。"); return; } setSaving(true); setMessage(""); try { const id = encodeURIComponent(String(selected?.id ?? "")); if (dialog === "reset") await adminRequestCompatible(SITE_USERS_ENDPOINTS.map((path) => `${path}/${id}/reset-password`), { method: "POST", body: JSON.stringify({ password: draft.password }) }); else await adminRequestCompatible(dialog === "create" ? SITE_USERS_ENDPOINTS : SITE_USERS_ENDPOINTS.map((path) => `${path}/${id}`), { method: dialog === "create" ? "POST" : "PATCH", body: JSON.stringify({ username: draft.username.trim(), nickname: draft.nickname.trim(), email: draft.email.trim() || null, avatar: draft.avatar.trim() || null, password: draft.password || undefined, isActive: draft.isActive, role: draft.role }) }); setDialog(null); setMessage(dialog === "create" ? "用户已创建。" : dialog === "reset" ? "密码已重置。" : "用户已更新。"); load(); } catch (error) { setMessage(errorText(error, "用户保存失败。")); } finally { setSaving(false); } };
+  const openCreate = () => { setSelected(null); setDraft({ ...EMPTY_SITE_USER_DRAFT }); setDialog("create"); }; const openEdit = (item: SiteUser) => { setSelected(item); setDraft({ username: item.username, nickname: item.nickname, email: item.email, avatar: item.avatar, password: "", isActive: item.isActive, role: item.role || "user", storageLocation: item.storageLocation || "" }); setDialog("edit"); }; const openReset = (item: SiteUser) => { setSelected(item); setDraft({ ...EMPTY_SITE_USER_DRAFT, username: item.username }); setDialog("reset"); };
+  const save = async (event: FormEvent) => { event.preventDefault(); if (!dialog) return; if (dialog === "reset" && draft.password.length < 8) { setMessage("新密码至少需要 8 位。"); return; } if (dialog !== "reset" && !draft.username.trim()) { setMessage("请输入用户账号。"); return; } setSaving(true); setMessage(""); try { const id = encodeURIComponent(String(selected?.id ?? "")); if (dialog === "reset") await adminRequestCompatible(SITE_USERS_ENDPOINTS.map((path) => `${path}/${id}/reset-password`), { method: "POST", body: JSON.stringify({ password: draft.password }) }); else await adminRequestCompatible(dialog === "create" ? SITE_USERS_ENDPOINTS : SITE_USERS_ENDPOINTS.map((path) => `${path}/${id}`), { method: dialog === "create" ? "POST" : "PATCH", body: JSON.stringify({ username: draft.username.trim(), nickname: draft.nickname.trim(), email: draft.email.trim() || null, avatar: draft.avatar.trim() || null, password: draft.password || undefined, isActive: draft.isActive, role: draft.role, storageLocation: draft.storageLocation || null }) }); setDialog(null); setMessage(dialog === "create" ? "用户已创建。" : dialog === "reset" ? "密码已重置。" : "用户已更新。"); load(); } catch (error) { setMessage(errorText(error, "用户保存失败。")); } finally { setSaving(false); } };
   const remove = async (item: SiteUser) => { if (!window.confirm(`确认删除用户“${item.nickname || item.username}”吗？`)) return; try { await adminRequestCompatible(SITE_USERS_ENDPOINTS.map((path) => `${path}/${encodeURIComponent(String(item.id))}`), { method: "DELETE" }); setMessage("用户已删除。"); load(); } catch (error) { setMessage(errorText(error, "用户删除失败。")); } };
   const toggleKnowledge = async (item: SiteUser) => { const next = !item.knowledgeOpen; const name = item.nickname || item.username; if (!window.confirm(next ? `确认为“${name}”直接开通知识库吗？开通后将跳过注册时长和活跃度门槛。` : `确认收回“${name}”的知识库直通权限吗？之后将重新按活跃度计算。`)) return; try { await adminRequestCompatible(SITE_USERS_ENDPOINTS.map((path) => `${path}/${encodeURIComponent(String(item.id))}/knowledge`), { method: "PATCH", body: JSON.stringify({ enabled: next }) }); setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, knowledgeOpen: next } : entry)); setMessage(next ? "已直接开通知识库。" : "已收回知识库直通权限。"); } catch (error) { setMessage(errorText(error, "知识库权限更新失败。")); } };
   const filtered = items.filter((item) => (!status || (status === "active" ? item.isActive : !item.isActive)) && (!keyword.trim() || `${item.username} ${item.nickname} ${item.email}`.toLowerCase().includes(keyword.trim().toLowerCase())));
-  return <div className="fa-page fa-users-page"><PageHeading eyebrow="SITE MAINTENANCE" title="用户管理" description="维护注册用户、登录状态和评论身份。可以直接为用户开通知识库，跳过注册时长和活跃度门槛。管理员用户请在管理员账号页面管理。" action={<PrimaryButton onClick={openCreate}><Plus size={15} />新增用户</PrimaryButton>} />{message ? <div className="fa-error fa-page-error">{message}</div> : null}<div className="fa-toolbar"><label className="fa-search"><Search size={15} /><input value={keyword} placeholder="搜索账号、昵称或邮箱" onChange={(event) => setKeyword(event.target.value)} /></label><select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="用户状态"><option value="">全部状态</option><option value="active">正常</option><option value="disabled">已停用</option></select><GhostButton onClick={load} disabled={loading}><RefreshCw size={15} className={loading ? "fa-spin" : ""} />刷新</GhostButton></div><section className="fa-panel fa-users-panel"><div className="fa-panel-head"><div><div className="fa-panel-title"><Users size={18} /><h2>注册用户</h2><span>{filtered.length}</span></div><p>用户头像、邮箱等隐私信息只在管理员后台显示。</p></div></div><div className="fa-table-wrap"><table className="fa-table fa-users-table"><thead><tr><th>用户</th><th>邮箱</th><th>评论</th><th>知识库</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead><tbody>{loading ? <tr><td colSpan={7}><div className="fa-table-loading"><RefreshCw size={16} className="fa-spin" />正在加载用户</div></td></tr> : filtered.length ? filtered.map((item) => <tr key={String(item.id)}><td><div className="fa-account-cell">{item.avatar ? <img className="fa-user-avatar" src={resolveAdminMediaUrl(item.avatar)} alt="" /> : <span className="fa-account-avatar"><UserRound size={15} /></span>}<span><strong>{item.nickname || item.username}</strong><small>{item.username}{item.ip ? ` · ${item.ip}` : ""}</small></span>{item.role !== "user" ? <em>{item.role}</em> : null}</div></td><td>{item.email || "未填写"}</td><td>{item.commentsCount}</td><td><span className={`fa-pill ${item.knowledgeOpen ? "approved" : "pending"}`}>{item.knowledgeOpen ? "已开通" : "按门槛"}</span></td><td><span className={`fa-pill ${item.isActive ? "approved" : "disabled"}`}>{item.isActive ? "正常" : "已停用"}</span></td><td><span className="fa-date-cell">{dateText(item.createdAt)}</span></td><td><div className="fa-inline-actions"><button type="button" title={item.knowledgeOpen ? "收回知识库开通" : "直接开通知识库"} onClick={() => void toggleKnowledge(item)}><BookOpen size={14} /></button><button type="button" title="编辑用户" onClick={() => openEdit(item)}><Pencil size={14} /></button><button type="button" title="重置密码" onClick={() => openReset(item)}><RotateCcw size={14} /></button><button type="button" title="删除用户" onClick={() => void remove(item)}><Trash2 size={14} /></button></div></td></tr>) : <tr><td colSpan={7}><EmptyState>暂无注册用户</EmptyState></td></tr>}</tbody></table></div></section>{dialog ? <div className="fa-dialog-overlay" role="presentation" onClick={() => !saving && setDialog(null)}><form className="fa-dialog fa-user-dialog" onSubmit={save} onClick={(event) => event.stopPropagation()}><div className="fa-dialog-head"><div><span className="fa-kicker">{dialog === "create" ? "NEW USER" : dialog === "reset" ? "PASSWORD RESET" : "EDIT USER"}</span><h2>{dialog === "create" ? "新增用户" : dialog === "reset" ? "重置用户密码" : "编辑用户"}</h2></div><button type="button" title="关闭" onClick={() => setDialog(null)}><X size={18} /></button></div>{dialog === "reset" ? <label>新密码<input type="password" value={draft.password} minLength={8} autoComplete="new-password" onChange={(event) => setDraft({ ...draft, password: event.target.value })} required /></label> : <><div className="fa-user-form-grid"><label>账号<input value={draft.username} minLength={3} maxLength={80} autoFocus={dialog === "create"} onChange={(event) => setDraft({ ...draft, username: event.target.value })} required /></label><label>昵称<input value={draft.nickname} maxLength={120} onChange={(event) => setDraft({ ...draft, nickname: event.target.value })} required /></label><label>邮箱<input type="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} /></label><label>角色<select value={draft.role} onChange={(event) => setDraft({ ...draft, role: event.target.value })}><option value="user">普通用户</option><option value="moderator">评论管理员</option><option value="admin">管理员徽标</option></select></label><label className="fa-user-avatar-field">头像地址<input value={draft.avatar} placeholder="可选图床链接" onChange={(event) => setDraft({ ...draft, avatar: event.target.value })} /><AdminMediaUpload kind="image" accept="image/jpeg,image/png,image/webp,image/gif" label="上传头像" onError={(error) => setMessage(errorText(error, "头像上传失败。"))} onUploaded={(url) => setDraft((current) => ({ ...current, avatar: url }))} /></label><label>密码{dialog === "create" ? "（至少 8 位）" : "（留空不修改）"}<input type="password" minLength={dialog === "create" ? 8 : undefined} value={draft.password} autoComplete="new-password" onChange={(event) => setDraft({ ...draft, password: event.target.value })} required={dialog === "create"} /></label></div><label className="fa-inline-check"><input type="checkbox" checked={draft.isActive} onChange={(event) => setDraft({ ...draft, isActive: event.target.checked })} />允许登录</label></>}{message ? <div className="fa-error">{message}</div> : null}<div className="fa-dialog-footer"><GhostButton onClick={() => setDialog(null)} disabled={saving}>取消</GhostButton><PrimaryButton type="submit" disabled={saving}>{saving ? <RefreshCw size={15} className="fa-spin" /> : <Save size={15} />}{saving ? "保存中" : "保存用户"}</PrimaryButton></div></form></div> : null}</div>;
+  return <div className="fa-page fa-users-page"><PageHeading eyebrow="SITE MAINTENANCE" title="用户管理" description="维护注册用户、登录状态和评论身份。可以直接为用户开通知识库，跳过注册时长和活跃度门槛。管理员用户请在管理员账号页面管理。" action={<PrimaryButton onClick={openCreate}><Plus size={15} />新增用户</PrimaryButton>} />{message ? <div className="fa-error fa-page-error">{message}</div> : null}<div className="fa-toolbar"><label className="fa-search"><Search size={15} /><input value={keyword} placeholder="搜索账号、昵称或邮箱" onChange={(event) => setKeyword(event.target.value)} /></label><select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="用户状态"><option value="">全部状态</option><option value="active">正常</option><option value="disabled">已停用</option></select><GhostButton onClick={load} disabled={loading}><RefreshCw size={15} className={loading ? "fa-spin" : ""} />刷新</GhostButton></div><section className="fa-panel fa-users-panel"><div className="fa-panel-head"><div><div className="fa-panel-title"><Users size={18} /><h2>注册用户</h2><span>{filtered.length}</span></div><p>用户头像、邮箱等隐私信息只在管理员后台显示。</p></div></div><div className="fa-table-wrap"><table className="fa-table fa-users-table"><thead><tr><th>用户</th><th>邮箱</th><th>评论</th><th>知识库</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead><tbody>{loading ? <tr><td colSpan={7}><div className="fa-table-loading"><RefreshCw size={16} className="fa-spin" />正在加载用户</div></td></tr> : filtered.length ? filtered.map((item) => <tr key={String(item.id)}><td><div className="fa-account-cell">{item.avatar ? <img className="fa-user-avatar" src={resolveAdminMediaUrl(item.avatar)} alt="" /> : <span className="fa-account-avatar"><UserRound size={15} /></span>}<span><strong>{item.nickname || item.username}</strong><small>{item.username}{item.ip ? ` · ${item.ip}` : ""}</small></span>{item.role !== "user" ? <em>{item.role}</em> : null}</div></td><td>{item.email || "未填写"}</td><td>{item.commentsCount}</td><td><span className={`fa-pill ${item.knowledgeOpen ? "approved" : "pending"}`}>{item.knowledgeOpen ? "已开通" : "按门槛"}</span></td><td><span className={`fa-pill ${item.isActive ? "approved" : "disabled"}`}>{item.isActive ? "正常" : "已停用"}</span></td><td><span className="fa-date-cell">{dateText(item.createdAt)}</span></td><td><div className="fa-inline-actions"><button type="button" title={item.knowledgeOpen ? "收回知识库开通" : "直接开通知识库"} onClick={() => void toggleKnowledge(item)}><BookOpen size={14} /></button><button type="button" title="编辑用户" onClick={() => openEdit(item)}><Pencil size={14} /></button><button type="button" title="重置密码" onClick={() => openReset(item)}><RotateCcw size={14} /></button><button type="button" title="删除用户" onClick={() => void remove(item)}><Trash2 size={14} /></button></div></td></tr>) : <tr><td colSpan={7}><EmptyState>暂无注册用户</EmptyState></td></tr>}</tbody></table></div></section>{dialog ? <div className="fa-dialog-overlay" role="presentation" onClick={() => !saving && setDialog(null)}><form className="fa-dialog fa-user-dialog" onSubmit={save} onClick={(event) => event.stopPropagation()}><div className="fa-dialog-head"><div><span className="fa-kicker">{dialog === "create" ? "NEW USER" : dialog === "reset" ? "PASSWORD RESET" : "EDIT USER"}</span><h2>{dialog === "create" ? "新增用户" : dialog === "reset" ? "重置用户密码" : "编辑用户"}</h2></div><button type="button" title="关闭" onClick={() => setDialog(null)}><X size={18} /></button></div>{dialog === "reset" ? <label>新密码<input type="password" value={draft.password} minLength={8} autoComplete="new-password" onChange={(event) => setDraft({ ...draft, password: event.target.value })} required /></label> : <><div className="fa-user-form-grid"><label>账号<input value={draft.username} minLength={3} maxLength={80} autoFocus={dialog === "create"} onChange={(event) => setDraft({ ...draft, username: event.target.value })} required /></label><label>昵称<input value={draft.nickname} maxLength={120} onChange={(event) => setDraft({ ...draft, nickname: event.target.value })} required /></label><label>邮箱<input type="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} /></label><label>角色<select value={draft.role} onChange={(event) => setDraft({ ...draft, role: event.target.value })}><option value="user">普通用户</option><option value="moderator">评论管理员</option><option value="admin">管理员徽标</option></select></label><label>存储位置<select value={draft.storageLocation} onChange={(event) => setDraft({ ...draft, storageLocation: event.target.value as "server" | "cloudflare" | "" })}><option value="">未指定 (默认本地 30MB)</option><option value="server">服务器本地存储 (30MB)</option><option value="cloudflare">Cloudflare 对象存储 (50MB)</option></select></label><label className="fa-user-avatar-field">头像地址<input value={draft.avatar} placeholder="可选图床链接" onChange={(event) => setDraft({ ...draft, avatar: event.target.value })} /><AdminMediaUpload kind="image" accept="image/jpeg,image/png,image/webp,image/gif" label="上传头像" onError={(error) => setMessage(errorText(error, "头像上传失败。"))} onUploaded={(url) => setDraft((current) => ({ ...current, avatar: url }))} /></label><label>密码{dialog === "create" ? "（至少 8 位）" : "（留空不修改）"}<input type="password" minLength={dialog === "create" ? 8 : undefined} value={draft.password} autoComplete="new-password" onChange={(event) => setDraft({ ...draft, password: event.target.value })} required={dialog === "create"} /></label></div><label className="fa-inline-check"><input type="checkbox" checked={draft.isActive} onChange={(event) => setDraft({ ...draft, isActive: event.target.checked })} />允许登录</label></>}{message ? <div className="fa-error">{message}</div> : null}<div className="fa-dialog-footer"><GhostButton onClick={() => setDialog(null)} disabled={saving}>取消</GhostButton><PrimaryButton type="submit" disabled={saving}>{saving ? <RefreshCw size={15} className="fa-spin" /> : <Save size={15} />}{saving ? "保存中" : "保存用户"}</PrimaryButton></div></form></div> : null}</div>;
 }
 
 type UserSpaceCategory = Record<string, number>;
@@ -3604,6 +3630,8 @@ type AdminUserSpace = {
   usedBytes: number;
   remainingBytes: number;
   categories: UserSpaceCategory;
+  storageLocation: "server" | "cloudflare" | null;
+  storageLocationSwitchedAt: string | null;
 };
 type AdminSpaceUser = {
   id: number;
@@ -3657,8 +3685,17 @@ function normalizeAdminSpace(value: unknown): AdminUserSpace {
   const categoriesSource = valueRecord(source.categories);
   const categories = Object.fromEntries(Object.entries(categoriesSource).map(([key, item]) => [key, numberValue(item)]));
   const usedBytes = numberValue(source.usedBytes ?? source.used ?? source.total) || Object.values(categories).reduce((total, item) => total + item, 0);
-  const limitBytes = numberValue(source.limitBytes ?? source.limit) || 30 * 1024 * 1024;
-  return { limitBytes, usedBytes, remainingBytes: Math.max(0, numberValue(source.remainingBytes ?? source.remaining) || limitBytes - usedBytes), categories };
+  const rawLoc = source.storageLocation ?? source.storage_location;
+  const storageLocation = rawLoc === "cloudflare" ? "cloudflare" : rawLoc === "server" ? "server" : null;
+  const limitBytes = numberValue(source.limitBytes ?? source.limit) || (storageLocation === "cloudflare" ? 50 * 1024 * 1024 : 30 * 1024 * 1024);
+  return {
+    limitBytes,
+    usedBytes,
+    remainingBytes: Math.max(0, numberValue(source.remainingBytes ?? source.remaining) || limitBytes - usedBytes),
+    categories,
+    storageLocation,
+    storageLocationSwitchedAt: typeof source.storageLocationSwitchedAt === "string" ? source.storageLocationSwitchedAt : typeof source.storage_location_switched_at === "string" ? source.storage_location_switched_at : null,
+  };
 }
 function normalizeAdminSpaceUsers(value: unknown): AdminSpaceUser[] {
   const source = Array.isArray(value) ? value : Array.isArray(valueRecord(value).items) ? valueRecord(value).items as unknown[] : [];
@@ -3688,6 +3725,13 @@ function AdminUserSpace() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [mutating, setMutating] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [storageTargetUser, setStorageTargetUser] = useState<AdminSpaceUser | null>(null);
+  const [targetLocation, setTargetLocation] = useState<"server" | "cloudflare">("cloudflare");
+  const [migrateData, setMigrateData] = useState<boolean>(true);
+  const [ignoreCooldown, setIgnoreCooldown] = useState<boolean>(true);
+  const [ignoreQuotaCheck, setIgnoreQuotaCheck] = useState<boolean>(false);
+  const [storageSubmitting, setStorageSubmitting] = useState<boolean>(false);
+
   const loadUsers = () => {
     setLoading(true);
     void adminRequest<unknown>("/api/admin/user-space").then((value) => { setUsers(normalizeAdminSpaceUsers(value)); setMessage(""); }).catch((error) => { setUsers([]); setMessage(errorText(error, "用户空间列表加载失败。")); }).finally(() => setLoading(false));
@@ -3698,6 +3742,46 @@ function AdminUserSpace() {
   };
   useEffect(loadUsers, []);
   const refreshSelected = () => { if (selected) loadDetail(selected); loadUsers(); };
+
+  const openStorageManage = (user: AdminSpaceUser) => {
+    setStorageTargetUser(user);
+    setTargetLocation(user.space.storageLocation === "cloudflare" ? "server" : "cloudflare");
+    setMigrateData(true);
+    setIgnoreCooldown(true);
+    setIgnoreQuotaCheck(false);
+  };
+
+  const handleSaveStorageLocation = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!storageTargetUser) return;
+    setStorageSubmitting(true);
+    setMessage("");
+    try {
+      const res = await adminRequest<{ success: boolean; migrated?: boolean; result?: { migratedFiles?: number } }>(
+        `/api/admin/user-space/${storageTargetUser.id}/storage-location`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            targetLocation,
+            migrateData,
+            ignoreCooldown,
+            ignoreQuotaCheck,
+          }),
+        }
+      );
+      const locText = targetLocation === "cloudflare" ? "Cloudflare 对象存储 (50MB)" : "服务器本地存储 (30MB)";
+      const info = res.migrated
+        ? `用户存储已更新为 ${locText}，并完成数据迁移（处理了 ${res.result?.migratedFiles ?? 0} 个文件）。`
+        : `用户存储位置已更新为 ${locText}。`;
+      setMessage(info);
+      setStorageTargetUser(null);
+      refreshSelected();
+    } catch (error) {
+      setMessage(errorText(error, "存储设置与数据迁移失败。"));
+    } finally {
+      setStorageSubmitting(false);
+    }
+  };
   const changeUserActive = async (user: AdminSpaceUser) => {
     const action = user.isActive ? "封禁" : "恢复";
     if (!window.confirm(`确认${action}用户“${user.nickname || user.account}”吗？`)) return;
@@ -3728,11 +3812,102 @@ function AdminUserSpace() {
   const categories = detail ? Object.entries(detail.space.categories).filter(([, size]) => size > 0) : [];
   const selectedUsage = detail?.space ?? selected?.space;
   return <div className="fa-page fa-user-space-page">
-    <PageHeading eyebrow="ACCOUNT & STORAGE" title="媒体与空间" description="按用户查看共享 30MB 空间、公开资源和在线剪贴板，支持直接封禁与清理内容。" action={<GhostButton onClick={refreshSelected} disabled={loading || detailLoading}><RefreshCw size={15} className={loading || detailLoading ? "fa-spin" : ""} />刷新数据</GhostButton>} />
+    <PageHeading eyebrow="ACCOUNT & STORAGE" title="媒体与空间" description="按用户查看存储位置、限额（本地 30MB / CF 50MB）、公开资源和在线剪贴板，支持管理存储迁移、直接封禁与清理内容。" action={<GhostButton onClick={refreshSelected} disabled={loading || detailLoading}><RefreshCw size={15} className={loading || detailLoading ? "fa-spin" : ""} />刷新数据</GhostButton>} />
     {message ? <div className="fa-error fa-page-error">{message}</div> : null}
     <div className="fa-toolbar fa-user-space-toolbar"><label className="fa-search"><Search size={15} /><input value={keyword} placeholder="搜索账号、昵称或邮箱" onChange={(event) => setKeyword(event.target.value)} /></label><span>{filtered.length} 名用户</span></div>
-    <section className="fa-panel fa-user-space-list"><div className="fa-table-wrap"><table className="fa-table fa-user-space-table"><thead><tr><th>用户</th><th>已用空间</th><th>分类占用</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead><tbody>{loading ? <tr><td colSpan={6}><div className="fa-table-loading"><RefreshCw size={16} className="fa-spin" />正在加载用户空间</div></td></tr> : filtered.length ? filtered.map((user) => { const ratio = percent(user.space.usedBytes, user.space.limitBytes); return <tr key={user.id} className={selected?.id === user.id ? "is-selected" : ""}><td><button type="button" className="fa-space-user" onClick={() => loadDetail(user)}>{user.avatar ? <img src={resolveAdminMediaUrl(user.avatar)} alt="" /> : <span><UserRound size={15} /></span>}<span><strong>{user.nickname || user.account}</strong><small>{user.account}{user.email ? ` · ${user.email}` : ""}</small></span></button></td><td><div className="fa-space-usage"><strong>{bytesText(user.space.usedBytes)}</strong><span>{bytesText(user.space.limitBytes)}</span><i><b style={{ width: `${ratio}%` }} /></i></div></td><td><div className="fa-space-category-list">{Object.entries(user.space.categories).filter(([, size]) => size > 0).map(([key, size]) => <span key={key}>{spaceCategoryLabel(key)} {bytesText(size)}</span>)}{Object.values(user.space.categories).every((size) => !size) ? <span>暂无内容</span> : null}</div></td><td><span className={`fa-pill ${user.isActive ? "approved" : "disabled"}`}>{user.isActive ? "正常" : "已封禁"}</span></td><td><span className="fa-date-cell">{dateText(user.createdAt)}</span></td><td><div className="fa-inline-actions"><button type="button" title="查看空间内容" onClick={() => loadDetail(user)}><Eye size={14} /></button><button type="button" title={user.isActive ? "封禁用户" : "恢复用户"} disabled={mutating === `user-${user.id}`} onClick={() => void changeUserActive(user)}>{user.isActive ? <Ban size={14} /> : <UserCheck size={14} />}</button></div></td></tr>; }) : <tr><td colSpan={6}><EmptyState>没有匹配的用户</EmptyState></td></tr>}</tbody></table></div></section>
-    {selected ? <section className="fa-user-space-detail"><div className="fa-user-space-detail-head"><div><span className="fa-kicker">USER SPACE</span><h2>{selected.nickname || selected.account} 的空间内容</h2><p>{selected.email || "未填写邮箱"} · {selected.isActive ? "账号正常" : "账号已封禁"}</p></div><div><GhostButton onClick={() => void changeUserActive(selected)} disabled={mutating === `user-${selected.id}`}>{selected.isActive ? <Ban size={15} /> : <UserCheck size={15} />}{selected.isActive ? "封禁用户" : "恢复用户"}</GhostButton><GhostButton onClick={() => { setSelected(null); setDetail(null); }}>关闭</GhostButton></div></div>{detailLoading ? <div className="fa-space-detail-loading"><RefreshCw size={18} className="fa-spin" />正在读取空间内容</div> : detail && selectedUsage ? <><div className="fa-space-summary"><article><HardDrive size={19} /><span>已用空间</span><strong>{bytesText(selectedUsage.usedBytes)}</strong><small>剩余 {bytesText(selectedUsage.remainingBytes)} / 共 {bytesText(selectedUsage.limitBytes)}</small><i><b style={{ width: `${percent(selectedUsage.usedBytes, selectedUsage.limitBytes)}%` }} /></i></article>{categories.map(([key, size]) => <article key={key}><Database size={18} /><span>{spaceCategoryLabel(key)}</span><strong>{bytesText(size)}</strong><small>占已用空间 {percent(size, selectedUsage.usedBytes).toFixed(1)}%</small></article>)}</div><div className="fa-user-space-content-grid"><section className="fa-panel"><div className="fa-panel-head"><div><div className="fa-panel-title"><ImageIcon size={18} /><h2>图片与资源</h2><span>{detail.items.length}</span></div><p>图床、用户上传的图片及其公开访问状态。</p></div></div><div className="fa-space-content-list">{detail.items.length ? detail.items.map((item) => <article key={item.id}><a className="fa-space-preview" href={item.publicUrl ? absoluteMediaUrl(item.publicUrl) : resolveAdminMediaUrl(item.url)} target="_blank" rel="noreferrer">{item.mimeType.startsWith("image/") || /image|avatar|sticker/u.test(item.kind) ? <AuthImage src={item.url} alt={item.name || "图片"} fallback={<ImageIcon size={19} />} /> : <ImageIcon size={19} />}</a><div><strong>{item.name || "未命名资源"}</strong><small>{item.kind} · {bytesText(item.byteSize)} · {dateText(item.createdAt)}</small><p><span className={`fa-pill ${item.isPublic ? "approved" : "disabled"}`}>{item.isPublic ? "公开" : "私有"}</span><span><Eye size={12} /> {item.viewCount}</span></p></div><button type="button" title="删除资源" disabled={mutating === `item-${item.id}`} onClick={() => void removeItem(item.id)}><Trash2 size={14} /></button></article>) : <EmptyState>该用户还没有图床资源</EmptyState>}</div></section><section className="fa-panel"><div className="fa-panel-head"><div><div className="fa-panel-title"><FileText size={18} /><h2>在线剪贴板</h2><span>{detail.clipboards.length}</span></div><p>Markdown 或文本内容同样计入共享空间。</p></div></div><div className="fa-space-content-list">{detail.clipboards.length ? detail.clipboards.map((item) => <article key={item.id}><span className="fa-space-clipboard-icon"><FileText size={18} /></span><div><strong>{item.title || "未命名剪贴板"}</strong><small>{bytesText(item.byteSize)} · 更新于 {dateText(item.updatedAt || item.createdAt)}</small>{item.content ? <p className="fa-space-clipboard-preview">{item.content.slice(0, 120)}</p> : null}<p><span className={`fa-pill ${item.isPublic ? "approved" : "disabled"}`}>{item.isPublic ? "公开" : "私有"}</span><span><Eye size={12} /> {item.viewCount}</span></p></div><button type="button" title="删除剪贴板" disabled={mutating === `clipboard-${item.id}`} onClick={() => void removeClipboard(item.id)}><Trash2 size={14} /></button></article>) : <EmptyState>该用户还没有在线剪贴板</EmptyState>}</div></section><section className="fa-panel"><div className="fa-panel-head"><div><div className="fa-panel-title"><Smile size={18} /><h2>个人表情</h2><span>{detail.stickers.length}</span></div><p>用户自定义表情同样计入共享 30MB 空间。</p></div></div><div className="fa-space-content-list fa-space-sticker-list">{detail.stickers.length ? detail.stickers.map((sticker) => <article key={sticker.id}><a className="fa-space-preview" href={resolveAdminMediaUrl(sticker.url)} target="_blank" rel="noreferrer"><img src={resolveAdminMediaUrl(sticker.url)} alt={sticker.name} /></a><div><strong>{sticker.name || "未命名表情"}</strong><small>{bytesText(sticker.byteSize)} · {dateText(sticker.createdAt)}</small></div><button type="button" title="删除个人表情" disabled={mutating === `sticker-${sticker.id}`} onClick={() => void removeSticker(sticker.id)}><Trash2 size={14} /></button></article>) : <EmptyState>该用户还没有个人表情</EmptyState>}</div></section></div></> : null}</section> : null}
+    <section className="fa-panel fa-user-space-list"><div className="fa-table-wrap"><table className="fa-table fa-user-space-table"><thead><tr><th>用户</th><th>存储位置</th><th>已用空间</th><th>分类占用</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead><tbody>{loading ? <tr><td colSpan={7}><div className="fa-table-loading"><RefreshCw size={16} className="fa-spin" />正在加载用户空间</div></td></tr> : filtered.length ? filtered.map((user) => { const ratio = percent(user.space.usedBytes, user.space.limitBytes); return <tr key={user.id} className={selected?.id === user.id ? "is-selected" : ""}><td><button type="button" className="fa-space-user" onClick={() => loadDetail(user)}>{user.avatar ? <img src={resolveAdminMediaUrl(user.avatar)} alt="" /> : <span><UserRound size={15} /></span>}<span><strong>{user.nickname || user.account}</strong><small>{user.account}{user.email ? ` · ${user.email}` : ""}</small></span></button></td><td><span className={`fa-pill ${user.space.storageLocation === "cloudflare" ? "approved" : "active"}`} title={`上限 ${bytesText(user.space.limitBytes)}`}>{user.space.storageLocation === "cloudflare" ? <><Cloud size={13} style={{ marginRight: 4, verticalAlign: "-2px" }} />CF存储 (50M)</> : <><Server size={13} style={{ marginRight: 4, verticalAlign: "-2px" }} />本地 (30M)</>}</span></td><td><div className="fa-space-usage"><strong>{bytesText(user.space.usedBytes)}</strong><span>{bytesText(user.space.limitBytes)}</span><i><b style={{ width: `${ratio}%` }} /></i></div></td><td><div className="fa-space-category-list">{Object.entries(user.space.categories).filter(([, size]) => size > 0).map(([key, size]) => <span key={key}>{spaceCategoryLabel(key)} {bytesText(size)}</span>)}{Object.values(user.space.categories).every((size) => !size) ? <span>暂无内容</span> : null}</div></td><td><span className={`fa-pill ${user.isActive ? "approved" : "disabled"}`}>{user.isActive ? "正常" : "已封禁"}</span></td><td><span className="fa-date-cell">{dateText(user.createdAt)}</span></td><td><div className="fa-inline-actions"><button type="button" title="管理存储与数据迁移" onClick={() => openStorageManage(user)}><ArrowRightLeft size={14} /></button><button type="button" title="查看空间内容" onClick={() => loadDetail(user)}><Eye size={14} /></button><button type="button" title={user.isActive ? "封禁用户" : "恢复用户"} disabled={mutating === `user-${user.id}`} onClick={() => void changeUserActive(user)}>{user.isActive ? <Ban size={14} /> : <UserCheck size={14} />}</button></div></td></tr>; }) : <tr><td colSpan={7}><EmptyState>没有匹配的用户</EmptyState></td></tr>}</tbody></table></div></section>
+    {selected ? <section className="fa-user-space-detail"><div className="fa-user-space-detail-head"><div><span className="fa-kicker">USER SPACE</span><h2>{selected.nickname || selected.account} 的空间内容</h2><p>{selected.email || "未填写邮箱"} · {selected.isActive ? "账号正常" : "账号已封禁"}</p></div><div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}><PrimaryButton onClick={() => openStorageManage(selected)}><ArrowRightLeft size={14} />存储与数据迁移</PrimaryButton><GhostButton onClick={() => void changeUserActive(selected)} disabled={mutating === `user-${selected.id}`}>{selected.isActive ? <Ban size={15} /> : <UserCheck size={15} />}{selected.isActive ? "封禁用户" : "恢复用户"}</GhostButton><GhostButton onClick={() => { setSelected(null); setDetail(null); }}>关闭</GhostButton></div></div>{detailLoading ? <div className="fa-space-detail-loading"><RefreshCw size={18} className="fa-spin" />正在读取空间内容</div> : detail && selectedUsage ? <><div className="fa-space-summary"><article>{selectedUsage.storageLocation === "cloudflare" ? <Cloud size={19} /> : <Server size={19} />}<span>存储类型</span><strong>{selectedUsage.storageLocation === "cloudflare" ? "Cloudflare R2" : "服务器本地存储"}</strong><small>配额上限 {bytesText(selectedUsage.limitBytes)}{selectedUsage.storageLocationSwitchedAt ? ` · 变更于 ${dateText(selectedUsage.storageLocationSwitchedAt)}` : ""}</small></article><article><HardDrive size={19} /><span>已用空间</span><strong>{bytesText(selectedUsage.usedBytes)}</strong><small>剩余 {bytesText(selectedUsage.remainingBytes)} / 共 {bytesText(selectedUsage.limitBytes)}</small><i><b style={{ width: `${percent(selectedUsage.usedBytes, selectedUsage.limitBytes)}%` }} /></i></article>{categories.map(([key, size]) => <article key={key}><Database size={18} /><span>{spaceCategoryLabel(key)}</span><strong>{bytesText(size)}</strong><small>占已用空间 {percent(size, selectedUsage.usedBytes).toFixed(1)}%</small></article>)}</div><div className="fa-user-space-content-grid"><section className="fa-panel"><div className="fa-panel-head"><div><div className="fa-panel-title"><ImageIcon size={18} /><h2>图片与资源</h2><span>{detail.items.length}</span></div><p>图床、用户上传的图片及其公开访问状态。</p></div></div><div className="fa-space-content-list">{detail.items.length ? detail.items.map((item) => <article key={item.id}><a className="fa-space-preview" href={item.publicUrl ? absoluteMediaUrl(item.publicUrl) : resolveAdminMediaUrl(item.url)} target="_blank" rel="noreferrer">{item.mimeType.startsWith("image/") || /image|avatar|sticker/u.test(item.kind) ? <AuthImage src={item.url} alt={item.name || "图片"} fallback={<ImageIcon size={19} />} /> : <ImageIcon size={19} />}</a><div><strong>{item.name || "未命名资源"}</strong><small>{item.kind} · {bytesText(item.byteSize)} · {dateText(item.createdAt)}</small><p><span className={`fa-pill ${item.isPublic ? "approved" : "disabled"}`}>{item.isPublic ? "公开" : "私有"}</span><span><Eye size={12} /> {item.viewCount}</span></p></div><button type="button" title="删除资源" disabled={mutating === `item-${item.id}`} onClick={() => void removeItem(item.id)}><Trash2 size={14} /></button></article>) : <EmptyState>该用户还没有图床资源</EmptyState>}</div></section><section className="fa-panel"><div className="fa-panel-head"><div><div className="fa-panel-title"><FileText size={18} /><h2>在线剪贴板</h2><span>{detail.clipboards.length}</span></div><p>Markdown 或文本内容同样计入共享空间。</p></div></div><div className="fa-space-content-list">{detail.clipboards.length ? detail.clipboards.map((item) => <article key={item.id}><span className="fa-space-clipboard-icon"><FileText size={18} /></span><div><strong>{item.title || "未命名剪贴板"}</strong><small>{bytesText(item.byteSize)} · 更新于 {dateText(item.updatedAt || item.createdAt)}</small>{item.content ? <p className="fa-space-clipboard-preview">{item.content.slice(0, 120)}</p> : null}<p><span className={`fa-pill ${item.isPublic ? "approved" : "disabled"}`}>{item.isPublic ? "公开" : "私有"}</span><span><Eye size={12} /> {item.viewCount}</span></p></div><button type="button" title="删除剪贴板" disabled={mutating === `clipboard-${item.id}`} onClick={() => void removeClipboard(item.id)}><Trash2 size={14} /></button></article>) : <EmptyState>该用户还没有在线剪贴板</EmptyState>}</div></section><section className="fa-panel"><div className="fa-panel-head"><div><div className="fa-panel-title"><Smile size={18} /><h2>个人表情</h2><span>{detail.stickers.length}</span></div><p>用户自定义表情同样计入共享空间。</p></div></div><div className="fa-space-content-list fa-space-sticker-list">{detail.stickers.length ? detail.stickers.map((sticker) => <article key={sticker.id}><a className="fa-space-preview" href={resolveAdminMediaUrl(sticker.url)} target="_blank" rel="noreferrer"><img src={resolveAdminMediaUrl(sticker.url)} alt={sticker.name} /></a><div><strong>{sticker.name || "未命名表情"}</strong><small>{bytesText(sticker.byteSize)} · {dateText(sticker.createdAt)}</small></div><button type="button" title="删除个人表情" disabled={mutating === `sticker-${sticker.id}`} onClick={() => void removeSticker(sticker.id)}><Trash2 size={14} /></button></article>) : <EmptyState>该用户还没有个人表情</EmptyState>}</div></section></div></> : null}</section> : null}
+    {storageTargetUser ? (
+      <div className="fa-dialog-overlay" role="presentation" onClick={() => !storageSubmitting && setStorageTargetUser(null)}>
+        <form className="fa-dialog" onSubmit={handleSaveStorageLocation} onClick={(e) => e.stopPropagation()} style={{ maxWidth: 540 }}>
+          <div className="fa-dialog-head">
+            <div>
+              <span className="fa-kicker">STORAGE & MIGRATION</span>
+              <h2>存储位置与数据迁移管理</h2>
+            </div>
+            <button type="button" title="关闭" onClick={() => setStorageTargetUser(null)} disabled={storageSubmitting}>
+              <X size={18} />
+            </button>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "1rem", padding: "0.5rem 0" }}>
+            <p style={{ margin: 0, fontSize: "0.9rem", color: "var(--text-soft)" }}>
+              当前用户：<strong>{storageTargetUser.nickname || storageTargetUser.account}</strong>（当前已用空间：{bytesText(storageTargetUser.space.usedBytes)}）
+            </p>
+
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem", fontWeight: 600 }}>
+              目标存储位置
+              <select
+                value={targetLocation}
+                onChange={(e) => setTargetLocation(e.target.value as "server" | "cloudflare")}
+                disabled={storageSubmitting}
+              >
+                <option value="server">服务器本地存储（限额 30MB）</option>
+                <option value="cloudflare">Cloudflare 对象存储（限额 50MB）</option>
+              </select>
+            </label>
+
+            {targetLocation === (storageTargetUser.space.storageLocation || "server") ? (
+              <div style={{ padding: "0.6rem 0.8rem", background: "var(--bg-soft, rgba(0,0,0,0.03))", borderRadius: 8, fontSize: "0.85rem", color: "var(--text-soft)" }}>
+                ℹ️ 目标存储与当前存储一致。如果用户资源链接存在异常，可勾选物理迁移进行强制重新同步。
+              </div>
+            ) : null}
+
+            {targetLocation === "server" && storageTargetUser.space.usedBytes > 30 * 1024 * 1024 ? (
+              <div style={{ padding: "0.6rem 0.8rem", background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.3)", borderRadius: 8, fontSize: "0.85rem", color: "#ef4444" }}>
+                ⚠️ 警告：该用户当前已用空间（{bytesText(storageTargetUser.space.usedBytes)}）已超过服务器存储的 30MB 限额！如需迁回服务器，请勾选下方的【强制切换】。
+              </div>
+            ) : null}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "0.2rem" }}>
+              <label className="fa-inline-check">
+                <input
+                  type="checkbox"
+                  checked={migrateData}
+                  onChange={(e) => setMigrateData(e.target.checked)}
+                  disabled={storageSubmitting}
+                />
+                同步执行数据物理迁移（搬迁文件流并自动更新链接）
+              </label>
+              <label className="fa-inline-check">
+                <input
+                  type="checkbox"
+                  checked={ignoreCooldown}
+                  onChange={(e) => setIgnoreCooldown(e.target.checked)}
+                  disabled={storageSubmitting}
+                />
+                绕过每月仅允许切换一次的冷却限制
+              </label>
+              <label className="fa-inline-check">
+                <input
+                  type="checkbox"
+                  checked={ignoreQuotaCheck}
+                  onChange={(e) => setIgnoreQuotaCheck(e.target.checked)}
+                  disabled={storageSubmitting}
+                />
+                强制切换（即使用户已用数据超过目标限额也继续执行）
+              </label>
+            </div>
+
+            <div style={{ fontSize: "0.8rem", color: "var(--text-soft)", background: "var(--card-bg)", border: "1px dashed var(--line)", padding: "0.75rem", borderRadius: 8 }}>
+              💡 <strong>迁移说明：</strong>
+              <br />• 勾选物理迁移时，系统会在后台从原存储读取文件并推送到目标存储，同时更新图床/表情等记录的下载地址。
+              <br />• 不勾选物理迁移时，仅变更数据库用户配置与配额上限，已有文件的物理位置保持不变。
+            </div>
+          </div>
+
+          <div className="fa-dialog-footer">
+            <GhostButton onClick={() => setStorageTargetUser(null)} disabled={storageSubmitting}>
+              取消
+            </GhostButton>
+            <PrimaryButton type="submit" disabled={storageSubmitting}>
+              {storageSubmitting ? <RefreshCw size={15} className="fa-spin" /> : <Save size={15} />}
+              {storageSubmitting ? "正在执行数据迁移..." : "确认并执行"}
+            </PrimaryButton>
+          </div>
+        </form>
+      </div>
+    ) : null}
   </div>;
 }
 

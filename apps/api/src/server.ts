@@ -69,6 +69,7 @@ import {
 	getUserSpace,
 	setUserInitialStorageLocation,
 	executeUserStorageMigration,
+	adminSetUserStorageLocation,
 	getActiveStorageMigration,
 	createUserClipboard,
 	listUserClipboards,
@@ -1227,7 +1228,7 @@ app.get("/api/site", async (_req, res, next) => {
 			title: summary.site.title ?? "Jayson's Blog",
 			subtitle: summary.site.subtitle ?? "Demo site",
 			description: summary.site.description ?? "Jayson's Blog 是一个个人博客。",
-			hue: summary.site.hue ?? 165,
+			hue: summary.site.hue ?? 240,
 			siteFavicon: favicon,
 			siteLogo,
 			siteLogoDark,
@@ -2157,6 +2158,7 @@ const adminCommentUserBaseInput = z.object({
 	isActive: z.boolean().optional(),
 	role: z.string().trim().max(40).optional(),
 	isAdmin: z.boolean().optional(),
+	storageLocation: z.enum(["server", "cloudflare"]).nullable().optional(),
 });
 const adminCommentUserInput = adminCommentUserBaseInput.refine((value) => Boolean(value.username?.trim() || value.account?.trim()), { message: "请输入用户账号", path: ["username"] });
 const adminCommentUserUpdateInput = z.object({
@@ -2169,6 +2171,7 @@ const adminCommentUserUpdateInput = z.object({
 	isActive: z.boolean().optional(),
 	role: z.string().trim().max(40).optional(),
 	isAdmin: z.boolean().optional(),
+	storageLocation: z.enum(["server", "cloudflare"]).nullable().optional(),
 });
 const adminCommentUserCreateInput = adminCommentUserBaseInput.extend({ password: z.string().min(6).max(200) }).refine((value) => Boolean(value.username?.trim() || value.account?.trim()), { message: "请输入用户账号", path: ["username"] });
 const adminCommentPasswordInput = z.object({ password: z.string().min(6).max(200) });
@@ -2205,6 +2208,7 @@ async function updateCommentUserRoute(req: Request, res: Response, next: NextFun
 		if (input.password !== undefined) patch.password = input.password;
 		if (input.isActive !== undefined) patch.isActive = input.isActive;
 		if (input.isAdmin !== undefined || input.role !== undefined) patch.isAdmin = commentUserIsAdmin(input);
+		if (input.storageLocation !== undefined) patch.storageLocation = input.storageLocation;
 		const ok = await updateCommentUser(id, patch);
 		res.status(ok ? 204 : 404).end();
 	} catch (error) { next(error); }
@@ -2307,6 +2311,70 @@ app.delete("/api/admin/user-space/:userId/stickers/:stickerId", requireAdmin, as
 			await deletePublicFile(deleted.url).catch(() => undefined);
 		}
 		res.status(deleted ? 204 : 404).end();
+	} catch (error) { next(error); }
+});
+
+app.get("/api/admin/user-space/:userId/storage-location", requireAdmin, async (req, res, next) => {
+	try {
+		const userId = parseCommentUserId(String(req.params.userId));
+		if (!userId) { res.status(400).json({ error: "用户编号无效" }); return; }
+		const user = await getCommentUserById(userId);
+		if (!user) { res.status(404).json({ error: "用户不存在" }); return; }
+		const space = await getUserSpace(userId);
+		const [migrations] = await pool.query<any[]>(
+			"SELECT * FROM storage_migrations WHERE user_id = ? ORDER BY id DESC LIMIT 10",
+			[userId]
+		);
+		res.json({
+			user: {
+				id: user.id,
+				account: user.account,
+				nickname: user.nickname,
+				storageLocation: user.storageLocation,
+				storageLocationSwitchedAt: user.storageLocationSwitchedAt,
+			},
+			space,
+			recentMigrations: (migrations as any[]).map((row) => ({
+				id: row.id,
+				userId: row.user_id,
+				fromLocation: row.from_location,
+				toLocation: row.to_location,
+				status: row.status,
+				totalFiles: Number(row.total_files || 0),
+				migratedFiles: Number(row.migrated_files || 0),
+				totalBytes: Number(row.total_bytes || 0),
+				migratedBytes: Number(row.migrated_bytes || 0),
+				currentFile: row.current_file || "",
+				errorMessage: row.error_message ?? null,
+				createdAt: row.created_at ? new Date(row.created_at).toISOString() : "",
+				completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+			})),
+		});
+	} catch (error) { next(error); }
+});
+
+const adminUserStorageLocationInput = z.object({
+	targetLocation: z.enum(["server", "cloudflare"]),
+	migrateData: z.boolean().default(true),
+	ignoreCooldown: z.boolean().default(true),
+	ignoreQuotaCheck: z.boolean().default(false),
+});
+
+app.post("/api/admin/user-space/:userId/storage-location", requireAdmin, async (req, res, next) => {
+	try {
+		const userId = parseCommentUserId(String(req.params.userId));
+		if (!userId) { res.status(400).json({ error: "用户编号无效" }); return; }
+		const user = await getCommentUserById(userId);
+		if (!user) { res.status(404).json({ error: "用户不存在" }); return; }
+		const input = adminUserStorageLocationInput.parse(req.body);
+
+		const result = await adminSetUserStorageLocation(userId, input.targetLocation, {
+			migrateData: input.migrateData,
+			ignoreCooldown: input.ignoreCooldown,
+			ignoreQuotaCheck: input.ignoreQuotaCheck,
+		});
+
+		res.json(result);
 	} catch (error) { next(error); }
 });
 async function resetCommentUserRoute(req: Request, res: Response, next: NextFunction) {

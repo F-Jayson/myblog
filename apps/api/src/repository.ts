@@ -1034,11 +1034,23 @@ export async function setUserInitialStorageLocation(userId: number, location: "s
 	return getUserSpace(userId);
 }
 
+export type StorageMigrationOptions = {
+	ignoreCooldown?: boolean;
+	ignoreQuotaCheck?: boolean;
+	onProgress?: (progress: { current: number; total: number; currentFile: string }) => void;
+};
+
 export async function executeUserStorageMigration(
 	userId: number,
 	targetLocation: "server" | "cloudflare",
-	onProgress?: (progress: { current: number; total: number; currentFile: string }) => void
+	optionsOrProgress?: StorageMigrationOptions | ((progress: { current: number; total: number; currentFile: string }) => void)
 ) {
+	const options: StorageMigrationOptions = typeof optionsOrProgress === "function"
+		? { onProgress: optionsOrProgress }
+		: (optionsOrProgress ?? {});
+
+	const { ignoreCooldown = false, ignoreQuotaCheck = false, onProgress } = options;
+
 	if (targetLocation !== "server" && targetLocation !== "cloudflare") {
 		throw new Error("目标存储位置无效");
 	}
@@ -1046,11 +1058,11 @@ export async function executeUserStorageMigration(
 	if (!user) throw new Error("用户不存在");
 	const fromLocation = user.storageLocation || "server";
 	if (fromLocation === targetLocation) {
-		return { success: true, message: "存储位置未改变" };
+		return { success: true, message: "存储位置未改变", targetLocation, totalFiles: 0, migratedFiles: 0, migratedBytes: 0 };
 	}
 
-	// 1. 每月只能更改一次存储位置
-	if (user.storageLocationSwitchedAt) {
+	// 1. 每月只能更改一次存储位置（非管理员强制时）
+	if (!ignoreCooldown && user.storageLocationSwitchedAt) {
 		const switchedAt = new Date(user.storageLocationSwitchedAt).getTime();
 		const cooldownMs = 30 * 24 * 60 * 60 * 1000;
 		const nextAvailable = switchedAt + cooldownMs;
@@ -1060,9 +1072,9 @@ export async function executeUserStorageMigration(
 		}
 	}
 
-	// 2. CF 转服务器限制：已使用空间超 30MB 则不能转回
+	// 2. CF 转服务器限制：已使用空间超 30MB 则不能转回（非管理员强制时）
 	const space = await getUserSpace(userId);
-	if (targetLocation === "server" && space.usedBytes > USER_SPACE_SERVER_LIMIT_BYTES) {
+	if (!ignoreQuotaCheck && targetLocation === "server" && space.usedBytes > USER_SPACE_SERVER_LIMIT_BYTES) {
 		const usedMb = (space.usedBytes / (1024 * 1024)).toFixed(1);
 		throw new Error(`当前已使用存储空间为 ${usedMb}MB，超过服务器存储的 30MB 空间上限，无法转回服务器存储。请先清理文件至 30MB 以下后再进行切换。`);
 	}
@@ -1161,6 +1173,54 @@ export async function executeUserStorageMigration(
 		);
 		throw error;
 	}
+}
+
+export async function adminSetUserStorageLocation(
+	userId: number,
+	targetLocation: "server" | "cloudflare",
+	options?: {
+		migrateData?: boolean;
+		ignoreCooldown?: boolean;
+		ignoreQuotaCheck?: boolean;
+	}
+) {
+	const { migrateData = true, ignoreCooldown = true, ignoreQuotaCheck = false } = options ?? {};
+	const user = await getCommentUserById(userId);
+	if (!user) throw new Error("用户不存在");
+
+	if (migrateData) {
+		const result = await executeUserStorageMigration(userId, targetLocation, {
+			ignoreCooldown,
+			ignoreQuotaCheck,
+		});
+		return { success: true, targetLocation, migrated: true, result };
+	}
+
+	// 仅更新配置，不执行物理迁移
+	await pool.execute(
+		`UPDATE comment_users 
+		 SET storage_location = ?, storage_location_switched_at = NOW() 
+		 WHERE id = ?`,
+		[targetLocation, userId]
+	);
+
+	// 同步调整已有记录的 storage_url 格式
+	const [items] = await pool.query<RowDataPacket[]>(
+		"SELECT id, storage_key FROM user_storage_items WHERE user_id = ?",
+		[userId]
+	);
+	for (const item of items) {
+		const storageKey = String(item.storage_key || "");
+		let newStorageUrl = "";
+		if (targetLocation === "cloudflare") {
+			newStorageUrl = config.storage.worker.url ? `${config.storage.worker.url}/user-space/${storageKey}` : "";
+		} else {
+			newStorageUrl = `/api/user/storage/${item.id}/file`;
+		}
+		await pool.execute("UPDATE user_storage_items SET storage_url = ? WHERE id = ?", [newStorageUrl, item.id]);
+	}
+
+	return { success: true, targetLocation, migrated: false };
 }
 
 export async function createUserStorageItem(input: { userId: number; kind?: string; name?: string; url: string; storageKey?: string; mimeType?: string; byteSize: number; isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null; limitViews?: boolean; maxViews?: number | null }) {
@@ -1398,11 +1458,29 @@ export async function verifyCommentUserPassword(id: number, password: string) {
 }
 
 export async function listAdminCommentUsers() {
-	const [rows] = await pool.query<RowDataPacket[]>("SELECT u.id, u.account, u.nickname, u.email, u.avatar_url AS avatar, u.is_active AS isActive, u.created_at AS createdAt, u.last_login_at AS lastLoginAt, COUNT(c.id) AS commentCount, IF(g.user_id IS NULL, 0, 1) AS knowledgeOpen FROM comment_users u LEFT JOIN comments c ON c.user_id = u.id LEFT JOIN kb_admin_grants g ON g.user_id = u.id GROUP BY u.id, g.user_id ORDER BY u.created_at DESC");
-	return rows.map((row) => { const count = Number(row.commentCount); return { id: Number(row.id), account: String(row.account), nickname: String(row.nickname), email: row.email ? String(row.email) : null, avatar: String(row.avatar), isActive: Boolean(Number(row.isActive)), status: Number(row.isActive) ? "active" : "disabled", createdAt: String(row.createdAt), lastLoginAt: row.lastLoginAt ? String(row.lastLoginAt) : null, commentCount: count, commentsCount: count, knowledgeOpen: Boolean(Number(row.knowledgeOpen)) }; });
+	const [rows] = await pool.query<RowDataPacket[]>("SELECT u.id, u.account, u.nickname, u.email, u.avatar_url AS avatar, u.is_active AS isActive, u.storage_location AS storageLocation, u.storage_location_switched_at AS storageLocationSwitchedAt, u.created_at AS createdAt, u.last_login_at AS lastLoginAt, COUNT(c.id) AS commentCount, IF(g.user_id IS NULL, 0, 1) AS knowledgeOpen FROM comment_users u LEFT JOIN comments c ON c.user_id = u.id LEFT JOIN kb_admin_grants g ON g.user_id = u.id GROUP BY u.id, g.user_id ORDER BY u.created_at DESC");
+	return rows.map((row) => {
+		const count = Number(row.commentCount);
+		return {
+			id: Number(row.id),
+			account: String(row.account),
+			nickname: String(row.nickname),
+			email: row.email ? String(row.email) : null,
+			avatar: String(row.avatar),
+			isActive: Boolean(Number(row.isActive)),
+			status: Number(row.isActive) ? "active" : "disabled",
+			storageLocation: (row.storageLocation as "server" | "cloudflare" | null) ?? null,
+			storageLocationSwitchedAt: row.storageLocationSwitchedAt ? String(row.storageLocationSwitchedAt) : null,
+			createdAt: String(row.createdAt),
+			lastLoginAt: row.lastLoginAt ? String(row.lastLoginAt) : null,
+			commentCount: count,
+			commentsCount: count,
+			knowledgeOpen: Boolean(Number(row.knowledgeOpen))
+		};
+	});
 }
 
-export async function updateCommentUser(id: number, input: { account?: string; nickname?: string; email?: string | null; avatar?: string | null; password?: string; isActive?: boolean; isAdmin?: boolean }) {
+export async function updateCommentUser(id: number, input: { account?: string; nickname?: string; email?: string | null; avatar?: string | null; password?: string; isActive?: boolean; isAdmin?: boolean; storageLocation?: "server" | "cloudflare" | null }) {
 	const fields: string[] = [];
 	const values: Array<string | number | boolean | null> = [];
 	if (input.account !== undefined) { fields.push("account = ?"); values.push(input.account.trim()); }
@@ -1412,6 +1490,11 @@ export async function updateCommentUser(id: number, input: { account?: string; n
 	if (input.password !== undefined) { fields.push("password_hash = ?"); values.push(hashCommentPassword(input.password)); }
 	if (input.isActive !== undefined) { fields.push("is_active = ?"); values.push(input.isActive); }
 	if (input.isAdmin !== undefined) { fields.push("is_admin = ?"); values.push(input.isAdmin); }
+	if (input.storageLocation !== undefined) {
+		fields.push("storage_location = ?");
+		values.push(input.storageLocation);
+		fields.push("storage_location_switched_at = NOW()");
+	}
 	if (!fields.length) return false;
 	values.push(id);
 	const [result] = await pool.execute<ResultSetHeader>(`UPDATE comment_users SET ${fields.join(", ")} WHERE id = ?`, values);

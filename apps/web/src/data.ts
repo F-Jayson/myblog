@@ -29,7 +29,7 @@ export const fallbackSite: SiteData = {
 	tags: [],
 	dynamics: [],
 	announcement: { content: "", updatedAt: "", displayItems: [] },
-	hue: 165,
+	hue: 240,
 };
 
 export function fallbackPage(page = 1, pageSize = 10): Paginated<PostSummary> {
