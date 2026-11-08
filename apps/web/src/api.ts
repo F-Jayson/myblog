@@ -1,7 +1,7 @@
 import { fallbackPosts, fallbackPostsFor, fallbackSite } from "./data";
 import { getBrowserFingerprint, getCachedFingerprint, getOrCreateDeviceId } from "./fingerprint";
 import { absoluteMediaUrl } from "./media";
-import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, ClipboardContentType, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, GameLeaderboard, GameScoreResult, GamesHome, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
+import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, ClipboardContentType, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, GameLeaderboard, GameScoreResult, GamesHome, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, StorageMigrationRecord, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
 
 export type PublicResourcePayload = {
 	locked?: boolean;
@@ -492,8 +492,64 @@ export const api = {
 	},
 	async userSpace(): Promise<UserSpaceStats> {
 		const payload = await request<unknown>("/api/user/space");
-		const value = unwrapPayload(payload) as Record<string, unknown>;
-		return { limitBytes: Number(value.limitBytes ?? value.limit ?? 30 * 1024 * 1024), usedBytes: Number(value.usedBytes ?? value.used ?? 0), remainingBytes: Number(value.remainingBytes ?? value.remaining ?? 0), categories: (value.categories && typeof value.categories === "object") ? value.categories as Record<string, number> : {} };
+		const value = unwrapPayload(payload) as Record<string, any>;
+		return {
+			limitBytes: Number(value.limitBytes ?? value.limit ?? 30 * 1024 * 1024),
+			usedBytes: Number(value.usedBytes ?? value.used ?? 0),
+			remainingBytes: Number(value.remainingBytes ?? value.remaining ?? 0),
+			categories: (value.categories && typeof value.categories === "object") ? value.categories as Record<string, number> : {},
+			storageLocation: value.storageLocation ?? null,
+			storageLocationSwitchedAt: value.storageLocationSwitchedAt ?? null,
+			storageLocationSelected: Boolean(value.storageLocationSelected),
+			canSwitchLocation: Boolean(value.canSwitchLocation),
+			nextSwitchAvailableAt: value.nextSwitchAvailableAt ?? null,
+			switchBlockReason: value.switchBlockReason ?? null,
+			activeMigration: value.activeMigration ?? null,
+		};
+	},
+	async getStorageLocation(): Promise<{
+		storageLocation: "server" | "cloudflare" | null;
+		storageLocationSwitchedAt: string | null;
+		storageLocationSelected: boolean;
+		canSwitchLocation: boolean;
+		nextSwitchAvailableAt: string | null;
+		switchBlockReason: string | null;
+		activeMigration: StorageMigrationRecord | null;
+	}> {
+		const payload = await request<any>("/api/user/storage-location");
+		return unwrapPayload(payload) as any;
+	},
+	async setInitialStorageLocation(location: "server" | "cloudflare"): Promise<{
+		success: boolean;
+		storageLocation: "server" | "cloudflare";
+		limitBytes: number;
+	}> {
+		const payload = await request<any>("/api/user/storage-location/initial", {
+			method: "POST",
+			body: JSON.stringify({ location }),
+			headers: { "content-type": "application/json" },
+		});
+		return unwrapPayload(payload) as any;
+	},
+	async switchStorageLocation(targetLocation: "server" | "cloudflare", confirmLinkInvalidation: boolean): Promise<{
+		success: boolean;
+		targetLocation: "server" | "cloudflare";
+		result: {
+			totalFiles: number;
+			migratedFiles: number;
+			migratedBytes: number;
+		};
+	}> {
+		const payload = await request<any>("/api/user/storage-location/switch", {
+			method: "POST",
+			body: JSON.stringify({ targetLocation, confirmLinkInvalidation }),
+			headers: { "content-type": "application/json" },
+		});
+		return unwrapPayload(payload) as any;
+	},
+	async getStorageMigrationProgress(): Promise<{ migration: StorageMigrationRecord | null }> {
+		const payload = await request<any>("/api/user/storage-location/migration-progress");
+		return unwrapPayload(payload) as any;
 	},
 	async userStorage(): Promise<UserStorageItem[]> {
 		const payload = await request<unknown>("/api/user/storage"); const value = unwrapPayload(payload);

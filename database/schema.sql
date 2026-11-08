@@ -198,12 +198,32 @@ CREATE TABLE IF NOT EXISTS comment_users (
   signature VARCHAR(500) NOT NULL DEFAULT '',
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  storage_location ENUM('server', 'cloudflare') DEFAULT NULL,
+  storage_location_switched_at DATETIME NULL,
   registration_ip VARCHAR(128) NOT NULL DEFAULT '',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   last_login_at DATETIME NULL,
   INDEX idx_comment_users_active (is_active),
   INDEX idx_comment_users_created (created_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS storage_migrations (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT UNSIGNED NOT NULL,
+  from_location ENUM('server', 'cloudflare') NOT NULL,
+  to_location ENUM('server', 'cloudflare') NOT NULL,
+  status ENUM('pending', 'in_progress', 'completed', 'failed') NOT NULL DEFAULT 'pending',
+  total_files INT UNSIGNED NOT NULL DEFAULT 0,
+  migrated_files INT UNSIGNED NOT NULL DEFAULT 0,
+  total_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  migrated_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  current_file VARCHAR(255) NULL,
+  error_message TEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME NULL,
+  INDEX idx_storage_migrations_user_status (user_id, status),
+  CONSTRAINT fk_storage_migrations_user FOREIGN KEY (user_id) REFERENCES comment_users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS comment_sessions (

@@ -67,6 +67,9 @@ import {
 	updateUserStorageSettings,
 	deleteUserStorageItem,
 	getUserSpace,
+	setUserInitialStorageLocation,
+	executeUserStorageMigration,
+	getActiveStorageMigration,
 	createUserClipboard,
 	listUserClipboards,
 	getUserClipboard,
@@ -425,12 +428,14 @@ function userImageUploadRoute(kind: UserStorageKind, defaultPublic: boolean) {
 				const limitViews = parseBooleanInput(req.body?.limitViews, false);
 				const rawMaxViews = req.body?.maxViews !== undefined ? Number(req.body.maxViews) : null;
 				const maxViews = limitViews && rawMaxViews && Number.isFinite(rawMaxViews) ? Math.max(1, Math.floor(rawMaxViews)) : null;
-				await saveUserSpaceFile({
+				const targetStorage = req.commentUser.storageLocation === "cloudflare" ? "cloudflare" : "server";
+				const saved = await saveUserSpaceFile({
 					filename: req.file.filename,
 					localPath: req.file.path,
 					mimeType: req.file.mimetype,
+					targetStorage,
 				});
-				const item = await createUserStorageItem({ userId: req.commentUser.id, kind, name, url: "", storageKey: req.file.filename, mimeType: req.file.mimetype, byteSize: req.file.size, isPublic, accessPassword: accessPassword ?? null, accessPasswordHint: accessPasswordHint ?? null, limitViews, maxViews });
+				const item = await createUserStorageItem({ userId: req.commentUser.id, kind, name, url: saved.url || "", storageKey: req.file.filename, mimeType: req.file.mimetype, byteSize: req.file.size, isPublic, accessPassword: accessPassword ?? null, accessPasswordHint: accessPasswordHint ?? null, limitViews, maxViews });
 				if (!item) throw new Error("图片记录创建失败");
 				res.status(201).json(item);
 			} catch (error) {
@@ -714,6 +719,48 @@ const userProfilePatchInput = z.object({
 
 app.get("/api/user/space", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try { res.json(await getUserSpace(req.commentUser!.id)); } catch (error) { next(error); }
+});
+
+app.get("/api/user/storage-location", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
+	try {
+		res.json(await getUserSpace(req.commentUser!.id));
+	} catch (error) { next(error); }
+});
+
+const initialStorageLocationInput = z.object({
+	location: z.enum(["server", "cloudflare"]),
+});
+
+app.post("/api/user/storage-location/initial", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
+	try {
+		const input = initialStorageLocationInput.parse(req.body);
+		const updated = await setUserInitialStorageLocation(req.commentUser!.id, input.location);
+		res.json(updated);
+	} catch (error) { next(error); }
+});
+
+const switchStorageLocationInput = z.object({
+	location: z.enum(["server", "cloudflare"]),
+	confirmLinkInvalidation: z.boolean(),
+});
+
+app.post("/api/user/storage-location/switch", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
+	try {
+		const input = switchStorageLocationInput.parse(req.body);
+		if (!input.confirmLinkInvalidation) {
+			res.status(400).json({ error: "请确认原有资源链接失效风险后继续操作" });
+			return;
+		}
+		const result = await executeUserStorageMigration(req.commentUser!.id, input.location);
+		res.json(result);
+	} catch (error) { next(error); }
+});
+
+app.get("/api/user/storage-location/migration-progress", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
+	try {
+		const migration = await getActiveStorageMigration(req.commentUser!.id);
+		res.json({ migration });
+	} catch (error) { next(error); }
 });
 app.get("/api/user/storage", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("imageHostingEnabled", "图床功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try { res.json(await listUserStorageItems(req.commentUser!.id)); } catch (error) { next(error); }

@@ -1,11 +1,14 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import type mysql from "mysql2/promise";
 import nodemailer from "nodemailer";
 import { renderVerificationCodeEmail, renderNotificationEmail } from "./mailTemplates.js";
 import { resolveAccessSecret } from "./accessPassword.js";
 import { UserDeletionBlockedError, userOwnsKnowledgeData } from "./knowledge/index.js";
 import { pool } from "./db.js";
 import { displayIpLocation, locateIp } from "./ipLocation.js";
+import { config } from "./config.js";
+import { migrateUserFile } from "./storage.js";
 import type { AuthorActivityDay, AuthorLearningProgress, AuthorProfile, AuthorProfileDetails, AuthorSkill, Category, Changelog, ClipboardContentType, FeedbackEntry, FriendLink, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, Tag, UserClipboard, UserStorageItem } from "./types.js";
 
 const ADMIN_PASSWORD_KEYLEN = 64;
@@ -13,7 +16,21 @@ const ADMIN_SESSION_DAYS = 7;
 const COMMENT_PASSWORD_KEYLEN = 64;
 const COMMENT_SESSION_DAYS = 30;
 const COMMENT_EMAIL_CODE_TTL_MINUTES = 15;
-export const USER_SPACE_LIMIT_BYTES = 30 * 1024 * 1024;
+export const USER_SPACE_SERVER_LIMIT_BYTES = 30 * 1024 * 1024;
+export const USER_SPACE_CF_LIMIT_BYTES = 50 * 1024 * 1024;
+export const USER_SPACE_LIMIT_BYTES = USER_SPACE_SERVER_LIMIT_BYTES;
+
+export async function getUserSpaceQuotaLimit(userId: number, conn?: mysql.Connection | mysql.PoolConnection): Promise<number> {
+	const client = (conn || pool) as mysql.Connection;
+	const [[row]] = await client.query<RowDataPacket[]>(
+		"SELECT storage_location FROM comment_users WHERE id = ? LIMIT 1",
+		[userId]
+	);
+	if (row?.storage_location === "cloudflare") {
+		return USER_SPACE_CF_LIMIT_BYTES;
+	}
+	return USER_SPACE_SERVER_LIMIT_BYTES;
+}
 export const PRESET_AVATAR_PATHS = Object.freeze([
 	...Array.from({ length: 14 }, (_, index) => `/avatars/头像 女孩 (${index}).svg`),
 	...Array.from({ length: 7 }, (_, index) => `/avatars/头像 男孩 (${index}).svg`),
@@ -254,6 +271,9 @@ function mapCommentUser(row: RowDataPacket) {
 		avatar: String(row.avatar_url || randomPresetAvatar()),
 		email: row.email ? String(row.email) : null,
 		isAdmin: Boolean(Number(row.is_admin)),
+		storageLocation: (row.storage_location as "server" | "cloudflare" | null) || null,
+		storageLocationSwitchedAt: row.storage_location_switched_at ? String(row.storage_location_switched_at) : null,
+		storageLocationSelected: Boolean(row.storage_location),
 		createdAt: String(row.created_at),
 		lastLoginAt: row.last_login_at ? String(row.last_login_at) : null,
 	};
@@ -852,13 +872,14 @@ export async function listCommentStickers(userId?: number | null) {
 }
 
 export async function createUserSticker(input: { userId: number; name: string; imageUrl: string; mimeType?: string; byteSize: number }) {
-	if (!Number.isFinite(input.byteSize) || input.byteSize < 0 || input.byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("文件大小无效");
-	const byteSize = Math.floor(input.byteSize);
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
+		const limitBytes = await getUserSpaceQuotaLimit(input.userId, connection);
+		if (!Number.isFinite(input.byteSize) || input.byteSize < 0 || input.byteSize > limitBytes) throw new Error("文件大小无效");
+		const byteSize = Math.floor(input.byteSize);
 		const usage = await lockedUserUsage(connection, input.userId);
-		if (usage.total + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
+		if (usage.total + byteSize > limitBytes) throw new Error(`用户共享空间不足（上限 ${Math.round(limitBytes / 1024 / 1024)}MB）`);
 		const [result] = await connection.execute<ResultSetHeader>("INSERT INTO comment_user_stickers (user_id, name, image_url, mime_type, byte_size) VALUES (?, ?, ?, ?, ?)", [input.userId, input.name.slice(0, 120), input.imageUrl, input.mimeType ?? "image/png", byteSize]);
 		await connection.commit();
 		return { id: Number(result.insertId), name: input.name, url: input.imageUrl, ownerId: input.userId };
@@ -923,7 +944,36 @@ async function lockedUserUsage(connection: Awaited<ReturnType<typeof pool.getCon
 	return { images: Number(row?.images ?? 0), clipboards: Number(row?.clipboards ?? 0), stickers: Number(row?.stickers ?? 0), total: Number(row?.images ?? 0) + Number(row?.clipboards ?? 0) + Number(row?.stickers ?? 0) };
 }
 
+export async function getActiveStorageMigration(userId: number) {
+	const [[row]] = await pool.query<RowDataPacket[]>(
+		"SELECT * FROM storage_migrations WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+		[userId]
+	);
+	if (!row) return null;
+	return {
+		id: Number(row.id),
+		fromLocation: row.from_location as "server" | "cloudflare",
+		toLocation: row.to_location as "server" | "cloudflare",
+		status: row.status as "pending" | "in_progress" | "completed" | "failed",
+		totalFiles: Number(row.total_files),
+		migratedFiles: Number(row.migrated_files),
+		totalBytes: Number(row.total_bytes),
+		migratedBytes: Number(row.migrated_bytes),
+		currentFile: row.current_file ? String(row.current_file) : "",
+		errorMessage: row.error_message ? String(row.error_message) : null,
+		createdAt: String(row.created_at),
+		completedAt: row.completed_at ? String(row.completed_at) : null,
+	};
+}
+
 export async function getUserSpace(userId: number) {
+	const [[userRow]] = await pool.query<RowDataPacket[]>(
+		"SELECT storage_location, storage_location_switched_at FROM comment_users WHERE id = ? LIMIT 1",
+		[userId]
+	);
+	const storageLocation = (userRow?.storage_location as "server" | "cloudflare" | null) || null;
+	const limitBytes = storageLocation === "cloudflare" ? USER_SPACE_CF_LIMIT_BYTES : USER_SPACE_SERVER_LIMIT_BYTES;
+
 	const [[row]] = await pool.query<RowDataPacket[]>(`SELECT
 		COALESCE((SELECT SUM(byte_size) FROM user_storage_items WHERE user_id = ?), 0) AS images,
 		COALESCE((SELECT SUM(byte_size) FROM user_storage_items WHERE user_id = ? AND kind = 'image_host'), 0) AS imageHost,
@@ -940,17 +990,188 @@ export async function getUserSpace(userId: number) {
 		stickers: Number(row?.stickers ?? 0),
 	};
 	const usedBytes = categories.images + categories.clipboards + categories.stickers;
-	return { limitBytes: USER_SPACE_LIMIT_BYTES, usedBytes, remainingBytes: Math.max(0, USER_SPACE_LIMIT_BYTES - usedBytes), categories };
+
+	let canSwitchLocation = true;
+	let nextSwitchAvailableAt: string | null = null;
+	if (userRow?.storage_location_switched_at) {
+		const switchedAt = new Date(userRow.storage_location_switched_at).getTime();
+		const cooldownMs = 30 * 24 * 60 * 60 * 1000;
+		const nextAvailable = switchedAt + cooldownMs;
+		if (Date.now() < nextAvailable) {
+			canSwitchLocation = false;
+			nextSwitchAvailableAt = new Date(nextAvailable).toISOString();
+		}
+	}
+
+	const activeMigration = await getActiveStorageMigration(userId);
+
+	return {
+		limitBytes,
+		usedBytes,
+		remainingBytes: Math.max(0, limitBytes - usedBytes),
+		categories,
+		storageLocation,
+		storageLocationSelected: Boolean(storageLocation),
+		canSwitchLocation,
+		nextSwitchAvailableAt,
+		activeMigration,
+	};
+}
+
+export async function setUserInitialStorageLocation(userId: number, location: "server" | "cloudflare") {
+	if (location !== "server" && location !== "cloudflare") {
+		throw new Error("存储位置选项无效");
+	}
+	const user = await getCommentUserById(userId);
+	if (!user) throw new Error("用户不存在");
+	if (user.storageLocation) {
+		throw new Error("您已设置过存储位置，如需变更请使用切换功能");
+	}
+	await pool.execute(
+		"UPDATE comment_users SET storage_location = ?, storage_location_switched_at = NOW() WHERE id = ?",
+		[location, userId]
+	);
+	return getUserSpace(userId);
+}
+
+export async function executeUserStorageMigration(
+	userId: number,
+	targetLocation: "server" | "cloudflare",
+	onProgress?: (progress: { current: number; total: number; currentFile: string }) => void
+) {
+	if (targetLocation !== "server" && targetLocation !== "cloudflare") {
+		throw new Error("目标存储位置无效");
+	}
+	const user = await getCommentUserById(userId);
+	if (!user) throw new Error("用户不存在");
+	const fromLocation = user.storageLocation || "server";
+	if (fromLocation === targetLocation) {
+		return { success: true, message: "存储位置未改变" };
+	}
+
+	// 1. 每月只能更改一次存储位置
+	if (user.storageLocationSwitchedAt) {
+		const switchedAt = new Date(user.storageLocationSwitchedAt).getTime();
+		const cooldownMs = 30 * 24 * 60 * 60 * 1000;
+		const nextAvailable = switchedAt + cooldownMs;
+		if (Date.now() < nextAvailable) {
+			const dateStr = new Date(nextAvailable).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
+			throw new Error(`每个用户每个月只能更改一次存储位置，下次可更改时间为：${dateStr}`);
+		}
+	}
+
+	// 2. CF 转服务器限制：已使用空间超 30MB 则不能转回
+	const space = await getUserSpace(userId);
+	if (targetLocation === "server" && space.usedBytes > USER_SPACE_SERVER_LIMIT_BYTES) {
+		const usedMb = (space.usedBytes / (1024 * 1024)).toFixed(1);
+		throw new Error(`当前已使用存储空间为 ${usedMb}MB，超过服务器存储的 30MB 空间上限，无法转回服务器存储。请先清理文件至 30MB 以下后再进行切换。`);
+	}
+
+	// 3. 查询待迁移文件
+	const [items] = await pool.query<RowDataPacket[]>(
+		"SELECT id, storage_key, byte_size, is_public, name FROM user_storage_items WHERE user_id = ? ORDER BY id ASC",
+		[userId]
+	);
+
+	const totalFiles = items.length;
+	const totalBytes = items.reduce((sum, item) => sum + Number(item.byte_size || 0), 0);
+
+	const [migrationResult] = await pool.execute<ResultSetHeader>(
+		`INSERT INTO storage_migrations (user_id, from_location, to_location, status, total_files, migrated_files, total_bytes, migrated_bytes, current_file)
+		 VALUES (?, ?, ?, 'in_progress', ?, 0, ?, 0, '')`,
+		[userId, fromLocation, targetLocation, totalFiles, totalBytes]
+	);
+	const migrationId = Number(migrationResult.insertId);
+
+	try {
+		let migratedFiles = 0;
+		let migratedBytes = 0;
+
+		for (const item of items) {
+			const storageKey = String(item.storage_key || "");
+			const byteSize = Number(item.byte_size || 0);
+
+			await pool.execute(
+				`UPDATE storage_migrations 
+				 SET current_file = ?, migrated_files = ?, migrated_bytes = ? 
+				 WHERE id = ?`,
+				[storageKey, migratedFiles, migratedBytes, migrationId]
+			);
+			if (onProgress) {
+				onProgress({ current: migratedFiles, total: totalFiles, currentFile: storageKey });
+			}
+
+			if (storageKey) {
+				await migrateUserFile(storageKey, fromLocation, targetLocation);
+			}
+
+			// 原有分享与访问链接失效：重新生成 public_token，并更新 storage_url
+			const newPublicToken = item.is_public ? randomBytes(32).toString("base64url") : null;
+			let newStorageUrl = "";
+			if (targetLocation === "cloudflare") {
+				newStorageUrl = config.storage.worker.url ? `${config.storage.worker.url}/user-space/${storageKey}` : "";
+			} else {
+				newStorageUrl = `/api/user/storage/${item.id}/file`;
+			}
+
+			await pool.execute(
+				`UPDATE user_storage_items 
+				 SET public_token = ?, storage_url = ? 
+				 WHERE id = ?`,
+				[newPublicToken, newStorageUrl, item.id]
+			);
+
+			migratedFiles++;
+			migratedBytes += byteSize;
+		}
+
+		// 更新用户存储偏好与切换时间
+		await pool.execute(
+			`UPDATE comment_users 
+			 SET storage_location = ?, storage_location_switched_at = NOW() 
+			 WHERE id = ?`,
+			[targetLocation, userId]
+		);
+
+		await pool.execute(
+			`UPDATE storage_migrations 
+			 SET status = 'completed', migrated_files = ?, migrated_bytes = ?, current_file = '', completed_at = NOW() 
+			 WHERE id = ?`,
+			[migratedFiles, migratedBytes, migrationId]
+		);
+
+		if (onProgress) {
+			onProgress({ current: totalFiles, total: totalFiles, currentFile: "" });
+		}
+
+		return {
+			success: true,
+			migrationId,
+			fromLocation,
+			targetLocation,
+			migratedFiles,
+			totalFiles,
+		};
+	} catch (error: any) {
+		await pool.execute(
+			`UPDATE storage_migrations 
+			 SET status = 'failed', error_message = ? 
+			 WHERE id = ?`,
+			[String(error?.message || error), migrationId]
+		);
+		throw error;
+	}
 }
 
 export async function createUserStorageItem(input: { userId: number; kind?: string; name?: string; url: string; storageKey?: string; mimeType?: string; byteSize: number; isPublic?: boolean; accessPassword?: string | null; accessPasswordHint?: string | null; limitViews?: boolean; maxViews?: number | null }) {
-	if (!Number.isFinite(input.byteSize) || input.byteSize < 0 || input.byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("文件大小无效");
-	const byteSize = Math.floor(input.byteSize);
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
+		const limitBytes = await getUserSpaceQuotaLimit(input.userId, connection);
+		if (!Number.isFinite(input.byteSize) || input.byteSize < 0 || input.byteSize > limitBytes) throw new Error("文件大小无效");
+		const byteSize = Math.floor(input.byteSize);
 		const usage = await lockedUserUsage(connection, input.userId);
-		if (usage.total + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
+		if (usage.total + byteSize > limitBytes) throw new Error(`用户共享空间不足（上限 ${Math.round(limitBytes / 1024 / 1024)}MB）`);
 		const token = input.isPublic ? randomBytes(32).toString("base64url") : null;
 		const secret = resolveAccessSecret({ accessPassword: input.accessPassword ?? null, accessPasswordHint: input.accessPasswordHint ?? null });
 		const limitViews = Boolean(input.limitViews);
@@ -1011,8 +1232,9 @@ export async function createUserClipboard(input: { userId: number; title?: strin
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
+		const limitBytes = await getUserSpaceQuotaLimit(input.userId, connection);
 		const usage = await lockedUserUsage(connection, input.userId);
-		if (usage.total + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
+		if (usage.total + byteSize > limitBytes) throw new Error(`用户共享空间不足（上限 ${Math.round(limitBytes / 1024 / 1024)}MB）`);
 		const token = input.isPublic ? randomBytes(32).toString("base64url") : null;
 		const secret = resolveAccessSecret({ accessPassword: input.accessPassword ?? null, accessPasswordHint: input.accessPasswordHint ?? null });
 		const limitViews = Boolean(input.limitViews);
@@ -1038,6 +1260,7 @@ export async function updateUserClipboard(userId: number, id: number, input: { t
 	const connection = await pool.getConnection();
 	try {
 		await connection.beginTransaction();
+		const limitBytes = await getUserSpaceQuotaLimit(userId, connection);
 		const usage = await lockedUserUsage(connection, userId);
 		const [[row]] = await connection.query<RowDataPacket[]>("SELECT * FROM user_clipboards WHERE id = ? AND user_id = ? FOR UPDATE", [id, userId]);
 		if (!row) { await connection.rollback(); return null; }
@@ -1046,7 +1269,7 @@ export async function updateUserClipboard(userId: number, id: number, input: { t
 		const contentType = input.contentType === undefined ? existing.contentType : normalizeClipboardContentType(input.contentType);
 		const language = normalizeClipboardLanguage(contentType, input.language === undefined ? existing.language : input.language);
 		const byteSize = Buffer.byteLength(content, "utf8");
-		if (usage.total - existing.byteSize + byteSize > USER_SPACE_LIMIT_BYTES) throw new Error("用户共享空间不足（上限 30MB）");
+		if (usage.total - existing.byteSize + byteSize > limitBytes) throw new Error(`用户共享空间不足（上限 ${Math.round(limitBytes / 1024 / 1024)}MB）`);
 		const regenerate = Boolean(input.regenerateShareToken);
 		const isPublic = input.isPublic === undefined ? (regenerate ? true : existing.isPublic) : input.isPublic;
 		const token = isPublic ? (regenerate || !existing.publicToken ? randomBytes(32).toString("base64url") : existing.publicToken) : null;

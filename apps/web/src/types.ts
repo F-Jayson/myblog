@@ -59,53 +59,79 @@ export type PublicUser = {
 	role?: string;
 	isAdmin?: boolean;
 	badge?: string | null;
+	storageLocation?: "server" | "cloudflare" | null;
+	storageLocationSwitchedAt?: string | null;
+	storageLocationSelected?: boolean;
+};
+
+export type StorageMigrationRecord = {
+	id: number;
+	userId: number;
+	fromLocation: "server" | "cloudflare";
+	toLocation: "server" | "cloudflare";
+	status: "pending" | "processing" | "completed" | "failed";
+	totalFiles: number;
+	migratedFiles: number;
+	totalBytes: number;
+	migratedBytes: number;
+	currentFile: string;
+	errorMessage: string | null;
+	createdAt: string;
+	completedAt: string | null;
 };
 
 export type UserStorageItem = {
- id: number | string;
- userId?: number | string;
- kind?: string;
- name?: string | null;
- url?: string | null;
- storageKey?: string;
- sizeBytes?: number;
- isPublic?: boolean;
- publicToken?: string | null;
- hasAccessPassword?: boolean;
- accessPasswordHint?: string;
- accessCount?: number;
- limitViews?: boolean;
- maxViews?: number | null;
- createdAt?: string;
- updatedAt?: string;
+	id: number | string;
+	userId?: number | string;
+	kind?: string;
+	name?: string | null;
+	url?: string | null;
+	storageKey?: string;
+	sizeBytes?: number;
+	isPublic?: boolean;
+	publicToken?: string | null;
+	hasAccessPassword?: boolean;
+	accessPasswordHint?: string;
+	accessCount?: number;
+	limitViews?: boolean;
+	maxViews?: number | null;
+	createdAt?: string;
+	updatedAt?: string;
 };
 
 export type ClipboardContentType = "text" | "markdown" | "code";
 
 export type UserClipboard = {
- id: number | string;
- title: string;
- content: string;
- contentType?: ClipboardContentType;
- language?: string;
- sizeBytes?: number;
- isPublic?: boolean;
- publicToken?: string | null;
- publicUrl?: string | null;
- hasAccessPassword?: boolean;
- accessPasswordHint?: string;
- accessCount?: number;
- limitViews?: boolean;
- maxViews?: number | null;
- createdAt?: string;
- updatedAt?: string;
+	id: number | string;
+	title: string;
+	content: string;
+	contentType?: ClipboardContentType;
+	language?: string;
+	sizeBytes?: number;
+	isPublic?: boolean;
+	publicToken?: string | null;
+	publicUrl?: string | null;
+	hasAccessPassword?: boolean;
+	accessPasswordHint?: string;
+	accessCount?: number;
+	limitViews?: boolean;
+	maxViews?: number | null;
+	createdAt?: string;
+	updatedAt?: string;
 };
 
 export type UserSpaceStats = {
- limitBytes: number;
- usedBytes: number;
- remainingBytes: number;
- categories?: Record<string, number>;
+	limitBytes: number;
+	usedBytes: number;
+	remainingBytes: number;
+	categories?: Record<string, number>;
+	storageLocation?: "server" | "cloudflare" | null;
+	storageLocationSwitchedAt?: string | null;
+	storageLocationSelected?: boolean;
+	canSwitchLocation?: boolean;
+	nextSwitchAvailableAt?: string | null;
+	switchBlockReason?: string | null;
+	activeMigration?: StorageMigrationRecord | null;
 };
 
 export type CommentRecord = {

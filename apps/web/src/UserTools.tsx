@@ -1,4 +1,4 @@
-import { Code2, Copy, Eye, FileCode2, FileImage, FileText, Gamepad2, Highlighter, KeyRound, Link as LinkIcon, Pencil, RefreshCw, Save, Trash2, Upload, UserRound, Wrench } from "lucide-react";
+import { ArrowRightLeft, Cloud, Code2, Copy, Eye, FileCode2, FileImage, FileText, Gamepad2, Highlighter, KeyRound, Link as LinkIcon, Pencil, RefreshCw, Save, Server, Trash2, Upload, UserRound, Wrench } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { api } from "./api";
@@ -7,6 +7,7 @@ import { useAuth, UserAvatar } from "./auth";
 import { CLIPBOARD_LANGUAGES } from "./codeHighlight";
 import { ClipboardRenderedBody } from "./ClipboardSharePage";
 import type { ClipboardContentType, FeatureSettings, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
+import { StorageLocationModal } from "./StorageLocationModal";
 
 function RequireLogin({ children, feature, requires, featureLabel = "该功能" }: { children: ReactNode; feature?: keyof FeatureSettings; requires?: Array<keyof FeatureSettings>; featureLabel?: string }) {
  const { user, loading, openAuth, features } = useAuth();
@@ -408,16 +409,124 @@ export function UserProfilePage() {
 }
 
 export function UserSpacePage() {
-	const { user, loading: authLoading, features } = useAuth();
+	const { user, loading: authLoading, features, refresh: refreshAuth } = useAuth();
 	const [stats, setStats] = useState<UserSpaceStats | null>(null);
+	const [showSwitchModal, setShowSwitchModal] = useState(false);
 	const allowed = Boolean(user && !authLoading && features.userCenterEnabled);
+
 	const load = useCallback(async () => {
-		try { setStats(await api.userSpace()); }
-		catch { setStats(null); }
+		try {
+			setStats(await api.userSpace());
+		} catch {
+			setStats(null);
+		}
 	}, []);
+
 	useEffect(() => {
-		if (!allowed) { setStats(null); return; }
+		if (!allowed) {
+			setStats(null);
+			return;
+		}
 		void load();
 	}, [allowed, load]);
-	return <RequireLogin feature="userCenterEnabled" featureLabel="空间管理"><section className="card content-card user-tool-page"><header className="user-tool-heading"><div><span className="tool-eyebrow">STORAGE</span><h2>空间管理</h2><p>图片、头像、评论图片、表情包与剪贴板共享 30MB。</p></div></header>{stats ? <><SpaceBar stats={stats}/><div className="space-categories">{spaceCategoryEntries(stats.categories).map(([name, bytes]) => <div key={name}><span>{SPACE_CATEGORY_LABELS[name] ?? name}</span><strong>{formatBytes(bytes)}</strong></div>)}</div></> : <p>正在加载空间信息...</p>}<nav className="space-shortcuts"><Link to="/tools"><Wrench size={17}/>开发小工具</Link><Link to="/tools/highlight"><Highlighter size={17}/>代码高亮</Link>{features.gamesEnabled ? <Link to="/tools/games"><Gamepad2 size={17}/>小游戏</Link> : null}{features.compilerEnabled ? <Link to="/tools/compiler"><Code2 size={17}/>在线编译器</Link> : null}{features.imageHostingEnabled ? <Link to="/tools/image-host"><FileImage size={17}/>管理图床</Link> : null}{features.clipboardEnabled ? <Link to="/tools/clipboard"><Copy size={17}/>管理剪贴板</Link> : null}<Link to="/user/center"><UserRound size={17}/>用户资料</Link></nav></section></RequireLogin>;
+
+	const isCloudflare = stats?.storageLocation === "cloudflare";
+	const isProcessing = stats?.activeMigration?.status === "processing";
+
+	return (
+		<RequireLogin feature="userCenterEnabled" featureLabel="空间管理">
+			<section className="card content-card user-tool-page">
+				<header className="user-tool-heading">
+					<div>
+						<span className="tool-eyebrow">STORAGE</span>
+						<h2>空间管理</h2>
+						<p>
+							图片、头像、评论图片、表情包与在线剪贴板共享空间
+							{stats ? `（当前配额：${formatBytes(stats.limitBytes)}）` : "。"}
+						</p>
+					</div>
+					<div className="user-tool-heading-actions">
+						<button
+							type="button"
+							className={`user-tool-button ${isProcessing ? "primary" : ""}`}
+							onClick={() => setShowSwitchModal(true)}
+						>
+							<ArrowRightLeft size={15} />
+							{isProcessing ? "迁移进行中 (查看进度)" : "更改存储位置"}
+						</button>
+					</div>
+				</header>
+
+				{stats ? (
+					<>
+						<div className="storage-status-card">
+							<div className="storage-status-info">
+								<div className={`storage-status-icon ${isCloudflare ? "cloudflare" : "server"}`}>
+									{isCloudflare ? <Cloud size={24} /> : <Server size={24} />}
+								</div>
+								<div>
+									<div className="storage-status-badge-row">
+										<strong>{isCloudflare ? "Cloudflare 对象存储" : "服务器本地存储"}</strong>
+										<span className={`storage-badge ${isCloudflare ? "quota-50" : "quota-30"}`}>
+											{formatBytes(stats.limitBytes)} 配额
+										</span>
+										{stats.storageLocationSwitchedAt ? (
+											<small className="storage-switched-time">
+												上次切换：{new Date(stats.storageLocationSwitchedAt).toLocaleDateString()}
+											</small>
+										) : null}
+									</div>
+									<p className="storage-status-hint">
+										{isCloudflare
+											? "采用 Cloudflare R2 全球分布式存储，容量 50MB（大陆网络访问体验可能稍慢）。"
+											: "采用博客私有服务器本地存储，容量 30MB（国内访问稳定，有助于减轻服务器负担）。"}
+										{!stats.canSwitchLocation && stats.nextSwitchAvailableAt ? (
+											<span className="storage-status-cooldown">
+												（本月已更改过，下次可用：{new Date(stats.nextSwitchAvailableAt).toLocaleDateString()}）
+											</span>
+										) : null}
+									</p>
+								</div>
+							</div>
+						</div>
+
+						<SpaceBar stats={stats} />
+
+						<div className="space-categories">
+							{spaceCategoryEntries(stats.categories).map(([name, bytes]) => (
+								<div key={name}>
+									<span>{SPACE_CATEGORY_LABELS[name] ?? name}</span>
+									<strong>{formatBytes(bytes)}</strong>
+								</div>
+							))}
+						</div>
+					</>
+				) : (
+					<p>正在加载空间信息...</p>
+				)}
+
+				<nav className="space-shortcuts">
+					<Link to="/tools"><Wrench size={17} />开发小工具</Link>
+					<Link to="/tools/highlight"><Highlighter size={17} />代码高亮</Link>
+					{features.gamesEnabled ? <Link to="/tools/games"><Gamepad2 size={17} />小游戏</Link> : null}
+					{features.compilerEnabled ? <Link to="/tools/compiler"><Code2 size={17} />在线编译器</Link> : null}
+					{features.imageHostingEnabled ? <Link to="/tools/image-host"><FileImage size={17} />管理图床</Link> : null}
+					{features.clipboardEnabled ? <Link to="/tools/clipboard"><Copy size={17} />管理剪贴板</Link> : null}
+					<Link to="/user/center"><UserRound size={17} />用户资料</Link>
+				</nav>
+			</section>
+
+			<StorageLocationModal
+				open={showSwitchModal}
+				mode="switch"
+				currentLocation={stats?.storageLocation}
+				stats={stats}
+				onClose={() => setShowSwitchModal(false)}
+				onSuccess={() => {
+					void load();
+					void refreshAuth();
+				}}
+			/>
+		</RequireLogin>
+	);
 }

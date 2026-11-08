@@ -20,6 +20,20 @@ export interface StoredPublicFile {
 
 let s3ClientInstance: S3Client | null = null;
 
+export function isWorkerAvailable(): boolean {
+	const { worker } = config.storage;
+	return Boolean(worker.url && worker.token);
+}
+
+export function isR2Available(): boolean {
+	const { r2 } = config.storage;
+	return Boolean(r2.accountId && r2.accessKeyId && r2.secretAccessKey && r2.bucketName);
+}
+
+export function isCloudflareAvailable(): boolean {
+	return isWorkerAvailable() || isR2Available();
+}
+
 export function isWorkerConfigured(): boolean {
 	const { driver, worker } = config.storage;
 	if (driver === "worker") return Boolean(worker.url && worker.token);
@@ -221,11 +235,14 @@ export async function saveUserSpaceFile(options: {
 	buffer?: Buffer;
 	localPath?: string;
 	mimeType?: string;
-}): Promise<{ key: string; size: number }> {
+	targetStorage?: "server" | "cloudflare";
+}): Promise<{ key: string; size: number; url?: string }> {
 	const key = `user-space/${options.filename}`;
 	const mimeType = options.mimeType || "application/octet-stream";
+	const useCloudflare = options.targetStorage === "cloudflare"
+		|| (options.targetStorage === undefined && (isWorkerConfigured() || isR2Configured()));
 
-	if (isWorkerConfigured()) {
+	if (useCloudflare && isWorkerAvailable()) {
 		const data = options.buffer ?? (options.localPath ? await readFile(options.localPath) : null);
 		if (!data) throw new Error("File content is required for storage");
 
@@ -243,14 +260,14 @@ export async function saveUserSpaceFile(options: {
 			throw new Error(`Worker user space upload failed with status ${response.status}`);
 		}
 
-		if (options.localPath && !config.storage.worker.keepLocalCopy) {
+		if (options.localPath) {
 			await unlink(options.localPath).catch(() => undefined);
 		}
 
-		return { key, size: data.length };
+		return { key: options.filename, size: data.length, url: targetUrl };
 	}
 
-	if (isR2Configured()) {
+	if (useCloudflare && isR2Available()) {
 		const data = options.buffer ?? (options.localPath ? await readFile(options.localPath) : null);
 		if (!data) throw new Error("File content is required for storage");
 
@@ -262,11 +279,12 @@ export async function saveUserSpaceFile(options: {
 			CacheControl: "private, max-age=60",
 		}));
 
-		if (options.localPath && !config.storage.r2.keepLocalCopy) {
+		if (options.localPath) {
 			await unlink(options.localPath).catch(() => undefined);
 		}
 
-		return { key, size: data.length };
+		const publicUrl = getR2PublicObjectUrl(key);
+		return { key: options.filename, size: data.length, url: publicUrl };
 	}
 
 	let size = options.buffer?.length ?? 0;
@@ -280,17 +298,18 @@ export async function saveUserSpaceFile(options: {
 		size = fileStat?.size ?? 0;
 	}
 
-	return { key: options.filename, size };
+	return { key: options.filename, size, url: `/api/user/storage/file/${encodeURIComponent(options.filename)}` };
 }
 
 /**
  * Delete a user space file from Worker, R2 and/or local disk
  */
-export async function deleteUserSpaceFile(storageKey: string): Promise<boolean> {
+export async function deleteUserSpaceFile(storageKey: string, targetStorage?: "server" | "cloudflare"): Promise<boolean> {
 	if (!storageKey) return false;
 	const key = `user-space/${basename(storageKey)}`;
+	let deleted = false;
 
-	if (isWorkerConfigured()) {
+	if ((targetStorage === "cloudflare" || targetStorage === undefined) && isWorkerAvailable()) {
 		try {
 			await fetch(`${config.storage.worker.url}/${key}`, {
 				method: "DELETE",
@@ -298,30 +317,158 @@ export async function deleteUserSpaceFile(storageKey: string): Promise<boolean> 
 					"Authorization": `Bearer ${config.storage.worker.token}`,
 				},
 			});
+			deleted = true;
 		} catch (error) {
 			console.warn("[storage] Worker deleteUserSpaceFile failed:", error instanceof Error ? error.message : error);
 		}
-	} else if (isR2Configured()) {
+	} else if ((targetStorage === "cloudflare" || targetStorage === undefined) && isR2Available()) {
 		try {
 			await getS3Client().send(new DeleteObjectCommand({
 				Bucket: config.storage.r2.bucketName,
 				Key: key,
 			}));
+			deleted = true;
 		} catch (error) {
 			console.warn("[storage] R2 deleteUserSpaceFile failed:", error instanceof Error ? error.message : error);
 		}
 	}
 
+	if (targetStorage === "server" || targetStorage === undefined || !deleted) {
+		const localPath = resolve(userStorageUploadRoot, basename(storageKey));
+		await unlink(localPath).catch(() => undefined);
+		deleted = true;
+	}
+
+	return deleted;
+}
+
+/**
+ * Migrate a user space file between Server local storage and Cloudflare object storage
+ */
+export async function migrateUserFile(
+	storageKey: string,
+	from: "server" | "cloudflare",
+	to: "server" | "cloudflare"
+): Promise<{ success: boolean; byteSize: number }> {
+	if (from === to) return { success: true, byteSize: 0 };
+	const key = `user-space/${basename(storageKey)}`;
 	const localPath = resolve(userStorageUploadRoot, basename(storageKey));
-	await unlink(localPath).catch(() => undefined);
-	return true;
+
+	if (from === "server" && to === "cloudflare") {
+		// Read local file
+		let data: Buffer;
+		try {
+			data = await readFile(localPath);
+		} catch (err: any) {
+			if (err?.code === "ENOENT") {
+				console.warn(`[Storage Migration] Local file not found: ${localPath}`);
+				return { success: true, byteSize: 0 };
+			}
+			throw err;
+		}
+
+		if (isWorkerAvailable()) {
+			const targetUrl = `${config.storage.worker.url}/${key}`;
+			const response = await fetch(targetUrl, {
+				method: "PUT",
+				headers: {
+					"Authorization": `Bearer ${config.storage.worker.token}`,
+					"Content-Type": "application/octet-stream",
+				},
+				body: new Uint8Array(data),
+			});
+			if (!response.ok) {
+				throw new Error(`Worker upload failed: ${response.status} ${response.statusText}`);
+			}
+		} else if (isR2Available()) {
+			await getS3Client().send(new PutObjectCommand({
+				Bucket: config.storage.r2.bucketName,
+				Key: key,
+				Body: data,
+				ContentType: "application/octet-stream",
+			}));
+		} else {
+			throw new Error("Cloudflare 存储未配置，无法迁移到云端");
+		}
+		// Unlink local copy after upload succeeded
+		await unlink(localPath).catch(() => undefined);
+		return { success: true, byteSize: data.length };
+	}
+
+	if (from === "cloudflare" && to === "server") {
+		let data: Buffer | null = null;
+		if (isWorkerAvailable()) {
+			const targetUrl = `${config.storage.worker.url}/${key}`;
+			const response = await fetch(targetUrl, {
+				headers: {
+					"Authorization": `Bearer ${config.storage.worker.token}`,
+				},
+			});
+			if (response.status === 404) {
+				console.warn(`[Storage Migration] File not found on Worker: ${key}`);
+				return { success: true, byteSize: 0 };
+			}
+			if (!response.ok) {
+				throw new Error(`Worker download failed: ${response.status} ${response.statusText}`);
+			}
+			const arr = await response.arrayBuffer();
+			data = Buffer.from(arr);
+		} else if (isR2Available()) {
+			try {
+				const response = await getS3Client().send(new GetObjectCommand({
+					Bucket: config.storage.r2.bucketName,
+					Key: key,
+				}));
+				if (response.Body) {
+					const chunks: Buffer[] = [];
+					for await (const chunk of response.Body as any) {
+						chunks.push(Buffer.from(chunk));
+					}
+					data = Buffer.concat(chunks);
+				}
+			} catch (err: any) {
+				if (err?.name === "NoSuchKey") {
+					console.warn(`[Storage Migration] File not found on R2: ${key}`);
+					return { success: true, byteSize: 0 };
+				}
+				throw err;
+			}
+		}
+		if (!data) {
+			console.warn(`[Storage Migration] Could not retrieve file data for ${key}`);
+			return { success: true, byteSize: 0 };
+		}
+
+		// Write to local disk
+		await mkdir(userStorageUploadRoot, { recursive: true });
+		await writeFile(localPath, data);
+
+		// Delete from Cloudflare
+		if (isWorkerAvailable()) {
+			await fetch(`${config.storage.worker.url}/${key}`, {
+				method: "DELETE",
+				headers: {
+					"Authorization": `Bearer ${config.storage.worker.token}`,
+				},
+			}).catch(() => undefined);
+		} else if (isR2Available()) {
+			await getS3Client().send(new DeleteObjectCommand({
+				Bucket: config.storage.r2.bucketName,
+				Key: key,
+			})).catch(() => undefined);
+		}
+
+		return { success: true, byteSize: data.length };
+	}
+
+	return { success: false, byteSize: 0 };
 }
 
 /**
  * Get readable stream for an object in Worker or R2 (or null if not found or local)
  */
 export async function getR2ObjectStream(key: string): Promise<Readable | null> {
-	if (isWorkerConfigured()) {
+	if (isWorkerAvailable()) {
 		try {
 			const targetUrl = `${config.storage.worker.url}/${key.replace(/^\/+/u, "")}`;
 			const response = await fetch(targetUrl, {
@@ -336,7 +483,7 @@ export async function getR2ObjectStream(key: string): Promise<Readable | null> {
 		}
 	}
 
-	if (!isR2Configured()) return null;
+	if (!isR2Available()) return null;
 	try {
 		const response = await getS3Client().send(new GetObjectCommand({
 			Bucket: config.storage.r2.bucketName,

@@ -1205,3 +1205,364 @@ body { font-family: var(--site-body-font, system-ui, sans-serif); }
 .post-access-gate-form input { width: 100%; min-height: 2.6rem; padding: 0 .85rem; border: 1px solid var(--line); border-radius: .55rem; outline: 0; background: var(--btn-bg); color: var(--deep-text); font-size: .92rem; text-align: center; transition: border-color .2s, box-shadow .2s; }
 .post-access-gate-form input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent); }
 .post-access-gate-form input:disabled { opacity: .6; cursor: not-allowed; }
+
+/* User Storage Location Modal & Migration Styles */
+.user-tool-heading-actions {
+	display: flex;
+	align-items: center;
+	gap: .6rem;
+}
+.storage-status-card {
+	margin-bottom: 1rem;
+	padding: 1rem 1.2rem;
+	border-radius: .85rem;
+	background: color-mix(in srgb, var(--card-bg-solid) 94%, var(--btn-bg));
+	border: 1px solid var(--line);
+}
+.storage-status-info {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+}
+.storage-status-icon {
+	display: grid;
+	place-items: center;
+	width: 3.2rem;
+	height: 3.2rem;
+	border-radius: .75rem;
+	flex-shrink: 0;
+}
+.storage-status-icon.server {
+	background: color-mix(in srgb, #3b82f6 14%, transparent);
+	color: #2563eb;
+}
+.storage-status-icon.cloudflare {
+	background: color-mix(in srgb, #f97316 14%, transparent);
+	color: #ea580c;
+}
+.storage-status-badge-row {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: .55rem;
+	margin-bottom: .25rem;
+}
+.storage-status-badge-row strong {
+	font-size: 1.05rem;
+	color: var(--deep-text);
+}
+.storage-switched-time {
+	color: var(--faint-text);
+	font-size: .74rem;
+}
+.storage-status-hint {
+	margin: 0;
+	color: var(--muted-text);
+	font-size: .82rem;
+	line-height: 1.45;
+}
+.storage-status-cooldown {
+	color: #d97706;
+	font-weight: 600;
+	margin-left: .3rem;
+}
+.storage-modal-overlay {
+	z-index: 350;
+}
+.storage-location-modal {
+	width: min(100%, 34rem);
+	padding: 1.6rem 1.6rem 1.4rem;
+}
+.storage-select-view, .storage-migration-view, .storage-complete-view {
+	display: grid;
+	gap: 1.1rem;
+	margin-top: .4rem;
+}
+.storage-notice-banner {
+	display: flex;
+	align-items: flex-start;
+	gap: .75rem;
+	padding: .85rem 1rem;
+	border-radius: .65rem;
+	font-size: .82rem;
+	line-height: 1.5;
+}
+.storage-notice-banner.warning {
+	background: color-mix(in srgb, #f59e0b 14%, transparent);
+	border: 1px solid color-mix(in srgb, #f59e0b 35%, transparent);
+	color: #b45309;
+}
+.storage-notice-banner.danger {
+	background: color-mix(in srgb, #ef4444 14%, transparent);
+	border: 1px solid color-mix(in srgb, #ef4444 35%, transparent);
+	color: #dc2626;
+}
+.storage-notice-banner strong {
+	display: block;
+	margin-bottom: .2rem;
+	font-size: .88rem;
+}
+.storage-notice-banner p {
+	margin: 0;
+	color: inherit;
+}
+.storage-options-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: .9rem;
+}
+.storage-card-option {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	padding: 1rem;
+	border: 2px solid var(--line);
+	border-radius: .85rem;
+	background: color-mix(in srgb, var(--card-bg-solid) 92%, var(--btn-bg));
+	cursor: pointer;
+	transition: all .2s ease;
+	user-select: none;
+}
+.storage-card-option:hover {
+	border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+	transform: translateY(-2px);
+	box-shadow: 0 4px 12px rgb(0 0 0 / .06);
+}
+.storage-card-option.selected {
+	border-color: var(--primary);
+	background: color-mix(in srgb, var(--primary) 7%, var(--card-bg-solid));
+	box-shadow: 0 0 0 1px var(--primary), 0 4px 14px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.storage-card-header {
+	display: flex;
+	align-items: center;
+	gap: .75rem;
+	margin-bottom: .75rem;
+}
+.storage-card-icon {
+	display: grid;
+	place-items: center;
+	width: 2.75rem;
+	height: 2.75rem;
+	border-radius: .65rem;
+}
+.storage-card-icon.server {
+	background: color-mix(in srgb, #3b82f6 14%, transparent);
+	color: #2563eb;
+}
+.storage-card-icon.cloudflare {
+	background: color-mix(in srgb, #f97316 14%, transparent);
+	color: #ea580c;
+}
+.storage-card-title h4 {
+	margin: 0;
+	font-size: .95rem;
+	color: var(--deep-text);
+}
+.storage-badge {
+	display: inline-block;
+	margin-top: .2rem;
+	padding: .15rem .45rem;
+	border-radius: .35rem;
+	font-size: .72rem;
+	font-weight: 750;
+}
+.storage-badge.quota-30 {
+	background: color-mix(in srgb, #3b82f6 15%, transparent);
+	color: #2563eb;
+}
+.storage-badge.quota-50 {
+	background: color-mix(in srgb, #10b981 16%, transparent);
+	color: #059669;
+}
+.storage-card-body {
+	flex: 1;
+}
+.storage-feature-list {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+	display: grid;
+	gap: .45rem;
+	font-size: .78rem;
+	color: var(--muted-text);
+	line-height: 1.45;
+}
+.storage-feature-list li {
+	display: flex;
+	align-items: flex-start;
+	gap: .4rem;
+}
+.storage-feature-list .dot {
+	display: inline-grid;
+	place-items: center;
+	width: 1.05rem;
+	height: 1.05rem;
+	border-radius: 50%;
+	font-size: .65rem;
+	font-weight: 800;
+	flex: 0 0 1.05rem;
+	margin-top: .1rem;
+}
+.storage-feature-list .dot.plus {
+	background: color-mix(in srgb, #10b981 20%, transparent);
+	color: #059669;
+}
+.storage-feature-list .dot.minus {
+	background: color-mix(in srgb, #f59e0b 20%, transparent);
+	color: #d97706;
+}
+.storage-current-tag {
+	margin-top: .75rem;
+	padding: .2rem .5rem;
+	border-radius: .35rem;
+	background: var(--btn-bg);
+	color: var(--primary);
+	font-size: .72rem;
+	font-weight: 700;
+	text-align: center;
+}
+.storage-migration-warning {
+	padding: .85rem 1rem;
+	border: 1px dashed color-mix(in srgb, #e11d48 40%, var(--line));
+	border-radius: .65rem;
+	background: color-mix(in srgb, #e11d48 6%, transparent);
+}
+.storage-migration-warning .warning-title {
+	display: flex;
+	align-items: center;
+	gap: .4rem;
+	color: #e11d48;
+	font-size: .84rem;
+	margin-bottom: .45rem;
+}
+.storage-migration-warning .warning-steps {
+	margin: 0 0 .75rem 1.15rem;
+	padding: 0;
+	font-size: .78rem;
+	color: var(--muted-text);
+	line-height: 1.55;
+}
+.storage-migration-warning .warning-steps strong {
+	color: #e11d48;
+}
+.storage-confirm-checkbox {
+	display: flex;
+	align-items: flex-start;
+	gap: .55rem;
+	cursor: pointer;
+	font-size: .82rem;
+	font-weight: 650;
+	color: var(--deep-text);
+	user-select: none;
+}
+.storage-confirm-checkbox input {
+	margin-top: .15rem;
+	accent-color: #e11d48;
+	width: 1.05rem;
+	height: 1.05rem;
+}
+.storage-modal-actions {
+	margin-top: .4rem;
+}
+.storage-submit-btn {
+	width: 100%;
+	min-height: 2.75rem;
+	font-size: .88rem;
+}
+.storage-migration-view {
+	padding: 1.2rem 0;
+	text-align: center;
+}
+.storage-migrating-header {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 1rem;
+	text-align: left;
+}
+.storage-migrating-header h3 {
+	margin: 0;
+	font-size: 1.05rem;
+	color: var(--deep-text);
+}
+.storage-migrating-header p {
+	margin: .25rem 0 0;
+	color: var(--muted-text);
+	font-size: .8rem;
+}
+.storage-spinner {
+	animation: spin 1s linear infinite;
+	color: var(--primary);
+	flex-shrink: 0;
+}
+.storage-progress-card {
+	margin-top: 1.25rem;
+	padding: 1.1rem;
+	border-radius: .75rem;
+	background: var(--btn-bg);
+	border: 1px solid var(--line);
+}
+.storage-progress-header {
+	display: flex;
+	justify-content: space-between;
+	font-size: .84rem;
+	color: var(--deep-text);
+	margin-bottom: .5rem;
+}
+.storage-progress-bar {
+	height: .65rem;
+	border-radius: .5rem;
+	background: color-mix(in srgb, var(--card-bg-solid) 80%, transparent);
+	overflow: hidden;
+}
+.storage-progress-bar i {
+	background: linear-gradient(90deg, var(--primary), #3b82f6);
+	transition: width .3s ease;
+}
+.storage-progress-meta {
+	display: flex;
+	justify-content: space-between;
+	font-size: .76rem;
+	color: var(--muted-text);
+	margin-top: .55rem;
+}
+.storage-current-file {
+	margin: .65rem 0 0;
+	font-size: .74rem;
+	color: var(--faint-text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.storage-complete-view {
+	padding: 1.5rem .5rem 1rem;
+	text-align: center;
+}
+.storage-complete-icon {
+	display: grid;
+	place-items: center;
+	margin-bottom: .75rem;
+}
+.storage-complete-view h3 {
+	margin: 0;
+	font-size: 1.2rem;
+	color: var(--deep-text);
+}
+.storage-complete-desc {
+	margin: .6rem auto 1.35rem;
+	max-width: 26rem;
+	font-size: .86rem;
+	color: var(--muted-text);
+	line-height: 1.6;
+}
+.storage-btn-wide {
+	width: 100%;
+	min-height: 2.65rem;
+	font-size: .9rem;
+}
+@media (max-width: 640px) {
+	.storage-options-grid {
+		grid-template-columns: 1fr;
+	}
+}

@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type F
 import { api } from "./api";
 import { resolveMediaUrl } from "./media";
 import type { CommentSettings, FeatureSettings, PublicUser } from "./types";
+import { StorageLocationModal } from "./StorageLocationModal";
 
 type AuthMode = "login" | "register";
 
@@ -56,6 +57,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	const [features, setFeatures] = useState<FeatureSettings>(defaultFeatures);
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [mode, setMode] = useState<AuthMode>("login");
+	const [storageModalDismissed, setStorageModalDismissed] = useState(false);
+
 	const refresh = async () => {
 		const [nextUser, nextSettings, nextFeatures] = await Promise.all([api.authMe(), api.commentSettings(), api.features()]);
 		setUser(nextUser);
@@ -64,6 +67,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		setLoading(false);
 	};
 	useEffect(() => { void refresh(); }, []);
+
+	useEffect(() => {
+		if (user) {
+			setStorageModalDismissed(false);
+		}
+	}, [user?.id]);
+
+	const showInitialStorageModal = Boolean(
+		user &&
+		!loading &&
+		user.storageLocationSelected === false &&
+		!storageModalDismissed
+	);
+
 	const value = useMemo<AuthContextValue>(() => ({
 		user,
 		loading,
@@ -72,11 +89,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		openAuth: (nextMode = "login") => { setMode(nextMode); setDialogOpen(true); },
 		closeAuth: () => setDialogOpen(false),
 		login: async (username, password) => { const result = await api.authLogin({ username, password }); setUser(result); setDialogOpen(false); return result; },
-		register: async (input) => { const result = await api.authRegister(input); setUser(await api.authMe()); setDialogOpen(false); return result; },
+		register: async (input) => { const result = await api.authRegister(input); const me = await api.authMe(); setUser(me); setDialogOpen(false); return result; },
 		logout: async () => { await api.authLogout(); setUser(null); },
 		refresh,
 	}), [features, loading, settings, user]);
-	return <AuthContext.Provider value={value}>{children}<AuthDialog open={dialogOpen} mode={mode} onModeChange={setMode} onClose={() => setDialogOpen(false)} /></AuthContext.Provider>;
+
+	return (
+		<AuthContext.Provider value={value}>
+			{children}
+			<AuthDialog open={dialogOpen} mode={mode} onModeChange={setMode} onClose={() => setDialogOpen(false)} />
+			<StorageLocationModal
+				open={showInitialStorageModal}
+				mode="initial"
+				currentLocation={user?.storageLocation}
+				onClose={() => setStorageModalDismissed(true)}
+				onSuccess={() => void refresh()}
+			/>
+		</AuthContext.Provider>
+	);
 }
 
 function displayName(user: PublicUser) {
