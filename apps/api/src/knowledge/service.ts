@@ -77,6 +77,7 @@ import {
 	softDeleteLibrary,
 	updateDocumentCurrentRevision,
 	updateLibrary,
+	updateRevisionRecord,
 	upsertKbEntitlement,
 	upsertLibraryMember,
 	userOwnsKnowledgeData,
@@ -587,24 +588,62 @@ export async function saveKnowledgeDocument(
 		}
 
 		// 3. 检查是否有实质内容变更
-		if (check.currentRevisionId) {
-			const currentRev = await getRevisionDetail(check.currentRevisionId, conn);
-			if (
-				currentRev &&
-				currentRev.title === newTitle &&
-				currentRev.markdown === newMarkdown &&
-				JSON.stringify(currentRev.tags) === JSON.stringify(newTags) &&
-				currentRev.sourceUrl === newSourceUrl
-			) {
-				await conn.commit();
-				return { status: "unchanged", version: check.currentVersion };
-			}
+		const currentRev = check.currentRevisionId
+			? await getRevisionDetail(check.currentRevisionId, conn)
+			: null;
+
+		if (
+			currentRev &&
+			currentRev.title === newTitle &&
+			currentRev.markdown === newMarkdown &&
+			JSON.stringify(currentRev.tags) === JSON.stringify(newTags) &&
+			currentRev.sourceUrl === newSourceUrl
+		) {
+			await conn.commit();
+			return { status: "unchanged", version: check.currentVersion };
 		}
 
 		// 4. 校验配额
 		await assertOwnerQuotaAvailable(conn, lib.ownerUserId, byteSize);
 
-		// 5. 递增版本并创建不可变 revision
+		// 5. 智能会话窗口合并策略（避免每个字保存都新增版本）
+		// 条件：
+		// a. 非手动显式保存（isManualSave === false）
+		// b. 不是已发布的不可变公开快照（publishedRevisionId !== currentRevisionId）
+		// c. 同一操作人（currentRev.actorUserId === userId）
+		// d. 距离当前版本创建在 15 分钟会话窗口以内
+		// e. 单次变动幅度未超过显著阈值（例如 200 字符）
+		const isPublished = Boolean(doc.publishedRevisionId && check.currentRevisionId === doc.publishedRevisionId);
+		let shouldInPlaceUpdate = false;
+
+		if (!data.isManualSave && !isPublished && currentRev && currentRev.actorUserId === userId) {
+			const timeElapsedMs = Date.now() - new Date(currentRev.createdAt).getTime();
+			const charDiff = Math.abs(newMarkdown.length - (currentRev.markdown?.length || 0));
+			if (timeElapsedMs < 15 * 60 * 1000 && charDiff < 200) {
+				shouldInPlaceUpdate = true;
+			}
+		}
+
+		if (shouldInPlaceUpdate && check.currentRevisionId) {
+			await updateRevisionRecord(
+				check.currentRevisionId,
+				{
+					title: newTitle,
+					markdown: newMarkdown,
+					tags: newTags,
+					sourceUrl: newSourceUrl,
+					contentHash,
+					byteSize,
+					actorUserId: userId,
+				},
+				conn,
+			);
+			await conn.execute("UPDATE kb_documents SET updated_at = NOW() WHERE id = ?", [documentId]);
+			await conn.commit();
+			return { status: "saved", version: check.currentVersion, revisionId: check.currentRevisionId };
+		}
+
+		// 6. 否则：递增版本号并创建新的不可变 revision 快照（手动保存、超时或大幅改动）
 		const nextVersion = check.currentVersion + 1;
 		const revisionId = await createRevisionRecord(
 			{
@@ -625,7 +664,7 @@ export async function saveKnowledgeDocument(
 
 		await conn.commit();
 
-		// 6. 若为手动保存，触发白名单积分记录
+		// 7. 若为手动保存，触发白名单积分记录
 		if (data.isManualSave) {
 			void recordWhitelistActivity({
 				userId,
@@ -770,6 +809,36 @@ export async function getKnowledgeDocumentRevisions(
 		throw new KbAccessDeniedError(access.denyReason || "没有查看版本历史的权限");
 	}
 	return getDocumentRevisions(documentId);
+}
+
+/**
+ * 获取单个历史版本详情（含 markdown 正文）
+ */
+export async function getKnowledgeRevisionDetail(
+	userId: number,
+	documentId: number,
+	revisionId: number,
+): Promise<{
+	id: number;
+	documentId: number;
+	version: number;
+	title: string;
+	markdown: string;
+	tags: string[];
+	sourceUrl: string;
+	byteSize: number;
+	actorUserId: number | null;
+	createdAt: string;
+}> {
+	const access = await checkDocumentAccess({ userId }, documentId);
+	if (!access.canRead) {
+		throw new KbAccessDeniedError(access.denyReason || "没有读取该文档版本的权限");
+	}
+	const rev = await getRevisionDetail(revisionId);
+	if (!rev || rev.documentId !== documentId) {
+		throw new KbNotFoundError("指定的历史版本不存在");
+	}
+	return rev;
 }
 
 /**

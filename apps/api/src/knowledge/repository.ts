@@ -758,6 +758,40 @@ export async function createRevisionRecord(
 }
 
 /**
+ * 原地更新现有 Revision 记录（会话时间窗口内合并自动保存）
+ */
+export async function updateRevisionRecord(
+	revisionId: number,
+	data: {
+		title: string;
+		markdown: string;
+		tags?: string[];
+		sourceUrl?: string;
+		contentHash: string;
+		byteSize: number;
+		actorUserId?: number | null;
+	},
+	connection?: PoolConnection,
+): Promise<void> {
+	const conn = connection ?? pool;
+	await conn.execute(
+		`UPDATE kb_revisions
+		 SET title = ?, markdown = ?, tags = ?, source_url = ?, content_hash = ?, byte_size = ?, actor_user_id = ?
+		 WHERE id = ?`,
+		[
+			data.title.trim(),
+			data.markdown,
+			JSON.stringify(data.tags ?? []),
+			data.sourceUrl?.trim() ?? "",
+			data.contentHash,
+			data.byteSize,
+			data.actorUserId ?? null,
+			revisionId,
+		],
+	);
+}
+
+/**
  * 更新文档当前的 revision 指针与 version 号
  */
 export async function updateDocumentCurrentRevision(
@@ -918,10 +952,13 @@ export async function getRevisionDetail(
 	markdown: string;
 	tags: string[];
 	sourceUrl: string;
+	byteSize: number;
+	actorUserId: number | null;
+	createdAt: string;
 } | null> {
 	const conn = connection ?? pool;
 	const [[row]] = await conn.query<RowDataPacket[]>(
-		"SELECT id, document_id, version, title, markdown, tags, source_url FROM kb_revisions WHERE id = ?",
+		"SELECT id, document_id, version, title, markdown, tags, source_url, byte_size, actor_user_id, created_at FROM kb_revisions WHERE id = ?",
 		[revisionId],
 	);
 	if (!row) return null;
@@ -935,6 +972,9 @@ export async function getRevisionDetail(
 		markdown: String(row.markdown),
 		tags,
 		sourceUrl: String(row.source_url),
+		byteSize: Number(row.byte_size || 0),
+		actorUserId: row.actor_user_id ? Number(row.actor_user_id) : null,
+		createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
 	};
 }
 

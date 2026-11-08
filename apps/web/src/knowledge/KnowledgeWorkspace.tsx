@@ -16,6 +16,7 @@ import {
 	FileText,
 	Folder,
 	FolderPlus,
+	GitCompare,
 	Globe,
 	History,
 	MessageCircle,
@@ -51,6 +52,38 @@ import type {
 } from "./types";
 
 const EMOJI_OPTIONS = ["📄", "📝", "💡", "🚀", "📌", "📚", "✨", "🎯", "💻", "🔥", "🛠️", "📖"];
+
+function computeSimpleDiff(oldText: string, newText: string) {
+	const oldLines = oldText.split("\n");
+	const newLines = newText.split("\n");
+	const diff: Array<{ type: "add" | "del" | "normal"; text: string }> = [];
+
+	let i = 0;
+	let j = 0;
+	while (i < oldLines.length || j < newLines.length) {
+		if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+			diff.push({ type: "normal", text: oldLines[i] });
+			i++;
+			j++;
+		} else if (j < newLines.length && !oldLines.slice(i, i + 5).includes(newLines[j])) {
+			diff.push({ type: "add", text: newLines[j] });
+			j++;
+		} else if (i < oldLines.length && !newLines.slice(j, j + 5).includes(oldLines[i])) {
+			diff.push({ type: "del", text: oldLines[i] });
+			i++;
+		} else {
+			if (i < oldLines.length) {
+				diff.push({ type: "del", text: oldLines[i] });
+				i++;
+			}
+			if (j < newLines.length) {
+				diff.push({ type: "add", text: newLines[j] });
+				j++;
+			}
+		}
+	}
+	return diff;
+}
 
 export default function KnowledgeWorkspace() {
 	const { libraryId: paramLibId, documentId: paramDocId } = useParams<{
@@ -119,6 +152,19 @@ export default function KnowledgeWorkspace() {
 	const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
 	const [uploadingAttachment, setUploadingAttachment] = useState(false);
 	const [copiedAttachmentId, setCopiedAttachmentId] = useState<number | null>(null);
+
+	// 历史版本对比 (Diff) 弹窗状态
+	const [diffModalRev, setDiffModalRev] = useState<{
+		rev: RevisionSummary;
+		detail?: {
+			title: string;
+			markdown: string;
+			tags: string[];
+			createdAt: string;
+		};
+		loading: boolean;
+	} | null>(null);
+	const [diffViewMode, setDiffViewMode] = useState<"diff" | "preview">("diff");
 
 	const [comments, setComments] = useState<KbCommentItem[]>([]);
 	const [commentsLoading, setCommentsLoading] = useState(false);
@@ -378,6 +424,19 @@ export default function KnowledgeWorkspace() {
 			alert(`已成功恢复为最新版本 v${res.version}`);
 		} catch (err) {
 			alert(err instanceof Error ? err.message : "恢复版本失败");
+		}
+	};
+
+	// 历史版本详情与 Diff 查看
+	const handleOpenDiff = async (rev: RevisionSummary) => {
+		if (!activeDocId) return;
+		setDiffModalRev({ rev, loading: true });
+		try {
+			const detail = await kbApi.getRevisionDetail(activeDocId, rev.id);
+			setDiffModalRev({ rev, detail, loading: false });
+		} catch (err) {
+			alert(err instanceof Error ? err.message : "获取历史版本详情失败");
+			setDiffModalRev(null);
 		}
 	};
 
@@ -738,12 +797,16 @@ export default function KnowledgeWorkspace() {
 							<button
 								type="button"
 								onClick={() => performSave(true)}
-								disabled={saveStatus === "saving" || saveStatus === "saved"}
-								className="kb-btn kb-btn-primary kb-btn-sm"
-								title="手动保存 (Ctrl+S)"
+								disabled={saveStatus === "saving"}
+								className={`kb-btn kb-btn-sm ${saveStatus === "dirty" ? "kb-btn-primary" : "kb-btn-ghost"}`}
+								title={
+									saveStatus === "dirty"
+										? "立即保存当前修改 (Ctrl+S)"
+										: "将当前草稿封存为一个全新历史里程碑版本 (Ctrl+S)"
+								}
 							>
 								<Save size={13} />
-								<span>保存</span>
+								<span>{saveStatus === "dirty" ? "保存" : "存为里程碑"}</span>
 							</button>
 
 							<button
@@ -1228,38 +1291,58 @@ export default function KnowledgeWorkspace() {
 										每次内容保存自动生成不可变 Revision，支持随时恢复。
 									</p>
 									<div className="kb-revisions-timeline">
-										{revisions.map((rev) => (
-											<div key={rev.id} className="kb-revision-card">
-												<span className="kb-revision-node" />
-												<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-													<span style={{ fontWeight: 700, fontFamily: "monospace" }}>v{rev.version}</span>
-													<span style={{ fontSize: "0.7rem", color: "var(--muted-text)" }}>
-														{rev.createdAt.slice(5, 16)}
-													</span>
-												</div>
-												<div style={{ color: "var(--muted-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-													{rev.title}
-												</div>
-												<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: "0.25rem", borderTop: "1px solid var(--line)" }}>
-													<span style={{ fontSize: "0.7rem", color: "var(--muted-text)" }}>
-														{(rev.byteSize / 1024).toFixed(1)} KB
-													</span>
-													{rev.version !== currentVersion ? (
-														<button
-															type="button"
-															onClick={() => handleRestoreRevision(rev)}
-															className="kb-btn kb-btn-outline kb-btn-xs"
-														>
-															恢复此版
-														</button>
-													) : (
-														<span style={{ fontSize: "0.7rem", color: "var(--primary)", fontWeight: 700 }}>
-															当前版本
+										{revisions.map((rev, index) => {
+											const prevRev = revisions[index + 1];
+											const diffBytes = prevRev ? rev.byteSize - prevRev.byteSize : 0;
+											return (
+												<div key={rev.id} className="kb-revision-card">
+													<span className="kb-revision-node" />
+													<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+														<div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+															<span style={{ fontWeight: 700, fontFamily: "monospace" }}>v{rev.version}</span>
+															{diffBytes > 0 && <span className="kb-diff-badge is-add">+{diffBytes} B</span>}
+															{diffBytes < 0 && <span className="kb-diff-badge is-del">{diffBytes} B</span>}
+															{diffBytes === 0 && <span className="kb-diff-badge is-same">0 B</span>}
+														</div>
+														<span style={{ fontSize: "0.7rem", color: "var(--muted-text)" }}>
+															{rev.createdAt.slice(5, 16)}
 														</span>
-													)}
+													</div>
+													<div style={{ color: "var(--muted-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+														{rev.title}
+													</div>
+													<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: "0.25rem", borderTop: "1px solid var(--line)" }}>
+														<span style={{ fontSize: "0.7rem", color: "var(--muted-text)" }}>
+															{(rev.byteSize / 1024).toFixed(1)} KB
+														</span>
+														<div style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
+															<button
+																type="button"
+																onClick={() => handleOpenDiff(rev)}
+																className="kb-btn kb-btn-outline kb-btn-xs"
+																title="查看与当前内容的变动对比 (Diff)"
+															>
+																<GitCompare size={12} />
+																<span>对比</span>
+															</button>
+															{rev.version !== currentVersion ? (
+																<button
+																	type="button"
+																	onClick={() => handleRestoreRevision(rev)}
+																	className="kb-btn kb-btn-outline kb-btn-xs"
+																>
+																	恢复此版
+																</button>
+															) : (
+																<span style={{ fontSize: "0.7rem", color: "var(--primary)", fontWeight: 700 }}>
+																	当前版本
+																</span>
+															)}
+														</div>
+													</div>
 												</div>
-											</div>
-										))}
+											);
+										})}
 									</div>
 								</div>
 							)}
@@ -1696,6 +1779,106 @@ export default function KnowledgeWorkspace() {
 								</button>
 							</div>
 						</div>
+					</div>
+				</div>
+			)}
+
+			{/* ============================================================== */}
+			{/* 6. 历史版本对比 (Diff) 弹窗 */}
+			{/* ============================================================== */}
+			{diffModalRev && (
+				<div className="kb-modal-overlay">
+					<div className="kb-modal-card max-w-2xl">
+						<div className="kb-modal-header">
+							<div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+								<History size={18} style={{ color: "var(--primary)" }} />
+								<h3 className="kb-modal-title">
+									版本对比：v{diffModalRev.rev.version} 与当前草稿
+								</h3>
+							</div>
+							<button type="button" onClick={() => setDiffModalRev(null)} className="kb-icon-btn">
+								<X size={16} />
+							</button>
+						</div>
+
+						<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem", fontSize: "0.75rem", color: "var(--muted-text)" }}>
+							<div>
+								版本生成时间: {diffModalRev.rev.createdAt.slice(0, 16)} · 大小: {(diffModalRev.rev.byteSize / 1024).toFixed(1)} KB
+							</div>
+							<div className="kb-segmented-group">
+								<button
+									type="button"
+									className={`kb-segmented-item ${diffViewMode === "diff" ? "is-active" : ""}`}
+									onClick={() => setDiffViewMode("diff")}
+								>
+									差异变动 (Diff)
+								</button>
+								<button
+									type="button"
+									className={`kb-segmented-item ${diffViewMode === "preview" ? "is-active" : ""}`}
+									onClick={() => setDiffViewMode("preview")}
+								>
+									历史正文
+								</button>
+							</div>
+						</div>
+
+						{diffModalRev.loading ? (
+							<div style={{ textAlign: "center", padding: "3rem 0" }}>
+								<RefreshCw size={24} className="kb-spin" style={{ color: "var(--primary)" }} />
+								<p style={{ fontSize: "0.8rem", color: "var(--muted-text)", marginTop: "0.5rem" }}>加载版本详情中...</p>
+							</div>
+						) : (
+							<>
+								{diffModalRev.detail && diffModalRev.detail.title !== editTitle && (
+									<div style={{ padding: "0.5rem 0.75rem", borderRadius: "0.5rem", background: "color-mix(in srgb, #f59e0b 10%, transparent)", border: "1px solid color-mix(in srgb, #f59e0b 30%, transparent)", fontSize: "0.78rem", marginBottom: "0.75rem" }}>
+										<strong>标题改动：</strong>
+										<span style={{ textDecoration: "line-through", color: "#ef4444", marginRight: "0.5rem" }}>{diffModalRev.detail.title}</span>
+										➔
+										<span style={{ color: "#10b981", marginLeft: "0.5rem", fontWeight: 700 }}>{editTitle}</span>
+									</div>
+								)}
+
+								{diffViewMode === "diff" ? (
+									<div className="kb-diff-viewer">
+										{computeSimpleDiff(diffModalRev.detail?.markdown || "", editMarkdown).map((line, idx) => (
+											<div key={idx} className={`kb-diff-line is-${line.type}`}>
+												<span className="kb-diff-sign">
+													{line.type === "add" ? "+" : line.type === "del" ? "-" : " "}
+												</span>
+												<span className="kb-diff-content">{line.text || " "}</span>
+											</div>
+										))}
+									</div>
+								) : (
+									<div style={{ padding: "1rem", borderRadius: "0.75rem", border: "1px solid var(--line)", background: "color-mix(in srgb, var(--card-bg-solid) 80%, transparent)", maxHeight: "25rem", overflowY: "auto", fontFamily: "monospace", fontSize: "0.8rem", whiteSpace: "pre-wrap" }}>
+										{diffModalRev.detail?.markdown}
+									</div>
+								)}
+
+								<div className="kb-modal-footer">
+									{diffModalRev.rev.version !== currentVersion && (
+										<button
+											type="button"
+											onClick={() => {
+												handleRestoreRevision(diffModalRev.rev);
+												setDiffModalRev(null);
+											}}
+											className="kb-btn kb-btn-primary kb-btn-sm"
+										>
+											恢复至此历史版本 (v{diffModalRev.rev.version})
+										</button>
+									)}
+									<button
+										type="button"
+										onClick={() => setDiffModalRev(null)}
+										className="kb-btn kb-btn-outline kb-btn-sm"
+									>
+										关闭
+									</button>
+								</div>
+							</>
+						)}
 					</div>
 				</div>
 			)}

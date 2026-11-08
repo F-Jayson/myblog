@@ -176,6 +176,38 @@ export const kbApi = {
 		return res.revisions;
 	},
 
+	async getRevisionDetail(
+		documentId: number,
+		revisionId: number,
+	): Promise<{
+		id: number;
+		documentId: number;
+		version: number;
+		title: string;
+		markdown: string;
+		tags: string[];
+		sourceUrl: string;
+		byteSize: number;
+		actorUserId: number | null;
+		createdAt: string;
+	}> {
+		const res = await kbRequest<{
+			revision: {
+				id: number;
+				documentId: number;
+				version: number;
+				title: string;
+				markdown: string;
+				tags: string[];
+				sourceUrl: string;
+				byteSize: number;
+				actorUserId: number | null;
+				createdAt: string;
+			};
+		}>(`/api/knowledge/documents/${documentId}/revisions/${revisionId}`);
+		return res.revision;
+	},
+
 	async restoreRevision(
 		documentId: number,
 		revisionId: number,

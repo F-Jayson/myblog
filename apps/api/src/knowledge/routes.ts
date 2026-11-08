@@ -13,6 +13,7 @@ import {
 	getDocumentAccessService,
 	getKnowledgeDocument,
 	getKnowledgeDocumentRevisions,
+	getKnowledgeRevisionDetail,
 	getPublicDocumentSnapshotService,
 	getSharedDocumentSnapshotService,
 	getUserEligibility,
@@ -483,6 +484,28 @@ knowledgeRoutes.get("/documents/:id/revisions", requireKbScope("kb:read"), async
 		}
 		const revisions = await getKnowledgeDocumentRevisions(userId, id);
 		res.json({ revisions });
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 获取指定历史版本详情（含 markdown 正文以供 Diff 和历史预览）
+ * GET /api/knowledge/documents/:id/revisions/:revisionId
+ */
+knowledgeRoutes.get("/documents/:id/revisions/:revisionId", requireKbScope("kb:read"), async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const docId = Number(req.params.id);
+		const revId = Number(req.params.revisionId);
+		const doc = await getKnowledgeDocument(userId, docId);
+		if (!checkKbAgentLibraryAllowed(req, doc.libraryId)) {
+			res.status(403).json({ error: "KB_LIBRARY_NOT_ALLOWED", message: "该文档所属知识库未在当前 AI 授权范围内" });
+			return;
+		}
+		const revision = await getKnowledgeRevisionDetail(userId, docId, revId);
+		res.json({ revision });
 	} catch (error) {
 		next(error);
 	}
