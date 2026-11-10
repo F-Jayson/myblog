@@ -1,9 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { pool } from "./repository.js";
-import { config } from "../config.js";
-import type { KbScope } from "./types.js";
-import { ALL_KB_SCOPES, DEFAULT_KB_SCOPES, SENSITIVE_KB_SCOPES, KbAgentError } from "./agentStore.js";
+import { ALL_KB_SCOPES, KbAgentError } from "./agentStore.js";
 
 function sha256(value: string): string {
 	return createHash("sha256").update(value).digest("hex");
@@ -11,6 +9,25 @@ function sha256(value: string): string {
 
 function base64url(buffer: Buffer): string {
 	return buffer.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * 解析库里以 JSON 字符串（或已是数组）形态存储的列表字段。
+ * 历史数据写坏时按空数组处理，不能让整条查询跟着失败
+ */
+function parseStoredJsonList(value: unknown): string[] {
+	if (Array.isArray(value)) {
+		return value.filter((item): item is string => typeof item === "string");
+	}
+	if (typeof value !== "string" || value.trim() === "") {
+		return [];
+	}
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+	} catch {
+		return [];
+	}
 }
 
 export interface OAuthClient {
@@ -46,7 +63,11 @@ export async function registerOAuthClient(input: {
 	for (const uri of input.redirectUris) {
 		try {
 			const parsed = new URL(uri);
-			if (!["http:", "https:"].includes(parsed.protocol) && !uri.startsWith("cursor:") && !uri.startsWith("vscode:")) {
+			const isLocalHttp = parsed.protocol === "http:" && ["localhost", "127.0.0.1"].includes(parsed.hostname);
+			// http 只允许 localhost（本机回环调试）；对外必须是 https 或专用协议
+			const isSupported =
+				isLocalHttp || parsed.protocol === "https:" || uri.startsWith("cursor:") || uri.startsWith("vscode:");
+			if (!isSupported) {
 				throw new Error("Protocol not supported");
 			}
 		} catch {
@@ -102,6 +123,19 @@ export async function getOAuthClient(clientId: string): Promise<OAuthClient | nu
 }
 
 /**
+ * 查询机密客户端的 client_secret 哈希（仅用于 token 端点认证，不对外下发）
+ */
+export async function getOAuthClientSecretHash(clientId: string): Promise<string | null> {
+	if (!clientId || !clientId.trim()) return null;
+	const [rows] = await pool.query<RowDataPacket[]>(
+		`SELECT client_secret_hash FROM kb_oauth_clients WHERE client_id = ?`,
+		[clientId.trim()],
+	);
+	if (rows.length === 0) return null;
+	return typeof rows[0].client_secret_hash === "string" ? rows[0].client_secret_hash : null;
+}
+
+/**
  * 3. 严格比对 redirect_uri
  */
 export function validateRedirectUri(client: OAuthClient, redirectUri: string): boolean {
@@ -143,6 +177,11 @@ export async function createAuthorizationCode(params: {
 	if (!params.codeChallenge || params.codeChallenge.length < 40) {
 		throw new KbAgentError("invalid_request", "code_challenge 长度不合规", 400);
 	}
+	// scope 白名单：超出系统能力范围的 scope 不允许落库
+	const validScopes = params.scopes.filter((scope) => (ALL_KB_SCOPES as readonly string[]).includes(scope));
+	if (validScopes.length === 0) {
+		throw new KbAgentError("invalid_scope", "至少需要一个合法的授权范围", 400);
+	}
 
 	const plainCode = `kboc_${randomBytes(32).toString("hex")}`;
 	const codeHash = sha256(plainCode);
@@ -158,7 +197,7 @@ export async function createAuthorizationCode(params: {
 			params.redirectUri,
 			params.codeChallenge,
 			method,
-			JSON.stringify(params.scopes),
+			JSON.stringify(validScopes),
 			JSON.stringify(params.allowedLibraryIds),
 		],
 	);
@@ -224,12 +263,11 @@ export async function exchangeAuthorizationCode(params: {
 		// 标记授权码已消费
 		await conn.execute(`UPDATE kb_oauth_codes SET used_at = NOW() WHERE id = ?`, [codeRow.id]);
 
-		// 解析 scope 与 libraryIds
-		const scopes: string[] = typeof codeRow.scopes === "string" ? JSON.parse(codeRow.scopes) : codeRow.scopes;
-		const allowedLibraryIds: number[] =
-			typeof codeRow.allowed_library_ids === "string"
-				? JSON.parse(codeRow.allowed_library_ids)
-				: codeRow.allowed_library_ids;
+		// 解析 scope 与 libraryIds（历史数据可能是 JSON 字符串，解析失败按空处理）
+		const scopes: string[] = parseStoredJsonList(codeRow.scopes);
+		const allowedLibraryIds: number[] = parseStoredJsonList(codeRow.allowed_library_ids)
+			.map((item) => Number(item))
+			.filter((item) => Number.isInteger(item) && item > 0);
 
 		// 查客户端名称
 		const [clientRows] = await conn.query<RowDataPacket[]>(
@@ -272,6 +310,7 @@ export async function exchangeAuthorizationCode(params: {
 			scope: scopes.join(" "),
 		};
 	} catch (error) {
+		// 事务只有在真正开启后才需要回滚；commit 之后的业务性失败再回滚反而会误伤
 		await conn.rollback();
 		throw error;
 	} finally {
@@ -351,20 +390,27 @@ export async function rotateRefreshToken(params: {
 			[newTokenHash, grant.id],
 		);
 
-		// 签发新的轮转 Refresh Token (相同 familyId，最长延续原有效期)
+		// 签发新的轮转 Refresh Token（相同 familyId）：
+		// 过期时间取「原 token 剩余有效期 + 30 天」与「原到期时间」的较大者不再顺延——
+		// 直接 DATE_ADD(NOW(), 30 DAY) 会让活跃客户端永久续期
 		const newRefreshToken = `kbrt_${randomBytes(32).toString("hex")}`;
 		const newRtHash = sha256(newRefreshToken);
+		const originalExpiryMs = new Date(rtRow.expires_at).getTime();
+		const refreshedExpiry = Math.max(
+			originalExpiryMs,
+			Date.now() + 30 * 24 * 60 * 60 * 1000,
+		);
 
 		await conn.execute(
 			`INSERT INTO kb_oauth_refresh_tokens
 			 (family_id, token_hash, grant_id, user_id, client_id, is_used, expires_at)
-			 VALUES (?, ?, ?, ?, ?, 0, DATE_ADD(NOW(), INTERVAL 30 DAY))`,
-			[rtRow.family_id, newRtHash, grant.id, rtRow.user_id, params.clientId],
+			 VALUES (?, ?, ?, ?, ?, 0, ?)`,
+			[rtRow.family_id, newRtHash, grant.id, rtRow.user_id, params.clientId, new Date(refreshedExpiry)],
 		);
 
 		await conn.commit();
 
-		const scopes: string[] = typeof grant.scopes === "string" ? JSON.parse(grant.scopes) : grant.scopes;
+		const scopes: string[] = parseStoredJsonList(grant.scopes);
 
 		return {
 			access_token: newAccessToken,
@@ -374,6 +420,7 @@ export async function rotateRefreshToken(params: {
 			scope: Array.isArray(scopes) ? scopes.join(" ") : "",
 		};
 	} catch (error) {
+		// commit 后抛出的业务性失败（如重放检测）不需要再回滚
 		await conn.rollback();
 		throw error;
 	} finally {
@@ -388,11 +435,28 @@ export async function revokeOAuthToken(token: string): Promise<boolean> {
 	if (!token || !token.trim()) return false;
 	const tokenHash = sha256(token.trim());
 
-	// 先尝试按 access_token 撤销
+	// 撤销 access_token 命中的 grant 后必须级联吊销其 refresh 家族：
+	// 只撤 grant 的话 refresh_token 仍能轮换出新 grant，撤销等于没生效
 	const [grantRes] = await pool.execute<ResultSetHeader>(
 		`UPDATE kb_user_grants SET revoked_at = NOW() WHERE token_hash = ? AND revoked_at IS NULL`,
 		[tokenHash],
 	);
+
+	if (grantRes.affectedRows > 0) {
+		const [familyRows] = await pool.query<RowDataPacket[]>(
+			`SELECT DISTINCT family_id FROM kb_oauth_refresh_tokens WHERE grant_id = (
+				SELECT id FROM kb_user_grants WHERE token_hash = ?
+			)`,
+			[tokenHash],
+		);
+		for (const row of familyRows) {
+			await pool.execute(
+				`UPDATE kb_oauth_refresh_tokens SET revoked_at = NOW() WHERE family_id = ? AND revoked_at IS NULL`,
+				[row.family_id],
+			);
+		}
+		return true;
+	}
 
 	// 再尝试按 refresh_token 撤销
 	const [rtRows] = await pool.query<RowDataPacket[]>(
@@ -413,5 +477,5 @@ export async function revokeOAuthToken(token: string): Promise<boolean> {
 		return true;
 	}
 
-	return grantRes.affectedRows > 0;
+	return false;
 }

@@ -3,12 +3,35 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#73c7ae" />
+    <meta name="theme-color" content="#e9f1ed" />
+    <meta name="description" content="Jayson 的个人博客：前端与后端笔记、知识库、项目随笔与技术折腾记录。" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Jayson's Blog" />
+    <meta property="og:title" content="Jayson's Blog" />
+    <meta property="og:description" content="Jayson 的个人博客：前端与后端笔记、知识库、项目随笔与技术折腾记录。" />
     <link rel="icon" type="image/png" href="/images/logo/site-light.png" data-default-href="/images/logo/site-light.png" data-default-type="image/png" />
     <title>Jayson's Blog</title>
+    <script>
+      /* 首屏主题预置：在样式表求值前同步 dark 类、色相与浏览器主题色，避免浅色闪烁 */
+      (function () {
+        try {
+          var stored = localStorage.getItem("site-theme");
+          var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var dark = stored === null ? prefersDark : stored === "dark";
+          document.documentElement.classList.toggle("dark", dark);
+          var hue = Number(localStorage.getItem("site-hue"));
+          if (Number.isFinite(hue) && hue >= 0 && hue <= 360) document.documentElement.style.setProperty("--hue", String(hue));
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", dark ? "#080f0c" : "#e9f1ed");
+        } catch {
+          /* 隐私模式或禁用存储时退回样式表默认主题 */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
+    <noscript>本站需要启用 JavaScript 才能正常显示内容。</noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

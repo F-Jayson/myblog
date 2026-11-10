@@ -18,6 +18,7 @@
 	--radius: 1rem;
 	--page-width: 72rem;
 	--navbar-height: 4.5rem;
+	--hero-fade-ms: 1100ms;
 	--ease: cubic-bezier(0.4, 0, 0.2, 1);
 	--hero-desktop-image: url("https://blog.fjayson.com/images/DesktopWallpaper/d2.avif");
 	--hero-mobile-image: url("https://blog.fjayson.com/images/MobileWallpaper/m2.avif");
@@ -51,6 +52,7 @@
 	:root.dark {
 		background: oklch(0.16 0.014 var(--hue));
 		--page-bg: oklch(0.16 0.014 var(--hue));
+		--card-bg: oklch(0.23 0.015 var(--hue) / 0.92);
 		--card-bg-solid: oklch(0.23 0.015 var(--hue));
 		--btn-bg: oklch(0.33 0.035 var(--hue));
 		--btn-hover: oklch(0.38 0.04 var(--hue));
@@ -71,18 +73,32 @@ button, a { -webkit-tap-highlight-color: transparent; }
 a { color: inherit; text-decoration: none; }
 button { border: 0; cursor: pointer; color: inherit; background: transparent; }
 img { display: block; max-width: 100%; }
+/* 仅给读屏器看的文本：打字机效果会把可见文本清空重填，原文放这里保证可读 */
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
 
 .site-shell { min-height: 100vh; overflow-x: clip; }
 .top-row {
-	position: relative;
+	/* 导航要跟随页面滚动：sticky 只能相对“更高的”父级生效，
+	   所以把 sticky 放这一层，.navbar 自身改成普通定位 */
+	position: sticky;
+	top: 0;
 	z-index: 80;
 	height: var(--navbar-height);
 	width: min(92vw, var(--page-width));
 	margin: 0 auto;
 }
 .navbar {
-	position: sticky;
-	top: 0;
+	position: relative;
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -143,8 +159,8 @@ img { display: block; max-width: 100%; }
 }
 .hero-image-current,
 .hero-image-outgoing { will-change: opacity; }
-.hero-image-outgoing { z-index: 1; animation: wallpaper-fade-out 1.1s ease both; }
-.hero-image-current.is-crossfading { z-index: 2; animation: wallpaper-fade-in 1.1s ease both; }
+.hero-image-outgoing { z-index: 1; animation: wallpaper-fade-out var(--hero-fade-ms) ease both; }
+.hero-image-current.is-crossfading { z-index: 2; animation: wallpaper-fade-in var(--hero-fade-ms) ease both; }
 @keyframes wallpaper-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes wallpaper-fade-out { from { opacity: 1; } to { opacity: 0; } }
 .hero-scrim {
@@ -279,7 +295,7 @@ img { display: block; max-width: 100%; }
 	color: #fff;
 }
 .card-icon svg { width: 1.15rem; height: 1.15rem; }
-.card div { flex: 1; min-width: 0; }
+.card > div { flex: 1; min-width: 0; }
 .card strong {
 	display: block;
 	color: var(--deep-text);

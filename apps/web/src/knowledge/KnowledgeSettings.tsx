@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
 	AlertTriangle,
@@ -68,7 +68,12 @@ export default function KnowledgeSettings() {
 	const [restoringId, setRestoringId] = useState<number | null>(null);
 
 	const loadData = async () => {
-		if (!libraryId || Number.isNaN(libraryId)) return;
+		// [449] 非法路由参数必须结束加载态：否则页面永远停在“正在加载知识库设置...”
+		if (!libraryId || Number.isNaN(libraryId)) {
+			setLoading(false);
+			setError("知识库 ID 无效，请从知识库列表重新进入设置页");
+			return;
+		}
 		setLoading(true);
 		setError(null);
 		try {
@@ -78,6 +83,8 @@ export default function KnowledgeSettings() {
 				kbApi.listTrash(libraryId).catch(() => []),
 				kbApi.listMembers(libraryId).catch(() => []),
 			]);
+			// [452] 异步返回时用户可能已切到其它库：过期响应直接丢弃，避免数据串库
+			if (cancelledRef.current) return;
 			setLibrary(lib);
 			setTitle(lib.title);
 			setDescription(lib.description || "");
@@ -87,8 +94,10 @@ export default function KnowledgeSettings() {
 			setMembers(membersRes);
 			await loadConnections();
 		} catch (err) {
+			if (cancelledRef.current) return;
 			setError(err instanceof Error ? err.message : "加载知识库信息失败");
 		} finally {
+			// 卸载后再 setLoading 是无害的（React 18+ 不再警告），保留以结束加载态
 			setLoading(false);
 		}
 	};
@@ -105,10 +114,14 @@ export default function KnowledgeSettings() {
 	}>>([]);
 	const [revokingConnId, setRevokingConnId] = useState<number | null>(null);
 
+	// [452] 标记当前 effect 已失效：快速切换 libraryId 时丢弃旧请求的响应
+	const cancelledRef = useRef(false);
 	const loadConnections = async () => {
 		try {
 			const list = await kbApi.listAgentConnections();
-			setConnections(list);
+			if (cancelledRef.current) return;
+			// [453] 只展示与当前库相关的授权连接：其它库乃至全库范围的授权不应在本页出现
+			setConnections(list.filter((conn) => conn.allowedLibraryIds.includes(libraryId)));
 		} catch (err) {
 			console.error("加载 AI 授权连接失败", err);
 		}
@@ -120,15 +133,19 @@ export default function KnowledgeSettings() {
 		try {
 			await kbApi.revokeAgentConnection(id);
 			await loadConnections();
-		} catch (err: any) {
-			alert(err.message || "撤销失败");
+		} catch (err) {
+			alert(err instanceof KbApiError || err instanceof Error ? err.message : "撤销失败");
 		} finally {
 			setRevokingConnId(null);
 		}
 	};
 
 	useEffect(() => {
-		loadData();
+		cancelledRef.current = false;
+		void loadData();
+		return () => {
+			cancelledRef.current = true;
+		};
 	}, [libraryId]);
 
 	// 保存基本信息
@@ -143,6 +160,8 @@ export default function KnowledgeSettings() {
 				description: description.trim(),
 				visibility,
 			});
+			// [451] 保存成功后同步本地 library：删除确认弹窗与校验都依赖 library.title
+			setLibrary((current) => (current ? { ...current, title: title.trim(), description: description.trim(), visibility } : current));
 			setSaveSuccess(true);
 			setTimeout(() => setSaveSuccess(false), 3000);
 		} catch (err) {
@@ -481,7 +500,7 @@ export default function KnowledgeSettings() {
 				<div className="kb-card">
 					<h2 style={{ fontSize: "1.15rem", fontWeight: 700, margin: "0 0 1.25rem 0", display: "flex", alignItems: "center", gap: "0.5rem" }}>
 						<HardDrive className="w-5 h-5 text-primary" />
-						存储配额与占用 (100 MiB 专属独立空间)
+						存储配额与占用{quota ? ` (${formatSize(quota.maxBytes)} 专属独立空间)` : ""}
 					</h2>
 
 					{quota ? (

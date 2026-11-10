@@ -48,6 +48,7 @@ import {
 } from "./knowledge/index.js";
 import { gameRouter } from "./games.js";
 import { locateIp, warmIpLocation } from "./ipLocation.js";
+import { resolveClientIp } from "./clientIp.js";
 import {
 	archivePosts,
 	authenticateAdmin,
@@ -264,8 +265,7 @@ function auditExcludedRequest(method: string, path: string) {
 	return false;
 }
 function requestClientIp(req: Request) {
-	const forwarded = req.header("x-forwarded-for")?.split(",")[0]?.trim();
-	return forwarded || req.ip || req.socket.remoteAddress || "";
+	return resolveClientIp(req);
 }
 function requestAuditPayload(req: Request) {
 	return req.method === "GET" || req.method === "HEAD" ? req.query : req.body;
@@ -2842,14 +2842,14 @@ function driveOwner(admin: NonNullable<RequestWithAdmin["adminUser"]>) {
 	return { id: admin.id, username: admin.username.slice(0, 60) };
 }
 
-function presentDriveFile(file: { id: number; originalName: string; mimeType: string; byteSize: number; publicToken: string; downloadCount: number; createdAt: string; accessPasswordHash?: string | null; accessPasswordHint?: string | null }) {
+function presentDriveFile(file: { id: number; originalName: string; mimeType: string; byteSize: number; publicToken: string; downloadCount: number; createdAt: string; accessPasswordHash?: string | null; accessPasswordHint?: string | null }, publicOrigin: string) {
 	return {
 		id: file.id,
 		name: file.originalName,
 		mimeType: file.mimeType,
 		byteSize: file.byteSize,
 		downloadCount: file.downloadCount,
-		downloadUrl: driveDownloadUrl(config.filesPublicOrigin, file.publicToken, file.originalName),
+		downloadUrl: driveDownloadUrl(publicOrigin, file.publicToken, file.originalName),
 		createdAt: file.createdAt,
 		hasAccessPassword: Boolean(file.accessPasswordHash),
 		accessPasswordHint: file.accessPasswordHash ? (file.accessPasswordHint?.trim() ?? "") : "",
@@ -2860,7 +2860,8 @@ app.get("/api/admin/drive", requireAdmin, async (req: RequestWithAdmin, res, nex
 	try {
 		if (!req.adminUser) { res.status(401).json({ error: "登录状态已失效，请重新登录" }); return; }
 		const listed = await listAdminDriveFiles(driveOwner(req.adminUser));
-		res.json({ items: listed.items.map(presentDriveFile), total: listed.total, maxBytes: ADMIN_DRIVE_MAX_BYTES, publicOrigin: config.filesPublicOrigin });
+		const publicOrigin = config.filesPublicOrigin || `${req.protocol}://${req.get("host") ?? ""}`;
+	res.json({ items: listed.items.map((file) => presentDriveFile(file, publicOrigin)), total: listed.total, maxBytes: ADMIN_DRIVE_MAX_BYTES, publicOrigin });
 	} catch (error) { next(error); }
 });
 
@@ -2915,7 +2916,7 @@ app.post("/api/admin/drive", requireAdmin, (req: RequestWithAdmin, res, next) =>
 				}
 			}
 			if (!saved) throw new Error("Drive file was not stored");
-			res.status(201).json(presentDriveFile(saved));
+			res.status(201).json(presentDriveFile(saved, config.filesPublicOrigin || `${req.protocol}://${req.get("host") ?? ""}`));
 		} catch (error) {
 			await removeUpload();
 			next(error);
@@ -3099,7 +3100,7 @@ app.post("/api/admin/drive/sessions/:id/complete", requireAdmin, async (req: Req
 		}
 		if (!saved) throw new Error("Drive file was not stored");
 		await removeAdminDriveUploadRow(id, owner);
-		res.status(201).json(presentDriveFile(saved));
+		res.status(201).json(presentDriveFile(saved, config.filesPublicOrigin || `${req.protocol}://${req.get("host") ?? ""}`));
 	} catch (error) { next(error); }
 });
 
@@ -3128,7 +3129,7 @@ app.patch("/api/admin/drive/:id", requireAdmin, async (req: RequestWithAdmin, re
 		const accessPasswordHint = hasHint ? parseAccessPasswordHint(body.accessPasswordHint) : undefined;
 		const saved = await updateAdminDriveAccessPassword(id, driveOwner(req.adminUser), { accessPassword, accessPasswordHint });
 		if (!saved) { res.status(404).json({ error: "文件不存在" }); return; }
-		res.json(presentDriveFile(saved));
+		res.json(presentDriveFile(saved, config.filesPublicOrigin || `${req.protocol}://${req.get("host") ?? ""}`));
 	} catch (error) { next(error); }
 });
 
@@ -3392,16 +3393,17 @@ app.get("/api/admin/app-releases/schedule", requireAdmin, async (req: RequestWit
 			listAdminDriveFiles(driveOwner(req.adminUser)),
 		]);
 		const activeRelease = releases.find((r) => r.isActive) || releases[0] || null;
+		const publicOrigin = config.filesPublicOrigin || `${req.protocol}://${req.get("host") ?? ""}`;
 		const apkFiles = listed.items
 			.filter((file) => file.originalName.toLowerCase().endsWith(".apk"))
-			.map(presentDriveFile);
-		const allDriveFiles = listed.items.map(presentDriveFile);
+			.map((file) => presentDriveFile(file, publicOrigin));
+		const allDriveFiles = listed.items.map((file) => presentDriveFile(file, publicOrigin));
 		res.json({
 			release: activeRelease,
 			releases,
 			apkFiles,
 			allDriveFiles,
-			publicOrigin: config.filesPublicOrigin,
+			publicOrigin,
 		});
 	} catch (error) { next(error); }
 });

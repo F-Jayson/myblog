@@ -24,14 +24,13 @@ export function StorageLocationModal({
 	onSuccess,
 }: StorageLocationModalProps) {
 	// 选中的存储类型
-	const initialSelection =
-		mode === "switch" && currentLocation
-			? currentLocation === "server"
-				? "cloudflare"
-				: "server"
-			: "server";
-
-	const [selectedLocation, setSelectedLocation] = useState<"server" | "cloudflare">(initialSelection);
+	// [383] 默认目标抽成纯函数复用（switch 模式默认切到另一侧；initial 模式默认服务器）
+	const getDefaultTarget = (targetMode: "initial" | "switch", current: "server" | "cloudflare" | null | undefined): "server" | "cloudflare" => {
+		if (targetMode !== "switch" || !current) return "server";
+		return current === "server" ? "cloudflare" : "server";
+	};
+	// 注：useState 初值只在首次挂载生效，打开弹窗时的重置以下方 effect 为准
+	const [selectedLocation, setSelectedLocation] = useState<"server" | "cloudflare">(() => getDefaultTarget(mode, currentLocation));
 	const [confirmInvalidation, setConfirmInvalidation] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState("");
@@ -41,6 +40,8 @@ export function StorageLocationModal({
 	const [migrationProgress, setMigrationProgress] = useState<StorageMigrationRecord | null>(null);
 	const [migrationCompleted, setMigrationCompleted] = useState(false);
 
+	// [384] 表单重置只依赖 open/mode/currentLocation：
+		// stats 是父组件反复刷新的对象引用，放进这里会把用户已勾选的确认框、正在迁移的视图全部重置
 	useEffect(() => {
 		if (!open) return;
 		setError("");
@@ -49,29 +50,34 @@ export function StorageLocationModal({
 		setMigrating(false);
 		setMigrationCompleted(false);
 
-		const defaultTarget =
-			mode === "switch" && currentLocation
-				? currentLocation === "server"
-					? "cloudflare"
-					: "server"
-				: "server";
-		setSelectedLocation(defaultTarget);
+		setSelectedLocation(getDefaultTarget(mode, currentLocation));
+	}, [open, mode, currentLocation]);
 
-		// 如果已有正在运行的迁移，直接恢复进度轮询
-		if (stats?.activeMigration && stats.activeMigration.status === "processing") {
+	// [384] 迁移恢复单独同步，只看 activeMigration 的状态字段而不是整个 stats 对象
+	useEffect(() => {
+		if (!open) return;
+		const active = stats?.activeMigration;
+		if (!active) return;
+		if (active.status === "processing") {
 			setMigrating(true);
-			setMigrationProgress(stats.activeMigration);
+			setMigrationProgress(active);
+		} else if (active.status === "completed") {
+			setMigrating(false);
+			setMigrationCompleted(true);
 		}
-	}, [open, mode, currentLocation, stats]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- stats 引用每次刷新都会变，只取其中字段
+	}, [open, stats?.activeMigration?.id, stats?.activeMigration?.status]);
 
 	// 迁移中轮询进度
 	useEffect(() => {
-		if (!migrating) return;
+		if (!open || !migrating) return;
 		let timer: ReturnType<typeof setInterval> | null = null;
+		let pollFailures = 0;
 
 		const poll = async () => {
 			try {
 				const res = await api.getStorageMigrationProgress();
+				pollFailures = 0;
 				if (res.migration) {
 					setMigrationProgress(res.migration);
 					if (res.migration.status === "completed") {
@@ -84,7 +90,10 @@ export function StorageLocationModal({
 						if (timer) clearInterval(timer);
 					}
 				}
-			} catch (e: any) {
+			} catch (e) {
+				// [385] 轮询失败不能完全静默：连续失败时给出可见提示（进度查询稍后会自动重试）
+				pollFailures += 1;
+				if (pollFailures >= 5) setError("迁移进度查询暂时不可用，正在自动重试...");
 				console.error("轮询迁移进度失败:", e);
 			}
 		};
@@ -95,7 +104,7 @@ export function StorageLocationModal({
 		return () => {
 			if (timer) clearInterval(timer);
 		};
-	}, [migrating]);
+	}, [open, migrating]);
 
 	if (!open) return null;
 
@@ -119,8 +128,8 @@ export function StorageLocationModal({
 			await api.setInitialStorageLocation(selectedLocation);
 			onSuccess();
 			onClose();
-		} catch (e: any) {
-			setError(e.message || "设置存储位置失败");
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "设置存储位置失败");
 		} finally {
 			setBusy(false);
 		}
@@ -130,6 +139,19 @@ export function StorageLocationModal({
 	const handleSwitchSubmit = async () => {
 		if (!confirmInvalidation) {
 			setError("请勾选并确认原有链接失效风险");
+			return;
+		}
+		// [387] 按钮禁用与提交之间没有原子性：此处必须对冷却/超额做二次校验
+		if (isCooldownBlocked) {
+			setError(cooldownMsg || "本月已切换过存储位置");
+			return;
+		}
+		if (isOversizedBlocked) {
+			setError("已用空间超过服务器存储 30MB 配额，请先清理文件");
+			return;
+		}
+		if (selectedLocation === currentLocation) {
+			setError("存储位置未发生变化");
 			return;
 		}
 		setBusy(true);
@@ -147,10 +169,15 @@ export function StorageLocationModal({
 			if (res.success) {
 				setMigrating(false);
 				setMigrationCompleted(true);
+			} else {
+				// [386] 接口返回 200 但 success=false 时必须结束迁移态，否则界面永久停在迁移视图
+				setMigrating(false);
+				if (res.result) setMigrationProgress({ ...res.result, status: "completed" } as StorageMigrationRecord);
+				setError("迁移未成功启动，请稍后重试");
 			}
-		} catch (e: any) {
+		} catch (e) {
 			setMigrating(false);
-			setError(e.message || "切换存储位置失败");
+			setError(e instanceof Error ? e.message : "切换存储位置失败");
 		} finally {
 			setBusy(false);
 		}

@@ -26,7 +26,10 @@ export function normalizeDriveFileName(raw: string) {
 		const asUtf8 = Buffer.from(base, "latin1").toString("utf8");
 		if (asUtf8 && !asUtf8.includes("\uFFFD")) decoded = asUtf8;
 	}
-	const cleaned = decoded.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 240);
+	// [148] 按 Unicode 码点截断：UTF-16 码元截断可能把 emoji 切成孤立代理项，
+	// 后续 encodeURIComponent 会抛 URI URI malformed 让下载接口 500
+	const chars = Array.from(decoded.replace(/[\u0000-\u001f\u007f]/g, "").trim());
+	const cleaned = chars.slice(0, 240).join("");
 	return cleaned || "file";
 }
 

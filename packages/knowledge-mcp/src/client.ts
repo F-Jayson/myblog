@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
 import {
 	blogOrigin,
@@ -77,18 +77,29 @@ async function request<T>(
 
 function openBrowser(url: string): boolean {
 	try {
-		if (process.platform === "win32") {
-			spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
-		} else if (process.platform === "darwin") {
-			spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
-		} else {
-			spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
+		// [286] 只放行 http/https：URL 由服务端下发并经环境变量拼出，不能信任其内容
+		try {
+			const parsed = new URL(url);
+			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+		} catch {
+			return false;
 		}
+		// [286] spawn 失败以异步 error 事件抛出，必须监听，否则未捕获异常会打挂 MCP 进程
+		const child = process.platform === "win32"
+			? spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true })
+			: process.platform === "darwin"
+				? spawn("open", [url], { detached: true, stdio: "ignore" })
+				: spawn("xdg-open", [url], { detached: true, stdio: "ignore" });
+		child.on("error", () => undefined);
+		child.unref();
 		return true;
 	} catch {
 		return false;
 	}
 }
+
+// 与服务端 kb MAX_ATTACHMENT_BYTES 一致
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 function sleep(ms: number) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -241,10 +252,18 @@ export async function connectKnowledge(options: {
  */
 export async function disconnectKnowledge(): Promise<string> {
 	const current = await readCredential();
+	if (!current.accessToken) return "当前尚未连接任何知识库。";
+	// 只删本地凭据并不算断开：服务端的授权仍然有效，直到撤销接口被调用
+	let revokeFailed = false;
+	try {
+		await request<void>("/oauth/revoke", { method: "POST", body: { token: current.accessToken } });
+	} catch {
+		revokeFailed = true;
+	}
 	await clearCredential();
-	return current.accessToken
-		? "已清除本地知识库凭据并断开连接。"
-		: "当前尚未连接任何知识库。";
+	return revokeFailed
+		? "已清除本地凭据，但服务端撤销失败（令牌会在过期后失效）；建议在博客知识库设置的授权连接里手动撤销。"
+		: "已撤销服务端授权并清除本地凭据。";
 }
 
 /**
@@ -254,6 +273,13 @@ async function callApi<T>(path: string, method = "GET", body?: unknown): Promise
 	const cred = await readCredential();
 	if (!cred.accessToken) {
 		throw new Error("尚未连接博客个人知识库。请先调用 kb_connect 完成普通用户浏览器配对授权。");
+	}
+	// 本地凭据带过期时间：过期后继续用只会得到 401，提前给出可操作的提示
+	if (cred.expiresAt) {
+		const expiresAt = Date.parse(cred.expiresAt);
+		if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+			throw new Error("本地知识库凭据已过期，请重新调用 kb_connect 完成配对授权。");
+		}
 	}
 	return request<T>(path, { method, token: cred.accessToken, body });
 }
@@ -373,6 +399,12 @@ export async function apiUploadAttachment(documentId: number, localFilePath: str
 		throw new Error("尚未连接博客个人知识库。请先调用 kb_connect。");
 	}
 
+	// 与后端 MAX_ATTACHMENT_BYTES 对齐：先看大小再读文件，避免把超大文件整个读进内存
+	const fileStat = await stat(localFilePath).catch(() => null);
+	if (!fileStat || !fileStat.isFile()) throw new Error(`${localFilePath} 不是可读取的文件`);
+	if (fileStat.size > MAX_ATTACHMENT_BYTES) {
+		throw new Error(`附件超过 ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)}MB 上限，请先压缩或拆分`);
+	}
 	const fileBuffer = await readFile(localFilePath);
 	const fileName = basename(localFilePath);
 	const formData = new FormData();

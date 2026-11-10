@@ -107,8 +107,14 @@ async function acquireJobSlot() {
 }
 
 function releaseJobSlot() {
+	// [166] 槽位直接转交给等待者：先减计数再唤醒会有空窗期，新请求会在
+	// 等待者恢复执行前看到空余槽位并占用，最终 activeJobs 超过上限。
+	const waiter = jobWaiters.shift();
+	if (waiter) {
+		waiter();
+		return;
+	}
 	activeJobs = Math.max(0, activeJobs - 1);
-	jobWaiters.shift()?.();
 }
 
 export function listCompilerLanguages() {
@@ -173,7 +179,7 @@ function validateOptions(options: CompilerRunOptions, language: CompilerLanguage
 	return { timeoutMs, breakpoints, language };
 }
 
-type ChildResult = { stdout: string; stderr: string; exitCode: number | null };
+type ChildResult = { stdout: string; stderr: string; exitCode: number | null; containerRemoved?: boolean };
 
 async function runContainer(args: string[], containerName: string, input: string, timeoutMs: number): Promise<ChildResult> {
 	return await new Promise((resolve, reject) => {
@@ -187,12 +193,15 @@ async function runContainer(args: string[], containerName: string, input: string
 			clearTimeout(timer);
 			resolve({ stdout: boundedOutput(stdout), stderr: boundedOutput(stderr), ...result });
 		};
+		// [168] 返回 rm 是否真正成功：失败时调用方不能删工作目录，否则仍在运行的
+		// 容器会持有已删除的 bind mount，形成孤儿容器与清理竞争
 		const forceRemoveContainer = async () => {
-			await new Promise<void>((done) => {
+			return await new Promise<boolean>((done) => {
 				const remover = spawn(config.compiler.dockerBinary, ["rm", "-f", containerName], { stdio: "ignore", shell: false });
-				const removeTimer = setTimeout(() => { remover.kill("SIGKILL"); done(); }, 2_000);
-				remover.once("close", () => { clearTimeout(removeTimer); done(); });
-				remover.once("error", () => { clearTimeout(removeTimer); done(); });
+				let succeeded = false;
+				const removeTimer = setTimeout(() => { remover.kill("SIGKILL"); done(succeeded); }, 2_000);
+				remover.once("close", (code) => { clearTimeout(removeTimer); succeeded = code === 0; done(succeeded); });
+				remover.once("error", () => { clearTimeout(removeTimer); done(false); });
 			});
 		};
 		const timer = setTimeout(() => {
@@ -200,9 +209,10 @@ async function runContainer(args: string[], containerName: string, input: string
 			settled = true;
 			clearTimeout(timer);
 			child.kill("SIGTERM");
-			void forceRemoveContainer().finally(() => {
+			void forceRemoveContainer().then((removed) => {
 				child.kill("SIGKILL");
-				resolve({ stdout: boundedOutput(stdout), stderr: boundedOutput(stderr + "\n程序执行超时"), exitCode: null });
+				const note = removed ? "\n程序执行超时" : "\n程序执行超时，且容器清理失败（工作目录暂保留，避免孤儿容器持有已删除目录）";
+				resolve({ stdout: boundedOutput(stdout), stderr: boundedOutput(stderr + note), exitCode: null, containerRemoved: removed });
 			});
 		}, timeoutMs);
 		const appendOutput = (current: string, chunk: Buffer | string) => current.length >= outputLimit ? current : (current + chunk.toString()).slice(0, outputLimit);
@@ -391,6 +401,7 @@ export async function executeCompiler(options: CompilerRunOptions): Promise<Comp
 	if (language.formatOnly) throw new CompilerError("该语言仅支持格式化，不支持容器执行", 400, "FORMAT_ONLY_LANGUAGE");
 	await acquireJobSlot();
 	let workDirectory = "";
+	let keepWorkDirectory = false;
 	try {
 		const workspaceRoot = resolve(config.compiler.workDirectory);
 		await mkdir(workspaceRoot, { recursive: true });
@@ -421,6 +432,8 @@ export async function executeCompiler(options: CompilerRunOptions): Promise<Comp
 		const started = performance.now();
 		const containerName = `blog-compiler-${randomUUID()}`;
 		const result = await runContainer(dockerArgs(workDirectory, containerName, language, command), containerName, options.stdin ?? "", validated.timeoutMs);
+		// [168] 超时分支若容器 rm 失败，保留工作目录（见 finally）
+		keepWorkDirectory = result.containerRemoved === false;
 		const markerResult = options.debug && language.debug ? pullMarkers(result.stdout, debugMarker) : { stdout: result.stdout, hitBreakpoints: [], stoppedAt: null };
 		const debug = options.debug ? {
 			breakpoints: validated.breakpoints,
@@ -442,7 +455,11 @@ export async function executeCompiler(options: CompilerRunOptions): Promise<Comp
 			debug,
 		};
 	} finally {
-		if (workDirectory) await rm(workDirectory, { recursive: true, force: true }).catch(() => undefined);
+		// [168] 容器清理失败时不删工作目录：仍在运行的容器会持有已删除的 bind mount，
+		// 删掉目录只会制造孤儿容器与清理竞争；保留目录让下一次 docker rm 仍可收尾
+		if (workDirectory && !keepWorkDirectory) {
+			await rm(workDirectory, { recursive: true, force: true }).catch(() => undefined);
+		}
 		releaseJobSlot();
 	}
 }
@@ -450,17 +467,57 @@ export async function executeCompiler(options: CompilerRunOptions): Promise<Comp
 function genericFormat(source: string) {
 	const normalized = source.replace(/\r\n?/gu, "\n").trim();
 	if (!normalized) return "";
+	const chars = Array.from(normalized);
 	let output = "";
 	let indent = 0;
 	let quote = "";
 	let escaped = false;
 	let lineStart = true;
-	for (const character of normalized) {
+	let inLineComment = false;
+	let inBlockComment = false;
+	// [170] 注释状态机：行注释 // 与块注释 /* */ 内的 {} ; 不得改变结构。
+	// 正则字面量与预处理宏仍不识别——这些语言的 formatter 走 formatOnly 分支。
+	for (let index = 0; index < chars.length; index += 1) {
+		const character = chars[index];
+		const next = chars[index + 1] ?? "";
+		if (inLineComment) {
+			if (character === "\n") {
+				output = output.trimEnd() + "\n" + "  ".repeat(indent);
+				inLineComment = false;
+				lineStart = true;
+				continue;
+			}
+			output += character;
+			continue;
+		}
+		if (inBlockComment) {
+			output += character;
+			if (character === "*" && next === "/") {
+				output += next;
+				index += 1;
+				inBlockComment = false;
+			}
+			continue;
+		}
 		if (quote) {
 			output += character;
 			if (escaped) escaped = false;
 			else if (character === "\\") escaped = true;
 			else if (character === quote) quote = "";
+			continue;
+		}
+		if (character === "/" && next === "/") {
+			output += character + next;
+			index += 1;
+			inLineComment = true;
+			lineStart = false;
+			continue;
+		}
+		if (character === "/" && next === "*") {
+			output += character + next;
+			index += 1;
+			inBlockComment = true;
+			lineStart = false;
 			continue;
 		}
 		if (character === '"' || character === "'" || character === "`") { quote = character; output += character; lineStart = false; continue; }
@@ -481,7 +538,7 @@ function genericFormat(source: string) {
 		output += character;
 		lineStart = false;
 	}
-	return output.trim() + "\n";
+	return output;
 }
 
 export function formatCompilerCode(languageId: string, source: string) {

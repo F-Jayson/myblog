@@ -20,9 +20,15 @@ function removeHardcodedBootstrapStatements(fileName: string, sql: string) {
 	// Migration runs against the database selected by MYSQL_DATABASE.
 	// Drop only the leading bootstrap statements so the rest of the file is unchanged.
 	if (fileName !== "schema.sql" && fileName !== "seed.sql") return sql;
-	return sql
+	const stripped = sql
 		.replace(/^\uFEFF?\s*CREATE DATABASE IF NOT EXISTS [A-Za-z0-9_]+ CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\s*/i, "")
 		.replace(/^\uFEFF?\s*USE [A-Za-z0-9_]+;\s*/i, "");
+	// [140] 剥离失败必须显式报错：文件若被改动导致正则匹配不上，脚本会"成功"执行，
+	// 但实际操作的是文件里硬编码的 jayson_blog 而不是 MYSQL_DATABASE 指定的库
+	if (/CREATE DATABASE\b/iu.test(stripped) || /^\s*USE\b/imu.test(stripped)) {
+		throw new Error(`${fileName} 中仍残留 CREATE DATABASE / USE 引导语句，剥离失败；请检查文件开头的语句格式`);
+	}
+	return stripped;
 }
 
 async function executeSql(fileName: string) {

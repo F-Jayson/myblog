@@ -64,7 +64,8 @@ export async function currentProfile() {
 	if (!saved.accessToken) return null;
 	try {
 		const profile = await request<AgentProfile>("/api/agent/me", { token: saved.accessToken });
-		return { ...profile, accessToken: saved.accessToken };
+		// [260] 令牌只留在凭据文件里：返回值会进模型上下文与日志，绝不能带 accessToken
+		return profile;
 	} catch (error) {
 		if (error instanceof BlogRequestError && (error.status === 401 || error.status === 403)) {
 			await writeCredential({ accessToken: undefined, expiresAt: undefined, scopes: undefined, clientName: undefined });
@@ -76,9 +77,14 @@ export async function currentProfile() {
 
 function openBrowser(url: string) {
 	try {
-		if (process.platform === "win32") spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
-		else if (process.platform === "darwin") spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
-		else spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
+		// [259] spawn 失败是异步 error 事件：不监听会变成未捕获异常直接打挂 MCP 进程
+		const child = process.platform === "win32"
+			? spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true })
+			: process.platform === "darwin"
+				? spawn("open", [url], { detached: true, stdio: "ignore" })
+				: spawn("xdg-open", [url], { detached: true, stdio: "ignore" });
+		child.on("error", () => undefined);
+		child.unref();
 		return true;
 	} catch {
 		return false;
@@ -136,7 +142,9 @@ export async function connectBlog(input: { scopes?: string[]; force?: boolean } 
 			continue;
 		}
 		await writeCredential({ accessToken: result.accessToken, expiresAt: result.expiresAt, scopes: result.scopes, clientName: result.clientName, pending: undefined });
-		return { connected: true, already: false, profile: result, message: `授权完成，可以管理博客文章。\n权限：${scopeText(result.scopes)}\n有效期至：${result.expiresAt}` };
+		// [260] 只回传展示需要的信息：device/token 的响应里有长期 accessToken，不能被序列化进模型上下文
+		const profile = { clientName: result.clientName, scopes: result.scopes, expiresAt: result.expiresAt };
+		return { connected: true, already: false, profile, message: `授权完成，可以管理博客文章。\n权限：${scopeText(result.scopes)}\n有效期至：${result.expiresAt}` };
 	}
 	const display = pending.userCode.length === 8 ? `${pending.userCode.slice(0, 4)}-${pending.userCode.slice(4)}` : pending.userCode;
 	return {
@@ -154,9 +162,9 @@ export async function disconnectBlog() {
 }
 
 async function token() {
-	const profile = await currentProfile();
-	if (!profile) throw new Error("还没有授权。请先调用 blog_connect，在打开的浏览器里用管理员账号登录并允许。");
-	return profile.accessToken;
+	const saved = await readCredential();
+	if (!saved.accessToken) throw new Error("还没有授权。请先调用 blog_connect，在打开的浏览器里用管理员账号登录并允许。");
+	return saved.accessToken;
 }
 
 export async function blogJson<T>(path: string, options: { method?: string; body?: unknown; form?: FormData } = {}) {

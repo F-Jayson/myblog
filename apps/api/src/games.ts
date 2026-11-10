@@ -4,6 +4,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { z } from "zod";
 import { pool } from "./db.js";
 import { presetAvatarForSeed, randomPresetAvatar, type CommentPrincipal } from "./repository.js";
+import { resolveClientIp } from "./clientIp.js";
 
 type GameSpec = {
 	lowerIsBetter: boolean;
@@ -81,8 +82,7 @@ function allowRate(key: string, limit: number, windowMs: number) {
 }
 
 function clientIp(req: Request) {
-	const forwarded = req.header("x-forwarded-for")?.split(",")[0]?.trim();
-	return forwarded || req.ip || req.socket.remoteAddress || "unknown";
+	return resolveClientIp(req) || "unknown";
 }
 
 function guestToken(req: Request) {

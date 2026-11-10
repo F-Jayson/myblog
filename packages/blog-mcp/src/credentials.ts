@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -28,7 +28,14 @@ function emptyStore(): Store {
 
 async function readStore(): Promise<Store> {
 	try {
-		const parsed = JSON.parse(await readFile(filePath, "utf8")) as Partial<Store>;
+		const raw = await readFile(filePath, "utf8");
+		let parsed: Partial<Store>;
+		try {
+			parsed = JSON.parse(raw) as Partial<Store>;
+		} catch {
+			// [275] 文件写坏时给出明确路径与处理方式，而不是笼统的"无法读取"
+			throw new Error(`授权文件已损坏（JSON 解析失败），请删除 ${filePath} 后重新授权`);
+		}
 		if (!parsed || typeof parsed !== "object" || !parsed.sites || typeof parsed.sites !== "object") return emptyStore();
 		return { version: 1, sites: parsed.sites };
 	} catch (error) {
@@ -38,8 +45,17 @@ async function readStore(): Promise<Store> {
 }
 
 async function writeStore(store: Store) {
-	await mkdir(dirname(filePath), { recursive: true });
-	await writeFile(filePath, JSON.stringify(store, null, 2), { encoding: "utf8", mode: 0o600 });
+	await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
+	// [274] 原子写：直接覆盖会在崩溃时留下截断的 JSON，原凭据也随之丢失
+	const tempPath = `${filePath}.${process.pid}.tmp`;
+	try {
+		await writeFile(tempPath, JSON.stringify(store, null, 2), { encoding: "utf8", mode: 0o600 });
+		await chmod(tempPath, 0o600);
+		await rename(tempPath, filePath);
+	} catch (error) {
+		await rm(tempPath, { force: true }).catch(() => undefined);
+		throw error;
+	}
 }
 
 export function blogOrigin() {

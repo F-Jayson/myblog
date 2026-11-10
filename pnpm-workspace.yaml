@@ -1,5 +1,7 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+
+# pnpm 10.16+ / 11 支持的构建脚本白名单键：未列出的依赖不会执行 postinstall 脚本
 allowBuilds:
   esbuild: true

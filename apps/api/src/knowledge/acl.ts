@@ -115,7 +115,8 @@ export function evaluateAccess(
 			canComment: canWrite,
 			canEdit: canWrite,
 			canPublish,
-			canManage: true,
+			// 管理能力与写入能力同门槛：read_only 的所有者不允许再调整共享与成员
+			canManage: canWrite,
 			canDelete: canWrite,
 			effectiveRole: "owner",
 		});
@@ -124,6 +125,32 @@ export function evaluateAccess(
 	// 6. 普通成员或受邀协作者权限计算
 	let baseRole: KbMemberRole | null = context.libraryMemberRole ?? null;
 	const explicitDocRole = context.targetDocument ? context.documentExplicitRoles?.get(context.targetDocument.id) : null;
+
+	// 已登录但既非库成员也无任何显式授权时，公开可见性与匿名通道保持一致：
+	// public 允许只读，unlisted/private 仍然拒绝，避免公开库对登录访客反而不可读
+	if (!baseRole && !explicitDocRole) {
+		if (context.library.visibility === "public") {
+			if (context.targetDocument && context.targetDocument.publishedRevisionId === null) {
+				return deny("UNPUBLISHED_DRAFT_CANNOT_BE_READ_BY_PUBLIC");
+			}
+			const visibleChain = [...(context.ancestors ?? []), ...(context.targetDocument ? [context.targetDocument] : [])];
+			for (const node of visibleChain) {
+				if (node.accessMode === "members_only" || node.accessMode === "restricted") {
+					return deny("PUBLIC_LIBRARY_NODE_REQUIRES_MEMBERSHIP");
+				}
+			}
+			return {
+				canRead: true,
+				canComment: false,
+				canEdit: false,
+				canPublish: false,
+				canManage: false,
+				canDelete: false,
+				effectiveRole: null,
+			};
+		}
+		return deny("NO_EXPLICIT_ROLE_FOR_RESOURCE");
+	}
 
 	// 单篇直接授权如果角色更高，提升为单篇有效角色 (但最高为 editor，不能越级为 manager)
 	let currentRole: KbMemberRole | null = baseRole;
@@ -145,8 +172,9 @@ export function evaluateAccess(
 					return deny("RESTRICTED_ANCESTOR_ACCESS_DENIED");
 				}
 			} else {
-				// 名单上的角色作为该子树下的权限上限收缩
-				currentRole = currentRole ? minMemberRole(currentRole, explicitRoleOnRestrictedNode) : explicitRoleOnRestrictedNode;
+				// 名单上的角色作为该子树下的权限上限收缩；单篇授权最高为 editor，manager 同样降级
+				const cappedRole = explicitRoleOnRestrictedNode === "manager" ? "editor" : explicitRoleOnRestrictedNode;
+				currentRole = currentRole ? minMemberRole(currentRole, cappedRole) : cappedRole;
 			}
 		}
 	}
@@ -164,6 +192,8 @@ export function evaluateAccess(
 	const isOperatorWritable = ["eligible", "active", "grace"].includes(actorStatus);
 	const isOwnerWritable = ["active", "grace"].includes(ownerStatus);
 	const canCollaborateWrite = isOperatorWritable && isOwnerWritable;
+	// read_only 意味着“本人全部写入暂停”，评论同样属于写入；locked 按定义仍可被邀请评论
+	const isOperatorCommentable = isOperatorWritable || actorStatus === "locked";
 
 	const roleCanEdit = currentRole === "manager" || currentRole === "editor";
 	const roleCanComment = roleCanEdit || currentRole === "commenter";
@@ -176,7 +206,7 @@ export function evaluateAccess(
 
 	const result: AccessEvaluationResult = {
 		canRead: true,
-		canComment: roleCanComment && isOwnerWritable,
+		canComment: roleCanComment && isOperatorCommentable && isOwnerWritable,
 		canEdit: roleCanEdit && canCollaborateWrite,
 		canPublish,
 		canManage: roleCanManage && isOperatorStrictlyActive && isOwnerStrictlyActive,

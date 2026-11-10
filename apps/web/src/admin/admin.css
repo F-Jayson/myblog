@@ -819,21 +819,23 @@
   cursor: pointer;
 }
 .site-admin :is(input, select, textarea):hover:not(:disabled),
-.fa-login-page input:hover:not(:disabled) {
+.fa-login-page :is(input, select, textarea):hover:not(:disabled) {
   border-color: var(--fa-line-strong);
 }
 .site-admin :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea):focus,
-.fa-login-page input:focus {
+.fa-login-page :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"])), .fa-login-page select:focus, .fa-login-page textarea:focus {
   border-color: var(--fa-primary);
   box-shadow: var(--fa-focus-ring);
   outline: 0;
 }
 .site-admin :is(input, textarea)::placeholder,
-.fa-login-page input::placeholder {
+.fa-login-page input::placeholder,
+.fa-login-page textarea::placeholder {
   color: var(--fa-soft);
   opacity: 1;
 }
-.site-admin :is(input, select, textarea):disabled {
+.site-admin :is(input, select, textarea):disabled,
+.fa-login-page :is(input, select, textarea):disabled {
   background: var(--fa-surface-sunken);
   cursor: not-allowed;
   opacity: 0.7;
@@ -1803,7 +1805,9 @@
   color: var(--fa-primary-strong);
   box-shadow: var(--fa-shadow-soft);
 }
+/* [17] 隐藏 input 是 absolute 定位，必须锚定在按钮自身 */
 .fa-upload-button {
+  position: relative;
   display: inline-flex !important;
   width: fit-content;
   min-height: var(--fa-control-h-sm);
@@ -2428,9 +2432,10 @@
 .fa-switch.is-on span {
   transform: translateX(0.95rem);
 }
+/* [11] 不用 !important：否则 1024px 断点里的宽度覆写永远无法生效 */
 .fa-sort-input {
-  width: 4.5rem !important;
-  padding: 0 var(--fa-space-2) !important;
+  width: 4.5rem;
+  padding: 0 var(--fa-space-2);
   text-align: center;
 }
 .fa-pin-button {
@@ -2994,22 +2999,42 @@
     font-size: var(--fa-text-sm);
     font-weight: 600;
   }
-  .fa-table:not(.fa-history-table) tbody tr td:nth-child(2)::before {
+  /* [12] 通用标签只适用于“状态/分类/浏览/更新”列结构的文章表；
+     其余表格列语义不同，按类名单独声明，避免账号/用户/网盘/反馈表被贴错标签 */
+  .fa-table:not(.fa-history-table):not(.fa-accounts-table):not(.fa-users-table):not(.fa-drive-table):not(.fa-feedback-table) tbody tr td:nth-child(2)::before {
     content: "状态";
   }
-  .fa-table:not(.fa-history-table) tbody tr td:nth-child(3)::before {
+  .fa-table:not(.fa-history-table):not(.fa-accounts-table):not(.fa-users-table):not(.fa-drive-table):not(.fa-feedback-table) tbody tr td:nth-child(3)::before {
     content: "分类";
   }
-  .fa-table:not(.fa-history-table) tbody tr td:nth-child(4)::before {
+  .fa-table:not(.fa-history-table):not(.fa-accounts-table):not(.fa-users-table):not(.fa-drive-table):not(.fa-feedback-table) tbody tr td:nth-child(4)::before {
     content: "浏览";
   }
-  .fa-table:not(.fa-history-table) tbody tr td:nth-child(5)::before {
+  .fa-table:not(.fa-history-table):not(.fa-accounts-table):not(.fa-users-table):not(.fa-drive-table):not(.fa-feedback-table) tbody tr td:nth-child(5)::before {
     content: "更新";
   }
-  .fa-table:not(.fa-history-table) tbody tr td:nth-child(6) {
+  .fa-table:not(.fa-history-table):not(.fa-accounts-table):not(.fa-users-table):not(.fa-drive-table):not(.fa-feedback-table) tbody tr td:nth-child(6) {
     grid-column: 1 / -1;
     justify-content: flex-end;
   }
+  /* 账号表：账号/角色/状态/创建时间/最近登录 */
+  .fa-accounts-table tbody tr td:nth-child(2)::before { content: "角色"; }
+  .fa-accounts-table tbody tr td:nth-child(3)::before { content: "状态"; }
+  .fa-accounts-table tbody tr td:nth-child(4)::before { content: "创建时间"; }
+  /* 用户表：用户/邮箱/评论/知识库/状态/注册时间/操作 */
+  .fa-users-table tbody tr td:nth-child(2)::before { content: "邮箱"; }
+  .fa-users-table tbody tr td:nth-child(3)::before { content: "评论"; }
+  .fa-users-table tbody tr td:nth-child(4)::before { content: "知识库"; }
+  .fa-users-table tbody tr td:nth-child(5)::before { content: "状态"; }
+  /* 网盘表：文件/大小/下载次数/上传时间/操作 */
+  .fa-drive-table tbody tr td:nth-child(2)::before { content: "大小"; }
+  .fa-drive-table tbody tr td:nth-child(3)::before { content: "下载次数"; }
+  .fa-drive-table tbody tr td:nth-child(4)::before { content: "上传时间"; }
+  /* 反馈表：反馈内容/类型/联系方式/提交时间/状态/操作 */
+  .fa-feedback-table tbody tr td:nth-child(2)::before { content: "类型"; }
+  .fa-feedback-table tbody tr td:nth-child(3)::before { content: "联系方式"; }
+  .fa-feedback-table tbody tr td:nth-child(4)::before { content: "提交时间"; }
+  .fa-feedback-table tbody tr td:nth-child(5)::before { content: "状态"; }
   .fa-history-table {
     min-width: 0;
   }

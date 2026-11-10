@@ -94,6 +94,9 @@ async function adminRequest<T>(path: string, options: RequestInit = {}): Promise
 	if (response.status === 204) return undefined as T;
 	const payload = (await response.json().catch(() => null)) as { message?: string; error?: string } | null;
 	if (!response.ok) throw new Error(payload?.message || payload?.error || "请求失败");
+	// [347] 空响应体（如 200 + 空 JSON）时 payload 为 null：直接 as T 会把 null 强转成数组，
+	// 消费方 grants.length 直接白屏。这里兜底为空数组（列表端点没有"合法的空值"语义）。
+	if (payload === null) return [] as unknown as T;
 	return payload as T;
 }
 

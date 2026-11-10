@@ -1,5 +1,5 @@
 import { Check, Copy, Highlighter, WrapText } from "lucide-react";
-import { useMemo, useState, type ClipboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
 import {
 	CLIPBOARD_LANGUAGES,
 	FORMAT_METHODS,
@@ -55,15 +55,19 @@ async function writeClipboard(html: string, plain: string) {
 	host.style.background = "#ffffff";
 	host.innerHTML = html;
 	document.body.append(host);
-	const range = document.createRange();
-	range.selectNodeContents(host);
-	const selection = document.getSelection();
-	selection?.removeAllRanges();
-	selection?.addRange(range);
-	const copied = document.execCommand("copy");
-	selection?.removeAllRanges();
-	host.remove();
-	if (!copied) throw new Error("copy failed");
+	try {
+		const range = document.createRange();
+		range.selectNodeContents(host);
+		const selection = document.getSelection();
+		selection?.removeAllRanges();
+		selection?.addRange(range);
+		const copied = document.execCommand("copy");
+		selection?.removeAllRanges();
+		if (!copied) throw new Error("copy failed");
+	} finally {
+		// [316] 无论成败都要移除离屏宿主节点，否则 selection 异常时会留下隐形 contenteditable
+		host.remove();
+	}
 }
 
 export default function CodeHighlightPage() {
@@ -82,10 +86,16 @@ export default function CodeHighlightPage() {
 	const rows = useMemo(() => tokenizeCode(source, languageKey), [source, languageKey]);
 	const format = FORMAT_METHODS.find((item) => item.id === formatId) ?? FORMAT_METHODS[0];
 
+	const copiedTimerRef = useRef<number | null>(null);
+	useEffect(() => () => {
+		// [315] 卸载时清掉提示复位定时器，避免对已卸载组件 setState
+		if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
+	}, []);
 	const notify = (text: string, kind: "plain" | "word" | "" = "") => {
 		setMessage(text);
 		setCopied(kind);
-		if (kind) window.setTimeout(() => setCopied(""), 1800);
+		if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
+		if (kind) copiedTimerRef.current = window.setTimeout(() => setCopied(""), 1800);
 	};
 
 	const applyFormat = () => {
@@ -103,9 +113,10 @@ export default function CodeHighlightPage() {
 		}
 	};
 
-	const copyWord = async (text = source) => {
+	// [318] copyWord 只服务当前源码：去掉从未被传入的 text 参数与恒真的 text === source 判断
+	const copyWord = async () => {
 		try {
-			await writeClipboard(wordCopyHtml(text, languageKey, strategyId, includeLineNumbers && text === source), text);
+			await writeClipboard(wordCopyHtml(source, languageKey, strategyId, includeLineNumbers), source);
 			const swapped = strategy.screenDark || copyPalette.id !== strategy.id;
 			notify(swapped ? "已复制浅色斑马纹。深色预览不会把深色背景带进 Word。" : "已复制浅色斑马纹，可以直接粘贴到 Word。", "word");
 		} catch {

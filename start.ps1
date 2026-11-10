@@ -152,6 +152,16 @@ function Normalize-CommandLine([string]$Value) {
 	return [regex]::Replace(([string]$Value).Trim(), "\s+", " " ).ToLowerInvariant()
 }
 
+# 启动时间不能按字符串比较：不同区域设置/序列化格式下同一个时刻会得到不同文本
+function Test-CreationDateMatches($ProcessInfo, [string]$RecordedCreationDate) {
+	if ([string]::IsNullOrWhiteSpace($RecordedCreationDate)) { return $false }
+	$recorded = [datetime]::MinValue
+	$parsed = [datetime]::TryParse($RecordedCreationDate, [Globalization.CultureInfo]::CurrentCulture, [Globalization.DateTimeStyles]::AssumeLocal, [ref]$recorded)
+	if (-not $parsed) { return $false }
+	$created = [datetime]$ProcessInfo.CreationDate
+	return [Math]::Abs(($created - $recorded).TotalSeconds) -lt 2
+}
+
 function Test-LegacyProcessIdentity($ProcessInfo, [string]$ExpectedCommand, [string]$RecordedStartedAt) {
 	$commandLine = [string]$ProcessInfo.CommandLine
 	$comparison = [System.StringComparison]::OrdinalIgnoreCase
@@ -185,7 +195,7 @@ function Stop-TrackedProcess([int]$ProcessId, [string]$ExpectedCommand, [string]
 	$hasRecordedIdentity = -not [string]::IsNullOrWhiteSpace($RecordedCommandLine) -and -not [string]::IsNullOrWhiteSpace($RecordedCreationDate)
 	if ($hasRecordedIdentity) {
 		$recordedMatches = (Normalize-CommandLine $commandLine) -eq (Normalize-CommandLine $RecordedCommandLine)
-		$creationMatches = [string]$processInfo.CreationDate -eq $RecordedCreationDate
+		$creationMatches = Test-CreationDateMatches $processInfo $RecordedCreationDate
 	} elseif (-not (Test-LegacyProcessIdentity $processInfo $ExpectedCommand $RecordedStartedAt)) {
 		return $false
 	}

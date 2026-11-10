@@ -1,13 +1,17 @@
+import { createHash } from "node:crypto";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { Router } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
+import type { RowDataPacket } from "mysql2/promise";
+import { pool } from "../db.js";
 import type { KbScope } from "./types.js";
 import { ALL_KB_SCOPES, DEFAULT_KB_SCOPES, SENSITIVE_KB_SCOPES, KbAgentError } from "./agentStore.js";
 import {
 	createAuthorizationCode,
 	exchangeAuthorizationCode,
 	getOAuthClient,
+	getOAuthClientSecretHash,
 	registerOAuthClient,
 	revokeOAuthToken,
 	rotateRefreshToken,
@@ -15,6 +19,35 @@ import {
 } from "./remoteOAuthStore.js";
 
 export const remoteOAuthRoutes = Router();
+
+function sha256Hex(value: string): string {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * 机密客户端 (token_endpoint_auth_method=client_secret_post) 在 token/revoke 端点必须出示 client_secret。
+ * PKCE 防的是授权码拦截，替代不了客户端身份认证
+ */
+async function assertClientAuthenticated(
+	req: Request,
+	clientId: string,
+	res: Response,
+): Promise<{ ok: true } | { ok: false }> {
+	const client = await getOAuthClient(clientId);
+	if (!client) {
+		res.status(401).json({ error: "invalid_client", error_description: "客户端不存在" });
+		return { ok: false };
+	}
+	if (client.isConfidential) {
+		const clientSecret = String(req.body.client_secret ?? "").trim();
+		const secretHash = await getOAuthClientSecretHash(clientId);
+		if (!clientSecret || !secretHash || sha256Hex(clientSecret) !== secretHash) {
+			res.status(401).json({ error: "invalid_client", error_description: "机密客户端必须提供有效的 client_secret" });
+			return { ok: false };
+		}
+	}
+	return { ok: true };
+}
 
 // 工具函数：获取基础 Issuer URL
 function getIssuer(req: Request): string {
@@ -178,10 +211,26 @@ remoteOAuthRoutes.post("/consent", async (req: Request, res: Response, next: Nex
 			return;
 		}
 
-		// 过滤合法 scopes
-		const validScopes = body.scopes.filter((s): s is KbScope => (ALL_KB_SCOPES as readonly string[]).includes(s));
+		// 过滤合法 scopes；敏感 scope（发布/分享/删除/导出）不允许通过 OAuth 静默签发
+		const validScopes = body.scopes.filter(
+			(s): s is KbScope => (ALL_KB_SCOPES as readonly string[]).includes(s) && !(SENSITIVE_KB_SCOPES as readonly string[]).includes(s),
+		);
 		if (validScopes.length === 0) {
 			validScopes.push("kb:read");
+		}
+
+		// [209] 授权的库必须真实存在且归属当前用户，防止把别人的库写进授权范围
+		if (body.allowed_library_ids.length > 0) {
+			const [libRows] = await pool.query<RowDataPacket[]>(
+				`SELECT id FROM kb_libraries WHERE owner_user_id = ? AND id IN (${body.allowed_library_ids.map(() => "?").join(",")})`,
+				[user.id, ...body.allowed_library_ids],
+			);
+			const ownedIds = new Set(libRows.map((row) => Number(row.id)));
+			const invalid = body.allowed_library_ids.filter((id) => !ownedIds.has(id));
+			if (invalid.length > 0) {
+				res.status(403).json({ error: "invalid_target", error_description: "授权范围包含不存在的知识库或非本人知识库" });
+				return;
+			}
 		}
 
 		const code = await createAuthorizationCode({
@@ -227,6 +276,10 @@ remoteOAuthRoutes.post("/token", async (req: Request, res: Response, next: NextF
 			res.status(400).json({ error: "invalid_request", error_description: "缺少必需的 client_id" });
 			return;
 		}
+
+		// 机密客户端必须先通过 client_secret 认证（公开客户端靠 PKCE）
+		const auth = await assertClientAuthenticated(req, clientId, res);
+		if (!auth.ok) return;
 
 		if (grantType === "authorization_code") {
 			const code = String(req.body.code ?? "").trim();
@@ -290,6 +343,13 @@ remoteOAuthRoutes.post("/revoke", async (req: Request, res: Response, next: Next
 		if (!token) {
 			res.status(400).json({ error: "invalid_request", error_description: "缺少 token 参数" });
 			return;
+		}
+
+		const clientId = String(req.body.client_id ?? "").trim();
+		if (clientId) {
+			// RFC 7009：撤销请求同样要校验机密客户端身份
+			const auth = await assertClientAuthenticated(req, clientId, res);
+			if (!auth.ok) return;
 		}
 
 		await revokeOAuthToken(token);

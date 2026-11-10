@@ -6,13 +6,21 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-jayson_blog}
       MYSQL_USER: ${MYSQL_USER:-jayson}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
-      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes" # 初始化日志里只打印一次：docker compose logs mysql | grep "GENERATED ROOT PASSWORD"
     ports:
       - "127.0.0.1:${MYSQL_PORT:-3307}:3306"
     volumes:
       - jayson_mysql_data:/var/lib/mysql
+    # 容器退出时先让 MySQL 正常关闭，避免每次重启都做崩溃恢复
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
-      test: ["CMD-SHELL", "mysql --protocol=TCP -h 127.0.0.1 -u\"$$MYSQL_USER\" -p\"$$MYSQL_PASSWORD\" \"$$MYSQL_DATABASE\" --execute='SELECT 1' --silent"]
+      # 用 MYSQL_PWD 传递密码，避免把口令写进容器内的进程参数（docker inspect / ps 可见）
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql --protocol=TCP -h 127.0.0.1 -u\"$$MYSQL_USER\" \"$$MYSQL_DATABASE\" --execute='SELECT 1' --silent"]
       interval: 5s
       timeout: 5s
       retries: 24

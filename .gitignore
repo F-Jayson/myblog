@@ -1,7 +1,6 @@
 node_modules/
 uploads/
 dist/
-.env
 *.log
 playwright-report/
 test-results/
@@ -10,12 +9,25 @@ screenshots/
 .blog-run/
 .compiler-work/
 data/ip2region/*.xdb
+
+# 环境变量：.env 与所有模式变体都不入库，示例文件除外
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.*.local
+!.env.example
+!.env.docker.example
+
+# 代码审查产物与浏览器自动化临时目录
+review.html
 .edge-check/
 .edge-cdp*/
 
+# 本地参考项目（不属于本仓库，仅作设计对照）
 Firefly-master/
-# Reference project (used for design comparison)
-mini_blog（用于后台管理系统设计时候的参考）
+mini_blog/
 
 # Platform metadata and editor swap files
 .DS_Store
@@ -24,4 +36,3 @@ Thumbs.db
 *.swo
 .vscode/
 .idea/
-review.html

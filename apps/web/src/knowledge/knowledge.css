@@ -286,8 +286,11 @@
 .kb-workspace-layout {
   display: flex;
   flex-direction: column;
+  /* [18] 100vw 在桌面端包含滚动条宽度、配合 overflow:hidden 会造成横向裁切；
+     100vh 在移动端按最大视口计算会把底部顶出屏幕，用 dvh 跟随地址栏变化 */
   height: 100vh;
-  width: 100vw;
+  height: 100dvh;
+  width: 100%;
   background: var(--page-bg);
   color: var(--deep-text);
   overflow: hidden;
@@ -581,6 +584,9 @@
   width: 0 !important;
   border-right-color: transparent;
   pointer-events: none;
+  /* [21] 仅靠 width:0 + overflow:hidden 时子元素仍在可访问性树与 Tab 序列里，
+     键盘用户会聚焦到不可见的控件上 */
+  visibility: hidden;
 }
 
 /* Sidebar Library Card */
@@ -820,14 +826,22 @@
 }
 
 .kb-tree-actions {
-  display: none;
+  /* [20] 原来只在 :hover 时 display:flex：触屏没有 hover、键盘 Tab 到按钮时也永远
+     不显示，重命名/删除不可达；改用透明度控制，避免 display 切换造成标题宽度抖动 */
+  display: flex;
   align-items: center;
   gap: 0.2rem;
   flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s var(--ease);
 }
 
-.kb-tree-node:hover .kb-tree-actions {
-  display: flex;
+.kb-tree-node:hover .kb-tree-actions,
+.kb-tree-node:focus-within .kb-tree-actions,
+.kb-tree-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .kb-tree-action-btn {
@@ -941,6 +955,13 @@
   margin: 0;
 }
 
+/* [25] 去掉 outline 后必须补键盘可见的焦点样式，否则 Tab 到标题框完全看不到焦点 */
+.kb-doc-title-input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  border-radius: 0.35rem;
+}
+
 .kb-doc-title-input::placeholder {
   color: var(--faint-text);
   opacity: 0.45;
@@ -1009,6 +1030,11 @@
   width: 5.5rem;
 }
 
+.kb-tag-add-input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 .kb-tag-add-input:focus {
   border-color: var(--primary);
   width: 7.5rem;
@@ -1066,7 +1092,11 @@
 }
 
 .kb-editor-wrap .md-editor-content {
-  height: calc(100% - 40px) !important;
+  /* [19] 原来是 calc(100% - 40px)：工具栏高度由 padding 与按钮尺寸决定，窄屏换行
+     或 footer 出现时高度会变，固定像素扣除会裁切编辑区；交给 flex 自适应 */
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: auto !important;
 }
 
 .kb-editor-wrap .md-editor-input {
@@ -1440,6 +1470,21 @@
   flex: 1;
 }
 
+/* [23] 动效降级：对 animation/transition 敏感的用户需要能关掉脉冲与旋转 */
+@media (prefers-reduced-motion: reduce) {
+  .kb-dot-pulse,
+  .kb-spin {
+    animation: none !important;
+  }
+  .kb-card,
+  .kb-btn,
+  .kb-progress-bar-inner,
+  .kb-workspace-sidebar,
+  .kb-tree-actions {
+    transition: none !important;
+  }
+}
+
 /* Responsive mobile adjustments */
 @media (max-width: 768px) {
   .kb-workspace-sidebar {
@@ -1455,6 +1500,8 @@
     width: 18rem !important;
   }
   .kb-workspace-inspector {
+    /* 移动端改为覆盖式：检查器只在 rightTab 打开时挂载，点同一 tab 即关闭，
+       因此这里不需要额外的折叠态（见 KnowledgeWorkspace 的 rightTab && currentDoc 条件渲染） */
     position: fixed;
     top: 3.75rem;
     bottom: 0;

@@ -7,6 +7,9 @@ import MdEditorBridge from "./admin/MdEditorBridge";
 import { resolveMediaUrl } from "./media";
 import type { CommentRecord, EmojiSticker, PublicUser } from "./types";
 
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // [344] 单张图片上限
+const MAX_IMAGE_COUNT = 3; // [344] 每条评论的图片数上限
+
 type CommentsProps = { postId: number };
 
 function commentAuthor(comment: CommentRecord): PublicUser {
@@ -38,28 +41,37 @@ export default function Comments({ postId }: CommentsProps) {
 	const stickerInput = useRef<HTMLInputElement>(null);
 	useEffect(() => {
 		let active = true;
+		// [341] 切换文章先清掉上一篇遗留的错误与旧数据，失败时也不要同时展示旧评论
+		setError("");
+		setComments([]);
 		setLoading(true);
-		api.comments(postId).then((result) => { if (active) { setComments(result); setLoading(false); } }).catch(() => { if (active) { setError("评论加载失败"); setLoading(false); } });
+		api.comments(postId).then((result) => { if (active) { setComments(result); setError(""); setLoading(false); } }).catch(() => { if (active) { setError("评论加载失败"); setLoading(false); } });
 		return () => { active = false; };
 	}, [postId, refreshKey]);
 	useEffect(() => {
 		if (!user || !features.commentsEnabled || !features.userCenterEnabled) { setStickers([]); return; }
-		void Promise.all([api.emojis(), api.userStickers()]).then(([shared, own]) => setStickers([...shared, ...own]));
-	}, [features.commentsEnabled, features.userCenterEnabled, user]);
+		let active = true;
+		// [342] 表情列表加载失败只降级为空列表：不能变成 unhandled rejection
+		void Promise.all([api.emojis(), api.userStickers()])
+			.then(([shared, own]) => { if (active) setStickers([...shared, ...own]); })
+			.catch(() => { if (active) setStickers([]); });
+		return () => { active = false; };
+	}, [features.commentsEnabled, features.userCenterEnabled, user?.id]);
 	const totalCount = useMemo(() => flattenComments(comments).length, [comments]);
 	const canComment = settings.commentsEnabled && features.commentsEnabled;
 	const requiresLogin = !settings.allowAnonymous && !user;
-	const displayName = user?.nickname || user?.displayName || user?.username || "用户";
 	const uploadImage = async (file: File) => {
 		if (!features.imageHostingEnabled) throw new Error("图片上传功能当前已关闭");
 		if (!file.type.startsWith("image/")) throw new Error("评论图片必须是图片文件");
-		if (file.size > 5 * 1024 * 1024) throw new Error("每张评论图片不能超过 5MB");
-		if (editorUploads.current + uploadedImages.length >= 3) throw new Error("每条评论最多上传 3 张图片");
+		if (file.size > MAX_IMAGE_SIZE) throw new Error("每张评论图片不能超过 5MB");
+		if (editorUploads.current + uploadedImages.length >= MAX_IMAGE_COUNT) throw new Error("每条评论最多上传 3 张图片");
 		editorUploads.current += 1;
 		try {
 			const url = await api.uploadCommentImage(file);
-			setUploadedImages((items) => [...items, url].slice(0, 3));
-			return url;
+			setUploadedImages((items) => [...items, url].slice(0, MAX_IMAGE_COUNT));
+			// [343] 返回空串而不是 URL：md-editor 会把 callback 的 URL 自动写成正文里的 ![](url)，
+			// 与 images 字段的双写会让同一张图展示两次且删除不同步；正文里的图片统一由 images 渲染
+			return "";
 		} finally { editorUploads.current = Math.max(0, editorUploads.current - 1); }
 	};
 	const addImage = async (file: File | undefined) => {
@@ -82,7 +94,7 @@ export default function Comments({ postId }: CommentsProps) {
 	const uploadSticker = async (file: File | undefined) => {
 		if (!file || !user || !features.imageHostingEnabled || !features.userCenterEnabled) return;
 		if (!file.type.startsWith("image/")) { setError("表情必须是图片文件"); return; }
-		if (file.size > 5 * 1024 * 1024) { setError("单个表情不能超过 5MB"); return; }
+		if (file.size > MAX_IMAGE_SIZE) { setError("单个表情不能超过 5MB"); return; }
 		try {
 			setError("");
 			const sticker = await api.uploadSticker(file, file.name.replace(/\.[^.]+$/u, "").slice(0, 120));
@@ -110,5 +122,8 @@ function CommentItem({ comment, depth, onReply }: { comment: CommentRecord; dept
 	const author = commentAuthor(comment);
 	const children = comment.children ?? comment.replies ?? [];
 	const label = author.nickname || author.displayName || comment.authorName || "匿名用户";
-	return <article className={`comment-item ${depth ? "is-reply" : ""}`} style={{ "--comment-depth": Math.min(depth, 3) } as CSSProperties}><div className="comment-avatar"><UserAvatar user={author} size={depth ? 34 : 40} /></div><div className="comment-main"><header><strong>{label}</strong>{comment.isAdmin || author.isAdmin ? <b className="comment-admin-badge">管理员</b> : null}{comment.badge ? <b className="comment-user-badge">{comment.badge}</b> : null}<time>{new Date(comment.createdAt).toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" })}</time></header><div className="comment-meta">{comment.ipLocation ? <span>{comment.ipLocation}</span> : null}{comment.device ? <span>{comment.device}</span> : null}{comment.browser ? <span>{comment.browser}</span> : null}</div><div className="comment-body"><MarkdownContent content={comment.body} />{comment.images?.length ? <div className="comment-images">{comment.images.slice(0, 3).map((image) => <img key={image} src={resolveMediaUrl(image)} alt="评论图片" loading="lazy" decoding="async" />)}</div> : null}</div><footer><button type="button" onClick={() => onReply(comment)}><MessageCircle size={14} />回复</button></footer>{children.length ? <div className="comment-replies">{children.map((child) => <CommentItem key={child.id} comment={child} depth={depth + 1} onReply={onReply} />)}</div> : null}</div></article>;
+	return <article className={`comment-item ${depth ? "is-reply" : ""}`} style={{ "--comment-depth": Math.min(depth, 3) } as CSSProperties}><div className="comment-avatar"><UserAvatar user={author} size={depth ? 34 : 40} /></div><div className="comment-main"><header><strong>{label}</strong>{comment.isAdmin || author.isAdmin ? <b className="comment-admin-badge">管理员</b> : null}{comment.badge ? <b className="comment-user-badge">{comment.badge}</b> : null}<time>{new Date(comment.createdAt).toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" })}</time></header><div className="comment-meta">{comment.ipLocation ? <span>{comment.ipLocation}</span> : null}{comment.device ? <span>{comment.device}</span> : null}{comment.browser ? <span>{comment.browser}</span> : null}</div><div className="comment-body"><MarkdownContent content={comment.body} />{comment.images?.length ? <div className="comment-images">{comment.images.slice(0, MAX_IMAGE_COUNT).map((image) => <img key={image} src={resolveMediaUrl(image)} alt="评论图片" loading="lazy" decoding="async" />)}</div> : null}</div><footer><button type="button" onClick={() => onReply(comment)}><MessageCircle size={14} />回复</button></footer>{children.length ? <div className="comment-replies">{children.map((child) => (
+						/* [345] 超过 4 层后深度不再递增（平铺渲染）：脏数据自引用时最多渲染有限层，不会栈溢出 */
+						<CommentItem key={child.id} comment={child} depth={depth >= 4 ? depth : depth + 1} onReply={onReply} />
+					))}</div> : null}</div></article>;
 }

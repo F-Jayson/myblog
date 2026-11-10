@@ -85,6 +85,17 @@ function computeSimpleDiff(oldText: string, newText: string) {
 	return diff;
 }
 
+// [427] 剪贴板写入需要 HTTPS 与授权环境：统一封装，失败返回 false 而不是 unhandled rejection
+async function copyTextToClipboard(text: string): Promise<boolean> {
+	try {
+		if (!navigator.clipboard) return false;
+		await navigator.clipboard.writeText(text);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export default function KnowledgeWorkspace() {
 	const { libraryId: paramLibId, documentId: paramDocId } = useParams<{
 		libraryId: string;
@@ -144,7 +155,8 @@ export default function KnowledgeWorkspace() {
 		const next = !isDark;
 		setIsDark(next);
 		document.documentElement.classList.toggle("dark", next);
-		localStorage.setItem("site-theme", next ? "dark" : "light");
+		// [424] 隐私模式下写入会抛异常，不能中断主题切换
+		try { localStorage.setItem("site-theme", next ? "dark" : "light"); } catch { /* ignore */ }
 	};
 
 	// 历史版本、附件与评论
@@ -196,11 +208,29 @@ export default function KnowledgeWorkspace() {
 
 	// 自动保存防抖
 	const autoSaveTimerRef = useRef<number | null>(null);
+	// [417] 保存进行中新产生的修改：保存结束后补存一次
+	const pendingSaveRef = useRef(false);
+	// [420] 搜索防抖定时器与请求序号（序号用于丢弃过期响应）
+	const searchDebounceRef = useRef<number | null>(null);
+	const searchSeqRef = useRef(0);
 	const lastSaveTimeRef = useRef<number>(Date.now());
+	// 当前文档 id 的镜像，供自动保存定时器判断期间是否已切换文档
+	const activeDocIdRef = useRef<number | null>(activeDocId);
+	useEffect(() => {
+		activeDocIdRef.current = activeDocId;
+	}, [activeDocId]);
 
 	// 1. 加载库信息与目录树
+	// [418] 初始引导（跳转首篇/重置展开）只应执行一次：activeDocId 变化时不再重拉库与树，
+	// 否则每次切文档都会重置用户手动折叠的文件夹
+	const initialBootRef = useRef(false);
 	const loadLibraryAndTree = useCallback(async () => {
-		if (!libraryId) return;
+		// [419] 非法路由参数要结束加载态：否则侧边栏永远停在加载中且没有任何提示
+		if (!libraryId || Number.isNaN(libraryId)) {
+			setTreeLoading(false);
+			setDocError("知识库 ID 无效，请从知识库列表重新进入");
+			return;
+		}
 		try {
 			const [lib, tree] = await Promise.all([
 				kbApi.getLibrary(libraryId),
@@ -209,15 +239,16 @@ export default function KnowledgeWorkspace() {
 			setLibrary(lib);
 			setTreeNodes(tree);
 
-			// 默认展开所有文件夹
-			const initialExpanded = new Set<number>();
-			for (const node of tree) {
-				if (node.kind === "folder") initialExpanded.add(node.id);
-			}
-			setExpandedFolders(initialExpanded);
+			if (!initialBootRef.current) {
+				initialBootRef.current = true;
+				// 默认展开所有文件夹（仅首次；之后用户自己的折叠状态不被重置）
+				const initialExpanded = new Set<number>();
+				for (const node of tree) {
+					if (node.kind === "folder") initialExpanded.add(node.id);
+				}
+				setExpandedFolders(initialExpanded);
 
-			// 若未选中任何文档且树中有文档，跳转第一篇
-			if (!activeDocId && tree.length > 0) {
+				// 若未选中任何文档且树中有文档，跳转第一篇（仅首次）
 				const firstDoc = tree.find((n) => n.kind === "document");
 				if (firstDoc) {
 					navigate(`/knowledge/${libraryId}/docs/${firstDoc.id}`, { replace: true });
@@ -228,10 +259,10 @@ export default function KnowledgeWorkspace() {
 		} finally {
 			setTreeLoading(false);
 		}
-	}, [libraryId, activeDocId, navigate]);
+	}, [libraryId, navigate]);
 
 	useEffect(() => {
-		loadLibraryAndTree();
+		void loadLibraryAndTree();
 	}, [loadLibraryAndTree]);
 
 	// 2. 加载文档内容
@@ -267,7 +298,12 @@ export default function KnowledgeWorkspace() {
 	// 3. 执行保存
 	const performSave = useCallback(
 		async (isManual = false) => {
-			if (!activeDocId || !currentDoc || saveStatus === "saving") return;
+			// [417] 正在保存时来的新修改不能被静默丢弃：记一个待存标记，保存结束后补存一次
+			if (saveStatus === "saving") {
+				pendingSaveRef.current = true;
+				return;
+			}
+			if (!activeDocId || !currentDoc) return;
 
 			setSaveStatus("saving");
 			setSaveError(null);
@@ -285,6 +321,23 @@ export default function KnowledgeWorkspace() {
 					setCurrentVersion(result.version);
 					setSaveStatus("saved");
 					lastSaveTimeRef.current = Date.now();
+					// [423] 保存成功后同步 currentDoc：否则发布用的是过期 revisionId，头部时间/版本号也会滞后
+					setCurrentDoc((prev) =>
+						prev && prev.id === activeDocId
+							? {
+									...prev,
+									version: result.version,
+									currentRevisionId: result.revisionId ?? prev.currentRevisionId,
+									title: editTitle,
+									updatedAt: new Date().toISOString(),
+							  }
+							: prev,
+					);
+					// [417] 保存期间又有新的修改：补一次保存，避免内容停留在 dirty
+					if (pendingSaveRef.current) {
+						pendingSaveRef.current = false;
+						void performSave(false);
+					}
 
 					if (result.status === "saved") {
 						kbApi.getRevisions(activeDocId).then(setRevisions).catch(() => undefined);
@@ -305,6 +358,10 @@ export default function KnowledgeWorkspace() {
 				} else {
 					setSaveStatus("error");
 					setSaveError(err instanceof Error ? err.message : "保存失败");
+					if (pendingSaveRef.current) {
+						pendingSaveRef.current = false;
+						void performSave(false);
+					}
 				}
 			}
 		},
@@ -329,32 +386,42 @@ export default function KnowledgeWorkspace() {
 	}, [performSave, sidebarOpen]);
 
 	// 4. 输入变更处理
+	const scheduleAutoSave = useCallback((delay: number) => {
+		// [417] 版本冲突未解决前暂停自动保存：旧 expectedVersion 只会反复触发 409
+		if (saveStatus === "conflict") return;
+		if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+		const docId = activeDocId;
+		autoSaveTimerRef.current = window.setTimeout(() => {
+			autoSaveTimerRef.current = null;
+			// 文档已切换：丢弃这次待执行保存，避免旧闭包写进新文档的界面状态
+			if (activeDocIdRef.current !== docId) return;
+			void performSave(false);
+		}, delay);
+	}, [activeDocId, performSave, saveStatus]);
+
+	// 卸载时清掉待触发的定时器，避免组件卸载后仍执行保存与 setState
+	useEffect(() => () => {
+		if (autoSaveTimerRef.current) {
+			window.clearTimeout(autoSaveTimerRef.current);
+			autoSaveTimerRef.current = null;
+		}
+	}, []);
+
 	const handleContentChange = (nextMarkdown: string) => {
 		setEditMarkdown(nextMarkdown);
 		setSaveStatus("dirty");
 
-		if (autoSaveTimerRef.current) {
-			window.clearTimeout(autoSaveTimerRef.current);
-		}
-
 		const timeSinceLastSave = Date.now() - lastSaveTimeRef.current;
 		const delay = timeSinceLastSave > 15000 ? 500 : 2000;
 
-		autoSaveTimerRef.current = window.setTimeout(() => {
-			performSave(false);
-		}, delay);
+		scheduleAutoSave(delay);
 	};
 
 	const handleTitleChange = (nextTitle: string) => {
 		setEditTitle(nextTitle);
 		setSaveStatus("dirty");
 
-		if (autoSaveTimerRef.current) {
-			window.clearTimeout(autoSaveTimerRef.current);
-		}
-		autoSaveTimerRef.current = window.setTimeout(() => {
-			performSave(false);
-		}, 2000);
+		scheduleAutoSave(2000);
 	};
 
 	// 5. 标签管理
@@ -365,8 +432,7 @@ export default function KnowledgeWorkspace() {
 			setEditTags(nextTags);
 			setNewTagInput("");
 			setSaveStatus("dirty");
-			if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
-			autoSaveTimerRef.current = window.setTimeout(() => performSave(false), 1500);
+			scheduleAutoSave(1500);
 		}
 	};
 
@@ -374,8 +440,7 @@ export default function KnowledgeWorkspace() {
 		const nextTags = editTags.filter((t) => t !== tagToRemove);
 		setEditTags(nextTags);
 		setSaveStatus("dirty");
-		if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
-		autoSaveTimerRef.current = window.setTimeout(() => performSave(false), 1500);
+		scheduleAutoSave(1500);
 	};
 
 	// 6. 新建与重命名
@@ -417,10 +482,13 @@ export default function KnowledgeWorkspace() {
 	// 7. 恢复指定历史版本
 	const handleRestoreRevision = async (rev: RevisionSummary) => {
 		if (!confirm(`确定要将版本 v${rev.version} 恢复为当前最新版本吗？`)) return;
+		// [421] 确认弹窗期间文档可能已被切换/删除：currentDoc 必须重新判空，不能用非空断言
+		const doc = currentDoc;
+		if (!doc) return;
 		try {
-			const res = await kbApi.restoreRevision(currentDoc!.id, rev.id, currentVersion);
+			const res = await kbApi.restoreRevision(doc.id, rev.id, currentVersion);
 			setCurrentVersion(res.version);
-			await loadDocumentContent(currentDoc!.id);
+			await loadDocumentContent(doc.id);
 			alert(`已成功恢复为最新版本 v${res.version}`);
 		} catch (err) {
 			alert(err instanceof Error ? err.message : "恢复版本失败");
@@ -442,7 +510,11 @@ export default function KnowledgeWorkspace() {
 
 	// 8. 附件上传
 	const handleUploadAttachment = async (file: File) => {
-		if (!activeDocId) return "";
+		// [424] 没有文档上下文时必须抛错终止上传：返回空串会被写进 Markdown 变成坏图
+		if (!activeDocId) {
+			alert("请先选择要插入附件的文档");
+			throw new Error("缺少文档上下文，无法上传附件");
+		}
 		setUploadingAttachment(true);
 		try {
 			const att = await kbApi.uploadAttachment(activeDocId, file);
@@ -538,8 +610,8 @@ export default function KnowledgeWorkspace() {
 			});
 			setCommentBody("");
 			await loadComments(currentDoc.id);
-		} catch (err: any) {
-			alert(err.message || "发表评论失败");
+		} catch (err) {
+			alert(err instanceof Error ? err.message : "发表评论失败");
 		} finally {
 			setSubmittingComment(false);
 		}
@@ -550,8 +622,8 @@ export default function KnowledgeWorkspace() {
 		try {
 			await kbApi.resolveComment(comment.id);
 			await loadComments(currentDoc.id);
-		} catch (err: any) {
-			alert(err.message || "更新评论状态失败");
+		} catch (err) {
+			alert(err instanceof Error ? err.message : "更新评论状态失败");
 		}
 	};
 
@@ -575,8 +647,8 @@ export default function KnowledgeWorkspace() {
 			const res = await kbApi.createShareLink(currentDoc.id, { expiresInDays: shareExpiryDays });
 			setNewShareToken(res.token);
 			await loadShareLinks(currentDoc.id);
-		} catch (err: any) {
-			alert(err.message || "创建分享链接失败");
+		} catch (err) {
+			alert(err instanceof Error ? err.message : "创建分享链接失败")
 		} finally {
 			setShareActionLoading(false);
 		}
@@ -587,8 +659,8 @@ export default function KnowledgeWorkspace() {
 		try {
 			await kbApi.revokeShareLink(linkId);
 			await loadShareLinks(currentDoc.id);
-		} catch (err: any) {
-			alert(err.message || "撤销失败");
+		} catch (err) {
+			alert(err instanceof Error ? err.message : "撤销失败")
 		}
 	};
 
@@ -600,8 +672,8 @@ export default function KnowledgeWorkspace() {
 			const res = await kbApi.publishDocument(currentDoc.id, currentDoc.currentRevisionId ?? undefined);
 			setCurrentDoc((prev) => (prev ? { ...prev, publishedRevisionId: res.publishedRevisionId } : null));
 			alert("已成功发布为公开快照！任何人可通过公开链接阅读当前版本。");
-		} catch (err: any) {
-			alert(err.message || "发布失败");
+		} catch (err) {
+			alert(err instanceof Error ? err.message : "发布失败")
 		} finally {
 			setPublishing(false);
 		}
@@ -614,8 +686,8 @@ export default function KnowledgeWorkspace() {
 			await kbApi.unpublishDocument(currentDoc.id);
 			setCurrentDoc((prev) => (prev ? { ...prev, publishedRevisionId: null } : null));
 			alert("已撤回公开快照。");
-		} catch (err: any) {
-			alert(err.message || "撤回失败");
+		} catch (err) {
+			alert(err instanceof Error ? err.message : "撤回失败")
 		} finally {
 			setPublishing(false);
 		}
@@ -896,11 +968,9 @@ export default function KnowledgeWorkspace() {
 							<button
 								type="button"
 								onClick={() => {
-									const next = rightTab === "comments" ? null : "comments";
-									setRightTab(next);
-									if (next === "comments" && currentDoc) {
-										loadComments(currentDoc.id);
-									}
+									// [425] 只切换 tab：评论列表由 useEffect([activeDocId, rightTab]) 统一加载，
+									// 这里再显式调用会与 effect 并发两次请求且互相覆盖
+									setRightTab(rightTab === "comments" ? null : "comments");
 								}}
 								className={`kb-inspector-btn ${rightTab === "comments" ? "is-active" : ""}`}
 								title="工作评论"
@@ -975,14 +1045,33 @@ export default function KnowledgeWorkspace() {
 								placeholder="搜索文档... (Ctrl+K)"
 								className="kb-search-input"
 								value={searchQuery}
-								onChange={async (e) => {
-									setSearchQuery(e.target.value);
-									if (e.target.value.trim().length > 1) {
+								onChange={(e) => {
+									const value = e.target.value;
+									setSearchQuery(value);
+									// [420] 每次输入丢弃上一次未触发的搜索（防抖）
+									if (searchDebounceRef.current) window.clearTimeout(searchDebounceRef.current);
+									const keyword = value.trim();
+									if (keyword.length > 1) {
 										setSearching(true);
-										const items = await kbApi.search(e.target.value.trim(), libraryId);
-										setSearchResults(items);
-										setSearching(false);
+										const seq = ++searchSeqRef.current;
+										searchDebounceRef.current = window.setTimeout(async () => {
+											try {
+												const items = await kbApi.search(keyword, libraryId);
+												// 过期响应丢弃：只采纳最后一次键入的结果
+												if (seq !== searchSeqRef.current) return;
+												setSearchResults(items);
+											} catch (err) {
+												if (seq === searchSeqRef.current) {
+													setSearchResults([]);
+													setDocError(err instanceof Error ? err.message : "搜索失败");
+												}
+											} finally {
+												if (seq === searchSeqRef.current) setSearching(false);
+											}
+										}, 300);
 									} else {
+										++searchSeqRef.current;
+										setSearching(false);
 										setSearchResults([]);
 									}
 								}}
@@ -1382,9 +1471,15 @@ export default function KnowledgeWorkspace() {
 													type="button"
 													onClick={() => {
 														const mdLink = `[${att.filename}](/api/knowledge/attachments/${att.id})`;
-														navigator.clipboard.writeText(mdLink);
-														setCopiedAttachmentId(att.id);
-														setTimeout(() => setCopiedAttachmentId(null), 2000);
+														// [427] 非 HTTPS/未授权环境 writeText 会 reject：失败时提示而不是假报“已复制”
+														void copyTextToClipboard(mdLink).then((ok) => {
+															if (!ok) {
+																alert("复制失败：请手动选中链接复制");
+																return;
+															}
+															setCopiedAttachmentId(att.id);
+															setTimeout(() => setCopiedAttachmentId(null), 2000);
+														});
 													}}
 													className="kb-icon-btn"
 													style={{ width: "1.75rem", height: "1.75rem" }}
@@ -1506,9 +1601,13 @@ export default function KnowledgeWorkspace() {
 								type="button"
 								onClick={() => {
 									if (conflictData.serverDoc) {
-										setEditTitle(conflictData.serverDoc.title);
-										setEditMarkdown(conflictData.serverDoc.markdown);
-										setCurrentVersion(conflictData.serverDoc.version);
+										const serverDoc = conflictData.serverDoc;
+										setEditTitle(serverDoc.title);
+										setEditMarkdown(serverDoc.markdown);
+										setCurrentVersion(serverDoc.version);
+										// [426] 标签也要同步：否则本地旧标签会在下一次保存时覆盖服务端
+										setEditTags(serverDoc.tags ?? []);
+										setCurrentDoc(serverDoc);
 										setSaveStatus("saved");
 									}
 									setConflictData(null);
@@ -1606,9 +1705,15 @@ export default function KnowledgeWorkspace() {
 										<button
 											type="button"
 											onClick={() => {
-												navigator.clipboard.writeText(`${window.location.origin}/ks/${newShareToken}`);
-												setCopiedShareLink(true);
-												setTimeout(() => setCopiedShareLink(false), 2000);
+												// [427] 同上：剪贴板写入失败时不显示“已复制”
+												void copyTextToClipboard(`${window.location.origin}/ks/${newShareToken}`).then((ok) => {
+													if (!ok) {
+														alert("复制失败：请手动选中链接复制");
+														return;
+													}
+													setCopiedShareLink(true);
+													setTimeout(() => setCopiedShareLink(false), 2000);
+												});
 											}}
 											className="kb-btn kb-btn-primary kb-btn-sm"
 										>
@@ -1730,11 +1835,17 @@ export default function KnowledgeWorkspace() {
 										<button
 											type="button"
 											onClick={() => {
-												navigator.clipboard.writeText(
+												// [427] 同上：剪贴板写入失败时不显示“已复制”
+												void copyTextToClipboard(
 													`${window.location.origin}/k/${libraryId}/${currentDoc.id}`,
-												);
-												setCopiedPublishLink(true);
-												setTimeout(() => setCopiedPublishLink(false), 2000);
+												).then((ok) => {
+													if (!ok) {
+														alert("复制失败：请手动选中链接复制");
+														return;
+													}
+													setCopiedPublishLink(true);
+													setTimeout(() => setCopiedPublishLink(false), 2000);
+												});
 											}}
 											className="kb-btn kb-btn-primary kb-btn-sm"
 										>

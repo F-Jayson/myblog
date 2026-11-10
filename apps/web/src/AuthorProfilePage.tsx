@@ -29,9 +29,17 @@ function buildHeatmap(days: AuthorHeatmapDay[]) {
 	for (let cursor = new Date(start), index = 0; cursor <= finish; cursor = addDays(cursor, 1), index += 1) {
 		const date = dateKey(cursor);
 		if (cursor.getMonth() !== previousMonth && Math.floor(index / 7) < 53) { months.push({ label: new Intl.DateTimeFormat("zh-CN", { month: "short" }).format(cursor), week: Math.floor(index / 7) }); previousMonth = cursor.getMonth(); }
-		cells.push(byDate.has(date) ? { date, count: byDate.get(date) ?? 0 } : null);
+		// [335] 只有首尾之外的填充格才是 is-outside；区间内的无文章日期要保持 level-0 浅色格子
+		const inRange = cursor >= first && cursor <= last;
+		cells.push(inRange ? { date, count: byDate.get(date) ?? 0 } : null);
 	}
-	return { cells: cells.slice(0, 53 * 7), months };
+	// [336] 数据超过 53 周时保留最近的 53 周（slice 保留末尾而不是开头），并按新起点重算月份标签
+	const trimmed = cells.length > 53 * 7 ? cells.slice(cells.length - 53 * 7) : cells;
+	const trimmedStartWeek = Math.max(0, Math.floor((cells.length - trimmed.length) / 7));
+	const trimmedMonths = months
+		.filter((month) => month.week >= trimmedStartWeek)
+		.map((month) => ({ label: month.label, week: month.week - trimmedStartWeek }));
+	return { cells: trimmed, months: trimmedMonths };
 }
 
 function levelFor(count: number, maximum: number) { return count <= 0 ? 0 : Math.min(4, Math.max(1, Math.ceil(count / Math.max(1, maximum) * 4))); }
@@ -59,6 +67,20 @@ const skillIcons: Record<string, LucideIcon> = {
 	security: ShieldCheck, devops: Wrench, cloud: Cpu,
 };
 
+// [339] 技能与学习进度条结构一致，统一渲染并兜底 NaN/越界值
+function renderProgressItem(options: {
+	name: string;
+	progress: number;
+	description?: string | null;
+	className?: string;
+} & ({ kind: "skill"; icon?: string | null } | { kind: "learning"; status?: string | null })) {
+	const safeProgress = Number.isFinite(options.progress) ? Math.max(0, Math.min(100, options.progress)) : 0;
+	const label = `${Math.round(safeProgress)}%`;
+	if (options.kind === "skill") {
+		return <div className="author-progress-item author-skill-item" key={options.name}><SkillIcon value={options.icon} /><div className="author-progress-copy"><div><strong>{options.name}</strong><b>{label}</b></div><div className="author-progress-track"><i style={{ width: String(safeProgress) + "%" }} /></div>{options.description ? <small>{options.description}</small> : null}</div></div>;
+	}
+	return <div className="author-progress-item" key={options.name}><div className="author-learning-heading"><strong>{options.name}</strong><span>{options.status || "学习中"}</span><b>{label}</b></div><div className="author-progress-track learning"><i style={{ width: String(safeProgress) + "%" }} /></div>{options.description ? <small>{options.description}</small> : null}</div>;
+}
 function SkillIcon({ value }: { value?: string | null }) {
 	const icon = value?.trim() ?? "";
 	const Icon = skillIcons[icon.toLowerCase()] ?? Code2;
@@ -68,8 +90,9 @@ function SkillIcon({ value }: { value?: string | null }) {
 export default function AuthorProfilePage({ site }: { site: SiteData }) {
 	const [author, setAuthor] = useState<AuthorProfile>(() => initialAuthor(site));
 	const [heatmap, setHeatmap] = useState<AuthorHeatmap | null>(null);
-	useEffect(() => { let active = true; setAuthor(initialAuthor(site)); setHeatmap(null); api.authorProfile().then((payload) => { if (active && payload) { setAuthor(payload.author); setHeatmap(payload.heatmap); } }); return () => { active = false; }; }, [site]);
+	useEffect(() => { let active = true; setAuthor(initialAuthor(site)); setHeatmap(null); api.authorProfile().then((payload) => { if (active && payload) { setAuthor(payload.author); setHeatmap(payload.heatmap); } }).catch(() => { /* 加载失败时保留本地初始数据，避免页面报未处理异常 */ }); return () => { active = false; }; }, [site.author]);
 	const avatar = resolveMediaUrl(author.avatar || site.author?.avatar);
+	const avatarInitial = (author.name || site.author?.name || "博").trim().charAt(0) || "博";
 	const links = (author.links ?? []).filter((link) => link.label.trim() && isSafeNavigationUrl(link.url));
-	return <section className="card content-card author-profile-page"><header className="author-profile-hero"><img src={avatar} alt={(author.name || "作者") + " 的头像"} width="128" height="128" loading="eager" decoding="async" /><div className="author-profile-intro"><span className="author-eyebrow">AUTHOR PROFILE</span><h1>{author.name || "博主"}</h1>{author.headline ? <p className="author-headline">{author.headline}</p> : null}<p className="author-bio">{author.bio || "这个博主还没有留下个人签名。"}</p><div className="author-meta">{author.location ? <span><MapPin size={15} />{author.location}</span> : null}{author.website && isSafeNavigationUrl(author.website) ? <a href={author.website} target="_blank" rel="noreferrer"><Globe2 size={15} />个人网站</a> : null}</div></div></header><nav className="author-contact-links" aria-label="联系作者"><ContactLink href={author.email ? "mailto:" + author.email : null} label="Email" Icon={Mail} /><ContactLink href={author.githubUrl} label="GitHub" Icon={Github} /><ContactLink href={author.qqUrl} label="QQ" Icon={MessageCircle} /><ContactLink href={author.rssUrl} label="RSS" Icon={Rss} />{links.map((link) => <ContactLink href={link.url} label={link.label} Icon={AtSign} key={link.label + link.url} />)}</nav>{author.introduction ? <section className="author-introduction"><MarkdownContent content={author.introduction} /></section> : null}<div className="author-profile-columns"><section className="author-section"><div className="author-section-heading"><div><span className="author-eyebrow">EXPERTISE</span><h2>技能专长</h2></div></div><div className="author-progress-list">{author.skills?.length ? author.skills.map((skill) => <div className="author-progress-item author-skill-item" key={skill.name}><SkillIcon value={skill.icon} /><div className="author-progress-copy"><div><strong>{skill.name}</strong><b>{Math.round(skill.level)}%</b></div><div className="author-progress-track"><i style={{ width: String(Math.max(0, Math.min(100, skill.level))) + "%" }} /></div>{skill.description ? <small>{skill.description}</small> : null}</div></div>) : <p className="author-empty">博主暂未配置技能专长。</p>}</div></section><section className="author-section"><div className="author-section-heading"><div><span className="author-eyebrow">LEARNING</span><h2>知识学习进度</h2></div></div><div className="author-progress-list">{author.learning?.length ? author.learning.map((item) => <div className="author-progress-item" key={item.name}><div className="author-learning-heading"><strong>{item.name}</strong><span>{item.status || "学习中"}</span><b>{Math.round(item.progress)}%</b></div><div className="author-progress-track learning"><i style={{ width: String(Math.max(0, Math.min(100, item.progress))) + "%" }} /></div>{item.description ? <small>{item.description}</small> : null}</div>) : <p className="author-empty">博主暂未设置学习计划。</p>}</div></section></div><ArticleHeatmap heatmap={heatmap} /></section>;
+	return <section className="card content-card author-profile-page"><header className="author-profile-hero">{avatar ? <img src={avatar} alt={(author.name || "作者") + " 的头像"} width="128" height="128" loading="eager" decoding="async" /> : <span className="author-avatar-fallback" aria-hidden="true">{avatarInitial}</span>}<div className="author-profile-intro"><span className="author-eyebrow">AUTHOR PROFILE</span><h1>{author.name || "博主"}</h1>{author.headline ? <p className="author-headline">{author.headline}</p> : null}<p className="author-bio">{author.bio || "这个博主还没有留下个人签名。"}</p><div className="author-meta">{author.location ? <span><MapPin size={15} />{author.location}</span> : null}{author.website && isSafeNavigationUrl(author.website) ? <a href={author.website} target="_blank" rel="noreferrer"><Globe2 size={15} />个人网站</a> : null}</div></div></header><nav className="author-contact-links" aria-label="联系作者"><ContactLink href={author.email ? "mailto:" + author.email : null} label="Email" Icon={Mail} /><ContactLink href={author.githubUrl} label="GitHub" Icon={Github} /><ContactLink href={author.qqUrl} label="QQ" Icon={MessageCircle} /><ContactLink href={author.rssUrl} label="RSS" Icon={Rss} />{links.map((link) => <ContactLink href={link.url} label={link.label} Icon={AtSign} key={link.label + link.url} />)}</nav>{author.introduction ? <section className="author-introduction"><MarkdownContent content={author.introduction} /></section> : null}<div className="author-profile-columns"><section className="author-section"><div className="author-section-heading"><div><span className="author-eyebrow">EXPERTISE</span><h2>技能专长</h2></div></div><div className="author-progress-list">{author.skills?.length ? author.skills.map((skill) => renderProgressItem({ name: skill.name, progress: skill.level, description: skill.description, kind: "skill", icon: skill.icon })) : <p className="author-empty">博主暂未配置技能专长。</p>}</div></section><section className="author-section"><div className="author-section-heading"><div><span className="author-eyebrow">LEARNING</span><h2>知识学习进度</h2></div></div><div className="author-progress-list">{author.learning?.length ? author.learning.map((item) => renderProgressItem({ name: item.name, progress: item.progress, description: item.description, kind: "learning", status: item.status })) : <p className="author-empty">博主暂未设置学习计划。</p>}</div></section></div><ArticleHeatmap heatmap={heatmap} /></section>;
 }

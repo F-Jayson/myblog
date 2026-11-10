@@ -29,6 +29,16 @@ const SCOPES_CONFIG = [
 	{ id: "kb:export", label: "批量导出", desc: "导出已授权文档的 Markdown 原文", sensitive: false, default: false },
 ];
 
+// [405] redirect_uri 完全来自 URL 查询参数，new URL() 可能在渲染期抛 TypeError 打挂整页
+function safeParseUrl(value: string): URL | null {
+	if (!value) return null;
+	try {
+		return new URL(value);
+	} catch {
+		return null;
+	}
+}
+
 export default function KnowledgeOAuthAuthorizePage() {
 	const [searchParams] = useSearchParams();
 
@@ -62,8 +72,7 @@ export default function KnowledgeOAuthAuthorizePage() {
 				.listLibraries()
 				.then((libs) => {
 					setLibraries(libs);
-					// 默认勾选所有已有库
-					setSelectedLibIds(libs.map((l) => l.id));
+					// [407] 默认不勾选任何库：最小权限原则，未勾选的知识库不会被访问
 				})
 				.catch((err) => {
 					console.error("加载知识库列表失败:", err);
@@ -104,35 +113,43 @@ export default function KnowledgeOAuthAuthorizePage() {
 			return;
 		}
 
+		// [407] 未勾选任何知识库时禁止提交：客户端将无法访问任何内容
+		if (selectedLibIds.length === 0) {
+			setSubmitError("请至少选择一个允许访问的知识库，否则客户端将无法访问任何内容");
+			return;
+		}
+
+		// [411] 授权链接关键参数缺失时提前给出可理解的提示，而不是让服务端返回泛化错误
+		if (!clientId || !redirectUri || !codeChallenge) {
+			setSubmitError("授权链接无效或已过期，请返回客户端重新发起授权");
+			return;
+		}
+
 		setSubmitting(true);
 		setSubmitError(null);
 
 		try {
-			const res = await fetch("/oauth/consent", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					client_id: clientId,
-					redirect_uri: redirectUri,
-					code_challenge: codeChallenge,
-					code_challenge_method: codeChallengeMethod,
-					state,
-					scopes: selectedScopes,
-					allowed_library_ids: selectedLibIds,
-				}),
+			const data = await kbApi.createOAuthConsent({
+				client_id: clientId,
+				redirect_uri: redirectUri,
+				code_challenge: codeChallenge,
+				code_challenge_method: codeChallengeMethod,
+				state,
+				scopes: selectedScopes,
+				allowed_library_ids: selectedLibIds,
 			});
-
-			const data = await res.json();
-			if (!res.ok) {
-				throw new Error(data.error_description || data.error || "授权失败");
-			}
 
 			// 重定向回远程客户端
 			if (data.redirect_url) {
 				window.location.href = data.redirect_url;
+				return;
 			}
-		} catch (err: any) {
-			setSubmitError(err.message || "批准授权失败");
+			// [410] 服务端 200 但没有 redirect_url：不能把按钮永久卡在“正在授权中”
+			setSubmitError("授权已完成，但未收到客户端回调地址，请返回客户端查看连接状态");
+		} catch (err) {
+			setSubmitError(err instanceof Error ? err.message : "批准授权失败");
+		} finally {
+			// [408] 统一在 finally 复位提交态：成功跳转前复位不会造成可感知的闪烁
 			setSubmitting(false);
 		}
 	};
@@ -140,7 +157,12 @@ export default function KnowledgeOAuthAuthorizePage() {
 	// 拒绝授权
 	const handleDeny = () => {
 		if (redirectUri) {
-			const denyUrl = new URL(redirectUri);
+			// [406] 拒绝回跳也必须校验协议：畸形地址或 javascript: 伪协议一律拒绝跳转
+			const denyUrl = safeParseUrl(redirectUri);
+			if (!denyUrl || (denyUrl.protocol !== "https:" && denyUrl.protocol !== "http:")) {
+				setSubmitError("回调地址无效，已阻止跳转");
+				return;
+			}
 			denyUrl.searchParams.set("error", "access_denied");
 			denyUrl.searchParams.set("error_description", "用户拒绝了本次远程授权申请");
 			if (state) denyUrl.searchParams.set("state", state);
@@ -169,7 +191,7 @@ export default function KnowledgeOAuthAuthorizePage() {
 						客户端 <strong style={{ color: "var(--text-primary, #0f172a)" }}>{clientName}</strong> 正在请求通过 OAuth 2.1 协议访问您的个人知识库。
 					</p>
 					<div style={{ marginTop: 8, fontSize: "0.85rem", color: "#94a3b8" }}>
-						重定向回调域名: <code>{redirectUri ? new URL(redirectUri).origin : "未知"}</code>
+						重定向回调域名: <code>{safeParseUrl(redirectUri)?.origin ?? "未知"}</code>
 					</div>
 				</div>
 

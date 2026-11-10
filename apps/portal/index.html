@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#73c7ae" />
+    <meta name="theme-color" content="#e9f1ed" />
     <meta name="description" content="Jayson 的站点导航：博客、项目管理、状态监控与代码仓库。" />
     <link rel="icon" type="image/png" href="https://blog.fjayson.com/images/logo/site-light.png" />
     <link rel="stylesheet" href="/styles.css" />
@@ -11,21 +11,30 @@
     <script>
       (function () {
         var key = "portal-theme";
-        var saved = localStorage.getItem(key);
+        var saved = null;
+        // 隐私模式下访问 localStorage 会抛异常，不能让首屏脚本中断
+        try {
+          saved = localStorage.getItem(key);
+        } catch (error) {
+          saved = null;
+        }
         var dark = saved ? saved === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
         if (dark) document.documentElement.classList.add("dark");
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", dark ? "#080f0c" : "#e9f1ed");
       })();
     </script>
   </head>
   <body>
     <div class="site-shell">
+      <noscript>本站需要启用 JavaScript 才能正常显示内容与切换主题。</noscript>
       <div class="top-row">
         <header class="navbar">
           <a class="brand" href="/" aria-label="Jayson 首页">
             <img src="https://blog.fjayson.com/images/logo/site-light.png" width="30" height="30" alt="" />
             <span>Jayson</span>
           </a>
-          <button class="icon-button" type="button" id="theme-toggle" title="切换主题" aria-label="切换主题">
+          <button class="icon-button" type="button" id="theme-toggle" title="切换主题" aria-label="切换深色主题" aria-pressed="false">
             <svg class="sun" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
             <svg class="moon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 14.3A9 9 0 1 1 9.7 3 7 7 0 0 0 21 14.3z"/></svg>
           </button>
@@ -141,12 +150,25 @@
       (function () {
         var button = document.getElementById("theme-toggle");
         if (!button) return;
+        var root = document.documentElement;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        function sync() {
+          var dark = root.classList.contains("dark");
+          // 读屏器与移动端浏览器地址栏都依赖这两处状态
+          button.setAttribute("aria-pressed", dark ? "true" : "false");
+          if (meta) meta.setAttribute("content", dark ? "#080f0c" : "#e9f1ed");
+        }
         button.addEventListener("click", function () {
-          var root = document.documentElement;
-          var next = root.classList.contains("dark") ? "light" : "dark";
-          root.classList.toggle("dark", next === "dark");
-          localStorage.setItem("portal-theme", next);
+          var dark = !root.classList.contains("dark");
+          root.classList.toggle("dark", dark);
+          try {
+            localStorage.setItem("portal-theme", dark ? "dark" : "light");
+          } catch (error) {
+            // 存储不可用时只切换当前页面的主题
+          }
+          sync();
         });
+        sync();
       })();
 
       (function () {
@@ -157,10 +179,18 @@
           if (full) {
             subtitle.classList.add("typewriter-subtitle");
             subtitle.textContent = "";
+            // 可见文本会被逐字清空重填，完整句子放进仅读屏可见的节点，避免反复播报
+            var readable = document.createElement("span");
+            readable.className = "sr-only";
+            readable.textContent = full;
+            var visible = document.createElement("span");
+            visible.setAttribute("aria-hidden", "true");
+            subtitle.appendChild(readable);
+            subtitle.appendChild(visible);
             var typed = 0;
             var typeNext = function () {
               typed += 1;
-              subtitle.textContent = full.slice(0, typed);
+              visible.textContent = full.slice(0, typed);
               if (typed < full.length) window.setTimeout(typeNext, 72);
             };
             window.setTimeout(typeNext, 280);
@@ -177,7 +207,11 @@
           };
         });
         var intervalMs = 15000;
-        var fadeMs = 1100;
+        // 与 CSS 的 --hero-fade-ms 共用一个来源，改动画时长不用再同步改脚本
+        var fadeSetting = parseFloat(window.getComputedStyle(document.documentElement).getPropertyValue("--hero-fade-ms"));
+        var fadeMs = isFinite(fadeSetting) && fadeSetting > 0 ? fadeSetting : 1100;
+        var READY_TIMEOUT_MS = 8000;
+        var mobileQuery = window.matchMedia("(max-width: 767px)");
         var index = 1;
         var fading = false;
         var pending = false;
@@ -188,26 +222,26 @@
           return 'url("' + value.replace(/["\\]/g, "\\$&") + '")';
         }
 
+        // 只预加载当前布局用得上的那张图（移动端不必下载桌面大图）
+        function sourceForLayout(source) {
+          return mobileQuery.matches ? source.mobile : source.desktop;
+        }
+
         function whenReady(source, done) {
-          var images = [];
-          var left = 2;
-          function finish() {
-            left -= 1;
-            if (left === 0) done(images.some(function (img) { return img.naturalWidth > 0; }));
+          var image = new Image();
+          var settled = false;
+          // 图片既没 load 也没 error（连接挂起）时不能让轮播一直等下去
+          var timeoutId = window.setTimeout(function () { settle(false); }, READY_TIMEOUT_MS);
+          function settle(ok) {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timeoutId);
+            done(Boolean(ok) && image.naturalWidth > 0);
           }
-          [source.desktop, source.mobile].forEach(function (src) {
-            var img = new Image();
-            var settled = false;
-            function settle() {
-              if (settled) return;
-              settled = true;
-              finish();
-            }
-            img.onload = img.onerror = settle;
-            img.src = src;
-            images.push(img);
-            if (img.complete) settle();
-          });
+          image.onload = function () { settle(true); };
+          image.onerror = function () { settle(false); };
+          image.src = sourceForLayout(source);
+          if (image.complete) settle(image.naturalWidth > 0);
         }
 
         function show(nextIndex) {
@@ -238,10 +272,11 @@
           whenReady(sources[nextIndex], function (ok) {
             pending = false;
             if (fading || document.hidden) return;
+            index = nextIndex;
             if (!ok) {
               failures += 1;
-              index = nextIndex;
-              if (failures < sources.length) advance();
+              // 连续失败一整轮后清零，让下一轮从头重试，否则会永久停在这里
+              if (failures >= sources.length) failures = 0;
               return;
             }
             failures = 0;
@@ -254,7 +289,10 @@
           timer = window.setInterval(advance, intervalMs);
         }
 
-        whenReady(sources[(index + 1) % sources.length], function () { return undefined; });
+        // 预加载下下张，减少第一次切图时的空白；失败无需处理，轮播时会重新判断
+        function ignoreReady() { return undefined; }
+
+        whenReady(sources[(index + 1) % sources.length], ignoreReady);
         document.addEventListener("visibilitychange", function () {
           if (document.hidden) {
             if (timer) window.clearInterval(timer);

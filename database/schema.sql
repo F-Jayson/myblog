@@ -386,6 +386,16 @@ PREPARE blog_storage_limit_views_statement FROM @blog_storage_limit_views_sql;
 EXECUTE blog_storage_limit_views_statement;
 DEALLOCATE PREPARE blog_storage_limit_views_statement;
 
+-- 上一次 ALTER 同时加了两列，但只按 limit_views 判断；max_views 单独补一次，避免半途失败后再也补不上
+SET @blog_storage_max_views_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_storage_items' AND COLUMN_NAME = 'max_views') = 0,
+  'ALTER TABLE user_storage_items ADD COLUMN max_views INT UNSIGNED NULL AFTER limit_views',
+  'SELECT 1'
+);
+PREPARE blog_storage_max_views_statement FROM @blog_storage_max_views_sql;
+EXECUTE blog_storage_max_views_statement;
+DEALLOCATE PREPARE blog_storage_max_views_statement;
+
 SET @blog_clipboard_limit_views_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_clipboards' AND COLUMN_NAME = 'limit_views') = 0,
   'ALTER TABLE user_clipboards ADD COLUMN limit_views BOOLEAN NOT NULL DEFAULT FALSE AFTER view_count, ADD COLUMN max_views INT UNSIGNED NULL AFTER limit_views',
@@ -394,6 +404,16 @@ SET @blog_clipboard_limit_views_sql = IF(
 PREPARE blog_clipboard_limit_views_statement FROM @blog_clipboard_limit_views_sql;
 EXECUTE blog_clipboard_limit_views_statement;
 DEALLOCATE PREPARE blog_clipboard_limit_views_statement;
+
+-- 同上：max_views 可能因为上一次 ALTER 失败而缺失，单独判断一次
+SET @blog_clipboard_max_views_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_clipboards' AND COLUMN_NAME = 'max_views') = 0,
+  'ALTER TABLE user_clipboards ADD COLUMN max_views INT UNSIGNED NULL AFTER limit_views',
+  'SELECT 1'
+);
+PREPARE blog_clipboard_max_views_statement FROM @blog_clipboard_max_views_sql;
+EXECUTE blog_clipboard_max_views_statement;
+DEALLOCATE PREPARE blog_clipboard_max_views_statement;
 
 -- The original comments table predates user sessions and threaded replies.
 -- Add the new columns only when they are missing so this file remains safe to
@@ -656,6 +676,16 @@ PREPARE blog_post_client_limit_views_stmt FROM @blog_post_client_limit_views_sql
 EXECUTE blog_post_client_limit_views_stmt;
 DEALLOCATE PREPARE blog_post_client_limit_views_stmt;
 
+-- 同样补一次 max_views_per_client，防止两列合并 ALTER 只成功了一半
+SET @blog_post_client_max_views_sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'posts' AND COLUMN_NAME = 'max_views_per_client') = 0,
+  'ALTER TABLE posts ADD COLUMN max_views_per_client INT UNSIGNED NULL AFTER limit_views_per_client',
+  'SELECT 1'
+);
+PREPARE blog_post_client_max_views_stmt FROM @blog_post_client_max_views_sql;
+EXECUTE blog_post_client_max_views_stmt;
+DEALLOCATE PREPARE blog_post_client_max_views_stmt;
+
 -- An in-progress upload. The file is appended in chunks so the browser can
 -- advance progress only after this server has stored those bytes.
 CREATE TABLE IF NOT EXISTS admin_drive_uploads (
@@ -799,8 +829,26 @@ CREATE TABLE IF NOT EXISTS agent_audit (
   INDEX idx_agent_audit_grant (grant_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE agent_device_requests MODIFY requested_scopes VARCHAR(500) NOT NULL;
-ALTER TABLE agent_grants MODIFY scopes VARCHAR(500) NOT NULL;
+-- 列宽已经足够时跳过 MODIFY：重复 ALTER 每次启动都要拿表锁，且会让迁移脚本变慢
+SET @agent_device_scopes_sql = IF(
+  (SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_device_requests' AND COLUMN_NAME = 'requested_scopes') < 500,
+  'ALTER TABLE agent_device_requests MODIFY requested_scopes VARCHAR(500) NOT NULL',
+  'SELECT 1'
+);
+PREPARE agent_device_scopes_statement FROM @agent_device_scopes_sql;
+EXECUTE agent_device_scopes_statement;
+DEALLOCATE PREPARE agent_device_scopes_statement;
+
+SET @agent_grant_scopes_sql = IF(
+  (SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_grants' AND COLUMN_NAME = 'scopes') < 500,
+  'ALTER TABLE agent_grants MODIFY scopes VARCHAR(500) NOT NULL',
+  'SELECT 1'
+);
+PREPARE agent_grant_scopes_statement FROM @agent_grant_scopes_sql;
+EXECUTE agent_grant_scopes_statement;
+DEALLOCATE PREPARE agent_grant_scopes_statement;
 
 -- =====================================================================
 -- 个人知识库系统 (Knowledge Base V1) 核心数据表
@@ -1079,7 +1127,7 @@ CREATE TABLE IF NOT EXISTS kb_oauth_clients (
   client_id VARCHAR(64) NOT NULL PRIMARY KEY,
   client_name VARCHAR(120) NOT NULL,
   redirect_uris JSON NOT NULL,
-  client_secret_hash VARCHAR(64) NULL,
+  client_secret_hash VARCHAR(255) NULL,
   is_confidential BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -1116,7 +1164,9 @@ CREATE TABLE IF NOT EXISTS kb_oauth_refresh_tokens (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_oauth_rt_family (family_id),
   INDEX idx_oauth_rt_grant (grant_id),
-  INDEX idx_oauth_rt_user (user_id)
+  INDEX idx_oauth_rt_user (user_id),
+  INDEX idx_oauth_rt_expires (expires_at),
+  INDEX idx_oauth_rt_revoked (revoked_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 

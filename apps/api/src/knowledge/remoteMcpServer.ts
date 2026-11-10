@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import type { NextFunction, Request, RequestHandler, Response } from "express";
+import type { Request, RequestHandler, Response } from "express";
 import { Router } from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
@@ -24,7 +23,7 @@ import {
 	trashKnowledgeDocument,
 	unpublishKnowledgeDocumentService,
 } from "./service.js";
-import { getDocumentDetail } from "./repository.js";
+import { getDocumentDetail, getShareLinkById } from "./repository.js";
 import { getKbGrantByToken, withIdempotency, type KbAgentGrant } from "./agentStore.js";
 import { KbAccessDeniedError, KbNotFoundError, KbVersionConflictError } from "./errors.js";
 
@@ -63,8 +62,9 @@ function handleFailure(error: unknown) {
 	if (error instanceof KbNotFoundError) {
 		return textResponse(`[404 资源不存在] ${error.message}`, true);
 	}
-	const msg = error instanceof Error ? error.message : "操作执行异常";
-	return textResponse(`[错误] ${msg}`, true);
+	// [203] 未知异常只回通用文案：内部 message 可能携带 SQL/路径等敏感信息
+	if (error instanceof Error) console.error("[remote-mcp] 操作失败:", error);
+	return textResponse("[错误] 操作执行失败，请稍后重试", true);
 }
 
 /**
@@ -155,7 +155,11 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 				assertScope(grant, "kb:read");
 				if (libraryId) assertLibrary(grant, libraryId);
 				const results = await searchKnowledge(userId, query, libraryId);
-				return jsonResponse(results);
+				// 授权范围限定了库时，检索结果必须裁剪到允许的库集合，避免越权命中
+				const scopedResults = grant.allowedLibraryIds.length > 0
+					? results.filter((item) => grant.allowedLibraryIds.includes(item.libraryId))
+					: results;
+				return jsonResponse(scopedResults);
 			} catch (err) {
 				return handleFailure(err);
 			}
@@ -280,8 +284,10 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 		async ({ documentId, targetParentId, targetSortOrder }) => {
 			try {
 				assertScope(grant, "kb:write");
+				// 文档不存在时必须直接拒绝，绝不能让 fail-open 分支把越权操作漏过去
 				const docInfo = await getDocumentDetail(documentId);
-				if (docInfo) assertLibrary(grant, docInfo.libraryId);
+				if (!docInfo) throw new KbNotFoundError("文档不存在");
+				assertLibrary(grant, docInfo.libraryId);
 
 				await moveKnowledgeDocument(userId, documentId, targetParentId, targetSortOrder ?? 0);
 				return textResponse(`文档 ID ${documentId} 已成功移动至新目标位置。`);
@@ -300,7 +306,8 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 			try {
 				assertScope(grant, "kb:read");
 				const docInfo = await getDocumentDetail(documentId);
-				if (docInfo) assertLibrary(grant, docInfo.libraryId);
+				if (!docInfo) throw new KbNotFoundError("文档不存在");
+				assertLibrary(grant, docInfo.libraryId);
 
 				const revs = await getKnowledgeDocumentRevisions(userId, documentId);
 				return jsonResponse(revs);
@@ -323,7 +330,8 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 			try {
 				assertScope(grant, "kb:write");
 				const docInfo = await getDocumentDetail(documentId);
-				if (docInfo) assertLibrary(grant, docInfo.libraryId);
+				if (!docInfo) throw new KbNotFoundError("文档不存在");
+				assertLibrary(grant, docInfo.libraryId);
 
 				const restored = await restoreDocumentRevision(userId, documentId, revisionId, expectedVersion);
 				return jsonResponse({
@@ -346,7 +354,8 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 			try {
 				assertScope(grant, "kb:publish");
 				const docInfo = await getDocumentDetail(documentId);
-				if (docInfo) assertLibrary(grant, docInfo.libraryId);
+				if (!docInfo) throw new KbNotFoundError("文档不存在");
+				assertLibrary(grant, docInfo.libraryId);
 
 				await publishKnowledgeDocumentService(userId, documentId);
 				return textResponse(`文档 ID ${documentId} 已成功发布公开快照。`);
@@ -365,7 +374,8 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 			try {
 				assertScope(grant, "kb:publish");
 				const docInfo = await getDocumentDetail(documentId);
-				if (docInfo) assertLibrary(grant, docInfo.libraryId);
+				if (!docInfo) throw new KbNotFoundError("文档不存在");
+				assertLibrary(grant, docInfo.libraryId);
 
 				await unpublishKnowledgeDocumentService(userId, documentId);
 				return textResponse(`文档 ID ${documentId} 已撤销公开快照，公开接口立即失效。`);
@@ -387,7 +397,8 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 			try {
 				assertScope(grant, "kb:share");
 				const docInfo = await getDocumentDetail(documentId);
-				if (docInfo) assertLibrary(grant, docInfo.libraryId);
+				if (!docInfo) throw new KbNotFoundError("文档不存在");
+				assertLibrary(grant, docInfo.libraryId);
 
 				const link = await createShareLinkService(userId, documentId, { expiresInDays: expireDays });
 				return jsonResponse(link);
@@ -405,6 +416,10 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 		async ({ linkId }) => {
 			try {
 				assertScope(grant, "kb:share");
+				// 撤销分享前必须先校验链接所属库在授权范围内
+				const link = await getShareLinkById(linkId);
+				if (!link) throw new KbNotFoundError("分享链接不存在");
+				assertLibrary(grant, link.libraryId);
 				await revokeShareLinkService(userId, linkId);
 				return textResponse(`分享链接 ID ${linkId} 已成功撤销。`);
 			} catch (err) {
@@ -422,7 +437,8 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 			try {
 				assertScope(grant, "kb:delete");
 				const docInfo = await getDocumentDetail(documentId);
-				if (docInfo) assertLibrary(grant, docInfo.libraryId);
+				if (!docInfo) throw new KbNotFoundError("文档不存在");
+				assertLibrary(grant, docInfo.libraryId);
 
 				await trashKnowledgeDocument(userId, documentId);
 				return textResponse(`文档 ID ${documentId} 已移入回收站。`);
@@ -440,6 +456,10 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 		async ({ documentId }) => {
 			try {
 				assertScope(grant, "kb:write");
+				// 回收站文档也要校验库范围：getDocumentDetail 不筛 deleted_at，正好可用于此处
+				const docInfo = await getDocumentDetail(documentId);
+				if (!docInfo) throw new KbNotFoundError("文档不存在");
+				assertLibrary(grant, docInfo.libraryId);
 				await restoreKnowledgeDocument(userId, documentId);
 				return textResponse(`文档 ID ${documentId} 已从回收站成功恢复。`);
 			} catch (err) {
@@ -460,7 +480,8 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 			try {
 				assertScope(grant, "kb:read");
 				const docInfo = await getDocumentDetail(documentId);
-				if (docInfo) assertLibrary(grant, docInfo.libraryId);
+				if (!docInfo) throw new KbNotFoundError("文档不存在");
+				assertLibrary(grant, docInfo.libraryId);
 
 				const comments = await listCommentsService(userId, documentId, channel);
 				return jsonResponse(comments);
@@ -484,7 +505,8 @@ export function createRemoteKnowledgeMcpServer(grant: KbAgentGrant): McpServer {
 			try {
 				assertScope(grant, "kb:comment");
 				const docInfo = await getDocumentDetail(documentId);
-				if (docInfo) assertLibrary(grant, docInfo.libraryId);
+				if (!docInfo) throw new KbNotFoundError("文档不存在");
+				assertLibrary(grant, docInfo.libraryId);
 
 				const commentId = await addCommentService(userId, documentId, {
 					channel,
@@ -524,33 +546,43 @@ async function extractGrant(req: Request): Promise<{ grant: KbAgentGrant; token:
  * 建立 Server-Sent Events 流
  */
 remoteMcpRouter.get("/sse", async (req: Request, res: Response) => {
-	const authResult = await extractGrant(req);
-	if (!authResult) {
-		res.status(401).json({
-			error: "unauthorized",
-			message: "远程 MCP 连接需要有效的 Bearer Access Token",
+	try {
+		const authResult = await extractGrant(req);
+		if (!authResult) {
+			res.status(401).json({
+				error: "unauthorized",
+				message: "远程 MCP 连接需要有效的 Bearer Access Token",
+			});
+			return;
+		}
+
+		const { grant, token } = authResult;
+		const transport = new SSEServerTransport("/mcp/knowledge/messages", res);
+		const server = createRemoteKnowledgeMcpServer(grant);
+
+		const sessionId = transport.sessionId;
+		activeSessions.set(sessionId, {
+			transport,
+			server,
+			grant,
+			token,
+			createdAt: Date.now(),
 		});
-		return;
+
+		req.on("close", () => {
+			activeSessions.delete(sessionId);
+			// [205] 连接断开必须同步释放 server/transport，否则只删 Map 会让底层资源一直挂着
+			void server.close().catch(() => undefined);
+			void transport.close().catch(() => undefined);
+		});
+
+		await server.connect(transport);
+	} catch (error) {
+		// 连接建立失败必须清理会话并兜底响应，避免悬挂的 SSE 与未处理异常
+		res.status(500).json({ error: "mcp_session_failed", message: "远程 MCP 会话建立失败" });
+		req.removeAllListeners("close");
+		throw error;
 	}
-
-	const { grant, token } = authResult;
-	const transport = new SSEServerTransport("/mcp/knowledge/messages", res);
-	const server = createRemoteKnowledgeMcpServer(grant);
-
-	const sessionId = transport.sessionId;
-	activeSessions.set(sessionId, {
-		transport,
-		server,
-		grant,
-		token,
-		createdAt: Date.now(),
-	});
-
-	req.on("close", () => {
-		activeSessions.delete(sessionId);
-	});
-
-	await server.connect(transport);
 });
 
 /**
@@ -558,26 +590,44 @@ remoteMcpRouter.get("/sse", async (req: Request, res: Response) => {
  * 接收客户端 JSON-RPC 消息请求
  */
 remoteMcpRouter.post("/messages", async (req: Request, res: Response) => {
-	const sessionId = String(req.query.sessionId ?? "").trim();
-	if (!sessionId) {
-		res.status(400).end("Missing sessionId query parameter");
-		return;
-	}
+	try {
+		const sessionId = String(req.query.sessionId ?? "").trim();
+		if (!sessionId) {
+			res.status(400).end("Missing sessionId query parameter");
+			return;
+		}
 
-	const session = activeSessions.get(sessionId);
-	if (!session) {
-		res.status(404).end("Session not found or expired");
-		return;
-	}
+		const session = activeSessions.get(sessionId);
+		if (!session) {
+			res.status(404).end("Session not found or expired");
+			return;
+		}
 
-	// 实时复核令牌状态 (改密、吊销后立即阻断)
-	const grantLive = await getKbGrantByToken(session.token);
-	if (!grantLive) {
-		activeSessions.delete(sessionId);
-		await session.transport.close();
-		res.status(401).end("Token revoked or expired");
-		return;
-	}
+		// 实时复核令牌状态 (改密、吊销后立即阻断)
+		const grantLive = await getKbGrantByToken(session.token);
+		if (!grantLive) {
+			activeSessions.delete(sessionId);
+			await session.transport.close();
+			res.status(401).end("Token revoked or expired");
+			return;
+		}
+		// [206] 会话存活期间授权范围若被收紧（scopes/库范围快照变化），旧会话必须失效重建
+		if (
+			grantLive.scopes.join(",") !== session.grant.scopes.join(",") ||
+			grantLive.allowedLibraryIds.join(",") !== session.grant.allowedLibraryIds.join(",")
+		) {
+			activeSessions.delete(sessionId);
+			await session.transport.close();
+			res.status(401).end("Grant scope changed, please reconnect");
+			return;
+		}
 
-	await session.transport.handlePostMessage(req, res, req.body);
+		await session.transport.handlePostMessage(req, res, req.body);
+	} catch (error) {
+		// transport 内部异常不能变成 unhandled rejection 打挂进程
+		if (!res.headersSent) {
+			res.status(500).end("Internal MCP transport error");
+		}
+		throw error;
+	}
 });

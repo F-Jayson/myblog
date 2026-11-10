@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from
 import type { Request } from "express";
 import type { RowDataPacket } from "mysql2";
 import { pool } from "./db.js";
+import { resolveClientIp } from "./clientIp.js";
 
 export const ACCESS_PASSWORD_MIN = 4;
 export const ACCESS_PASSWORD_MAX = 64;
@@ -88,10 +89,16 @@ export function hashAccessPassword(password: string, salt = randomBytes(16).toSt
 }
 
 export function verifyAccessPassword(password: string, encoded: string) {
-	const [, salt, expectedHex] = encoded.split("$");
-	if (!salt || !expectedHex || expectedHex.length % 2 !== 0) return false;
+	// [138] 严格校验存储格式 `scrypt$salt$hex`：不校验算法前缀与长度时，
+	// 任何 "x$y$hex" 都会被当成合法哈希参与比对，脏数据/降级哈希无从发现
+	const parts = encoded.split("$");
+	if (parts.length !== 3) return false;
+	const [algorithm, salt, expectedHex] = parts;
+	if (algorithm !== "scrypt" || !salt || !expectedHex) return false;
+	if (expectedHex.length !== ACCESS_PASSWORD_KEYLEN * 2) return false;
+	if (!/^[0-9a-f]+$/iu.test(expectedHex)) return false;
 	try {
-		const actual = scryptSync(password, salt, expectedHex.length / 2);
+		const actual = scryptSync(password, salt, ACCESS_PASSWORD_KEYLEN);
 		const expected = Buffer.from(expectedHex, "hex");
 		return actual.length === expected.length && timingSafeEqual(actual, expected);
 	} catch {
@@ -194,8 +201,7 @@ export type ClientIdentifierRecord = {
 };
 
 export function extractClientIp(req: { header: (name: string) => string | undefined; ip?: string; socket?: { remoteAddress?: string } }): string {
-	const forwarded = req.header("x-forwarded-for")?.split(",")[0]?.trim();
-	return forwarded || req.ip || req.socket?.remoteAddress || "";
+	return resolveClientIp(req);
 }
 
 function calculateSubnet(ip: string): string {
@@ -278,6 +284,21 @@ type MemoryCooldown = {
 };
 
 const memoryCooldownMap = new Map<string, MemoryCooldown>();
+// [133] Map 的键来自请求头（fingerprint/deviceId 可被攻击者伪造为任意唯一值），
+// 只增不减会持续占用内存；写入时顺带淘汰过期条目控制体积。
+const MEMORY_COOLDOWN_MAX_ENTRIES = 10_000;
+
+function pruneMemoryCooldownMap() {
+	if (memoryCooldownMap.size <= MEMORY_COOLDOWN_MAX_ENTRIES) return;
+	const now = Date.now();
+	for (const [key, entry] of memoryCooldownMap) {
+		// lockedUntil 为 null 表示未锁定：只看最近失败时间是否已超出冷却窗口
+		const locked = entry.lockedUntil !== null && entry.lockedUntil > now;
+		const stale = !locked && now - entry.lastFailedAt > 24 * 60 * 60 * 1000;
+		if (stale) memoryCooldownMap.delete(key);
+		if (memoryCooldownMap.size <= MEMORY_COOLDOWN_MAX_ENTRIES / 2) break;
+	}
+}
 
 function memoryKey(targetKey: string, type: string, value: string) {
 	return `${targetKey}##${type}:${value}`;
@@ -342,6 +363,7 @@ export async function checkAccessCooldown(targetKey: string, req: Request): Prom
 				lockedUntil: maxLockedUntil,
 				lastFailedAt: now,
 			});
+		pruneMemoryCooldownMap();
 		}
 		return { allowed: false, remainingAttempts: 0, lockedUntil: maxLockedUntil, cooldownSeconds };
 	}
@@ -355,6 +377,7 @@ export async function checkAccessCooldown(targetKey: string, req: Request): Prom
 				lockedUntil,
 				lastFailedAt: now,
 			});
+		pruneMemoryCooldownMap();
 		}
 		return { allowed: false, remainingAttempts: 0, lockedUntil, cooldownSeconds };
 	}
@@ -459,8 +482,9 @@ export async function recordAccessSuccess(targetKey: string, req: Request): Prom
 }
 
 export function clearCooldownForTest(targetKey: string): void {
+	// [135] memoryKey 生成用的是 `##` 分隔，这里前缀必须一致，否则永远清理不到
 	for (const key of memoryCooldownMap.keys()) {
-		if (key.startsWith(`${targetKey}:`)) {
+		if (key.startsWith(`${targetKey}##`)) {
 			memoryCooldownMap.delete(key);
 		}
 	}

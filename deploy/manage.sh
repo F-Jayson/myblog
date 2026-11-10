@@ -169,7 +169,8 @@ valid_database_secret() {
   if [[ "${DB_MODE}" == local ]]; then
     valid_local_secret "$1"
   else
-    valid_secret "$1"
+    # 云库密码会拼进 prepare_database 的 SQL，必须排除引号与反斜杠，防止 SQL 注入
+    valid_secret "$1" && [[ "$1" != *"'"* && "$1" != *'"'* && "$1" != *'\'* ]]
   fi
 }
 

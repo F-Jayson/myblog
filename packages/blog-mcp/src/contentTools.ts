@@ -9,13 +9,43 @@ function text(value: string, isError = false): ToolResult {
 }
 
 function show(value: unknown): ToolResult {
-	const rendered = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+	// 204/空响应体时 value 为 undefined，JSON.stringify 会返回 undefined（不是字符串）
+	if (value === undefined) return text("（服务端没有返回内容）");
+	let rendered: string;
+	if (typeof value === "string") {
+		rendered = value;
+	} else {
+		try {
+			rendered = JSON.stringify(value, null, 2) ?? String(value);
+		} catch {
+			rendered = String(value);
+		}
+	}
 	return text(rendered.length > 12000 ? `${rendered.slice(0, 12000)}\n…（结果已截断）` : rendered);
 }
 
 function stringArg(args: Json, key: string) {
 	const value = args[key];
 	return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+const PAGE_KEYS = ["about", "transfer", "issues"] as const;
+
+// 固定页面的 key 必须落在白名单里：只做非空判断会把 about/../admin 之类的值直接拼进 URL
+function pageArg(args: Json): string {
+	const value = stringArg(args, "page");
+	return value && (PAGE_KEYS as readonly string[]).includes(value) ? value : "";
+}
+
+// 站点设置只接受 schema 里列出的字段：把整个 args 透传等于允许客户端写入任意列（mass assignment）
+const SITE_SETTING_KEYS = ["title", "subtitle", "description", "hue", "siteLogo", "siteLogoDark", "siteFavicon", "author"] as const;
+
+function pickSiteSettings(args: Json): Json {
+	const picked: Json = {};
+	for (const key of SITE_SETTING_KEYS) {
+		if (args[key] !== undefined) picked[key] = args[key];
+	}
+	return picked;
 }
 
 function booleanArg(args: Json, key: string) {
@@ -42,7 +72,10 @@ export const contentTools: Tool[] = [
 			const id = integerArg(args, "id");
 			const name = stringArg(args, "name");
 			if (!id || !name) return text("请提供分类 id 和名称。", true);
-			return show(await blogJson(`/api/agent/categories/${id}`, { method: "PUT", body: { name, description: stringArg(args, "description") } }));
+			// description 未传时不能带 undefined 键：服务端会把 PUT 当成整体替换，从而清空已有描述
+			const description = stringArg(args, "description");
+			const payload: Json = description === undefined ? { name } : { name, description };
+			return show(await blogJson(`/api/agent/categories/${id}`, { method: "PUT", body: payload }));
 		},
 	},
 	{
@@ -145,7 +178,7 @@ export const contentTools: Tool[] = [
 		description: "读取一个固定页面。page 可以是 about、transfer 或 issues。",
 		inputSchema: objectSchema({ page: { type: "string", enum: ["about", "transfer", "issues"] } }, ["page"]),
 		call: async (args) => {
-			const page = stringArg(args, "page");
+			const page = pageArg(args);
 			if (!page) return text("请提供页面标识。", true);
 			return show(await blogJson(`/api/agent/pages/${encodeURIComponent(page)}`));
 		},
@@ -161,7 +194,7 @@ export const contentTools: Tool[] = [
 			friendLinks: { type: "array", items: { type: "object" } },
 		}, ["page", "title", "content"]),
 		call: async (args) => {
-			const page = stringArg(args, "page");
+			const page = pageArg(args);
 			const title = stringArg(args, "title");
 			const content = typeof args.content === "string" ? args.content : undefined;
 			if (!page || !title || content === undefined) return text("请提供页面标识、标题和正文。", true);
@@ -173,7 +206,7 @@ export const contentTools: Tool[] = [
 		description: "删除固定页面的自定义内容并恢复默认。需要额外的删除站点内容权限。",
 		inputSchema: objectSchema({ page: { type: "string", enum: ["about", "transfer", "issues"] } }, ["page"]),
 		call: async (args) => {
-			const page = stringArg(args, "page");
+			const page = pageArg(args);
 			if (!page) return text("请提供页面标识。", true);
 			return show(await blogJson(`/api/agent/pages/${encodeURIComponent(page)}`, { method: "DELETE" }));
 		},
@@ -317,7 +350,7 @@ export const contentTools: Tool[] = [
 			author: { type: "object" },
 		}),
 		call: async (args) => {
-			const body = Object.fromEntries(Object.entries(args).filter(([, value]) => value !== undefined));
+			const body = pickSiteSettings(args);
 			if (!Object.keys(body).length) return text("请提供要修改的站点字段。", true);
 			return show(await blogJson("/api/agent/site", { method: "PATCH", body }));
 		},

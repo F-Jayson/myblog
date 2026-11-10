@@ -24,7 +24,9 @@ const USER_TOKEN_KEY = "site-user-token";
 
 function authHeaders(headers?: HeadersInit): Headers {
 	const result = new Headers(headers);
-	const token = localStorage.getItem(USER_TOKEN_KEY);
+	// [430] 隐私模式下读 localStorage 可能抛异常，会导致整个请求构造失败，这里静默降级为无令牌
+	let token: string | null = null;
+	try { token = localStorage.getItem(USER_TOKEN_KEY); } catch { token = null; }
 	if (token && !result.has("authorization")) {
 		result.set("authorization", `Bearer ${token}`);
 	}
@@ -388,8 +390,57 @@ export const kbApi = {
 	},
 
 	// =========================================================================
+	// P3: OAuth 授权同意页
+	// =========================================================================
+
+	/** 提交远程客户端的授权同意；必须走统一客户端才会带上 Bearer 令牌与 API 源 */
+	async createOAuthConsent(payload: {
+		client_id: string;
+		redirect_uri: string;
+		code_challenge: string;
+		code_challenge_method: string;
+		state: string;
+		scopes: string[];
+		allowed_library_ids: number[];
+	}): Promise<{ redirect_url?: string }> {
+		return kbRequest<{ redirect_url?: string }>("/oauth/consent", {
+			method: "POST",
+			body: payload as unknown as BodyInit,
+		});
+	},
+
+	// =========================================================================
 	// P4: MCP 智能体连接管理
 	// =========================================================================
+
+	/** 查询待确认的设备授权请求 */
+	async getAgentDeviceRequest(userCode: string): Promise<{
+		clientName: string;
+		requestedScopes: string[];
+		status: string;
+		expiresAt: string;
+	}> {
+		return kbRequest(`/api/knowledge/agent/device/request?userCode=${encodeURIComponent(userCode)}`);
+	},
+
+	async approveAgentDeviceRequest(payload: {
+		userCode: string;
+		allowedLibraryIds: number[];
+		grantedScopes: string[];
+		expiresInDays: number;
+	}): Promise<void> {
+		await kbRequest("/api/knowledge/agent/device/approve", {
+			method: "POST",
+			body: payload as unknown as BodyInit,
+		});
+	},
+
+	async denyAgentDeviceRequest(userCode: string): Promise<void> {
+		await kbRequest("/api/knowledge/agent/device/deny", {
+			method: "POST",
+			body: { userCode } as unknown as BodyInit,
+		});
+	},
 
 	async listAgentConnections(): Promise<Array<{
 		id: number;

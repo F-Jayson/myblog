@@ -47,17 +47,27 @@ function integerArg(args: Json, key: string) {
 	return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-function stringList(args: Json, key: string) {
+function stringList(args: Json, key: string): string[] | undefined {
+	// [314] 显式断言为 string[]：Array.isArray 只能收窄到 any[]，会让 any 泄漏到调用点
 	const value = args[key];
-	return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
+	return Array.isArray(value) && value.every((item) => typeof item === "string") ? (value as string[]) : undefined;
 }
 
 function objectSchema(properties: Json, required: string[] = []): Json {
 	return { type: "object", properties, required, additionalProperties: false };
 }
 
+// 动作文案用映射表：嵌套三元既违反项目规范，新增 action 时也不好扩展
+const POST_ACTION_TEXT: Record<PostResult["action"], string> = {
+	created: "已创建",
+	updated: "已更新",
+	unchanged: "内容没有变化",
+	published: "已发布",
+	unpublished: "已转为草稿",
+};
+
 function describePost(result: PostResult) {
-	const action = result.action === "created" ? "已创建" : result.action === "updated" ? "已更新" : result.action === "unchanged" ? "内容没有变化" : result.action === "published" ? "已发布" : result.action === "unpublished" ? "已转为草稿" : result.action;
+	const action = POST_ACTION_TEXT[result.action] ?? result.action;
 	const status = result.post.status === "published" ? "已发布" : "草稿";
 	return `${action}《${result.post.title}》\n状态：${status}\n地址：${result.post.path}\n编号：${result.post.id}`;
 }
@@ -99,7 +109,9 @@ const tools: Tool[] = [
 			if (query) params.set("q", query);
 			if (status === "draft" || status === "published") params.set("status", status);
 			if (page) params.set("page", String(page));
-			const result = await blogJson<{ items: Array<{ id: number; title: string; status: string; path: string; externalKey: string | null }>; total: number }>(`/api/agent/posts?${params.toString()}`);
+			// [310] 没有查询条件时不拼 "?"，避免产生悬空问号路径
+			const queryString = params.toString();
+			const result = await blogJson<{ items: Array<{ id: number; title: string; status: string; path: string; externalKey: string | null }>; total: number }>(`/api/agent/posts${queryString ? `?${queryString}` : ""}`);
 			if (!result.items.length) return text("没有找到文章。");
 			const lines = result.items.map((item) => `- [${item.status === "published" ? "已发布" : "草稿"}] ${item.title}（id ${item.id}，${item.path}${item.externalKey ? `，来源 ${item.externalKey}` : ""}）`);
 			return text(`共 ${result.total} 篇，本页：\n${lines.join("\n")}`);
@@ -117,7 +129,10 @@ const tools: Tool[] = [
 			if (id) params.set("id", String(id));
 			if (slug) params.set("slug", slug);
 			if (externalKey) params.set("externalKey", externalKey);
-			const post = await blogJson<{ title: string; status: string; path: string; content: string }>(`/api/agent/posts/lookup?${params.toString()}`);
+			// [310] 三个定位参数全部为空时提前给出明确提示，不发送无意义请求
+			if (!id && !slug && !externalKey) return text("请提供 id、slug 或 externalKey 之一来定位文章。", true);
+			const queryString = params.toString();
+			const post = await blogJson<{ title: string; status: string; path: string; content: string }>(`/api/agent/posts/lookup${queryString ? `?${queryString}` : ""}`);
 			return text(`# ${post.title}\n状态：${post.status === "published" ? "已发布" : "草稿"}\n地址：${post.path}\n\n${post.content}`);
 		},
 	},
@@ -179,26 +194,31 @@ const tools: Tool[] = [
 			const status = stringArg(args, "status");
 			const category = stringArg(args, "category");
 			const files = await collectMarkdown({ paths: stringList(args, "paths"), directory: stringArg(args, "directory"), recursive: booleanArg(args, "recursive") });
-			const lines: string[] = [];
-			for (const filePath of files) {
-				try {
-					const document = await readMarkdown(filePath);
-					const result = await blogJson<PostResult>("/api/agent/posts", {
-						method: "POST",
-						body: {
-							externalKey: document.externalKey,
-							title: document.title,
-							content: document.content,
-							categories: category ? [category] : undefined,
-							tags: stringList(args, "tags"),
-							status: status === "draft" || status === "published" ? status : undefined,
-						},
-					});
-					lines.push(`- ${document.externalKey}：${result.action}《${result.post.title}》${result.post.path}`);
-				} catch (error) {
-					lines.push(`- ${filePath}：失败，${error instanceof Error ? error.message : "未知错误"}`);
-				}
+			// [312] 各文件互不依赖，并行上传后按原顺序汇总结果；[311] 空结果给显式提示而不是空文本
+			if (files.length === 0) {
+				return text("没有找到需要同步的 Markdown 文件（未做任何修改）。请检查传入的 paths / directory 是否正确。");
 			}
+			const lines = await Promise.all(
+				files.map(async (filePath) => {
+					try {
+						const document = await readMarkdown(filePath);
+						const result = await blogJson<PostResult>("/api/agent/posts", {
+							method: "POST",
+							body: {
+								externalKey: document.externalKey,
+								title: document.title,
+								content: document.content,
+								categories: category ? [category] : undefined,
+								tags: stringList(args, "tags"),
+								status: status === "draft" || status === "published" ? status : undefined,
+							},
+						});
+						return `- ${document.externalKey}：${result.action}《${result.post.title}》${result.post.path}`;
+					} catch (error) {
+						return `- ${filePath}：失败，${error instanceof Error ? error.message : "未知错误"}`;
+					}
+				}),
+			);
 			return text(lines.join("\n"));
 		},
 	},
@@ -297,11 +317,36 @@ const tools: Tool[] = [
 ];
 
 const allTools: Tool[] = [...tools, ...contentTools];
-const toolMap = new Map(allTools.map((tool) => [tool.name, tool]));
+// [313] 同名工具会让 Map 静默覆盖，调用时表现为“调到了另一个工具”，这里直接暴露配置错误
+const toolMap = new Map<string, Tool>();
+for (const tool of allTools) {
+	if (toolMap.has(tool.name)) {
+		throw new Error(`工具名称重复：${tool.name}。请检查 tools 与 contentTools 是否注册了同名工具。`);
+	}
+	toolMap.set(tool.name, tool);
+}
+
+// stdout 是唯一的协议通道：对端关闭管道时 write 会异步报 EPIPE，未处理的 error 会直接打挂进程
+process.stdout.on("error", () => { process.exit(0); });
+
+const pendingFrames: string[] = [];
+let waitingDrain = false;
+
+function drainFrames() {
+	while (pendingFrames.length > 0) {
+		const frame = pendingFrames.shift();
+		if (frame === undefined) return;
+		// write 返回 false 表示内核缓冲已满：帧已入队，等 drain 事件再继续写，避免内存无界增长
+		if (!process.stdout.write(frame)) { waitingDrain = true; return; }
+	}
+}
+
+process.stdout.on("drain", () => { waitingDrain = false; drainFrames(); });
 
 function send(message: unknown) {
 	const json = JSON.stringify(message);
-	process.stdout.write(`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`);
+	pendingFrames.push(`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`);
+	if (!waitingDrain) drainFrames();
 }
 
 async function handleMessage(raw: string) {
@@ -340,21 +385,41 @@ async function handleMessage(raw: string) {
 	}
 }
 
+const MAX_FRAME_BYTES = 32 * 1024 * 1024;
+// 请求串行执行：并发处理会让同一篇文章的 upsert、或“先读后写”的同步流程互相踩踏
+let messageChain: Promise<void> = Promise.resolve();
+
 let buffer = Buffer.alloc(0);
 process.stdin.on("data", (chunk: Buffer) => {
 	buffer = Buffer.concat([buffer, chunk]);
 	while (buffer.length) {
 		const headerEnd = buffer.indexOf("\r\n\r\n");
-		if (headerEnd < 0) return;
+		if (headerEnd < 0) {
+			if (buffer.length > MAX_FRAME_BYTES) {
+				console.error("[blog-mcp] 请求头超过上限，已丢弃缓冲区");
+				buffer = Buffer.alloc(0);
+			}
+			return;
+		}
 		const header = buffer.subarray(0, headerEnd).toString("utf8");
 		const match = /Content-Length:\s*(\d+)/iu.exec(header);
-		if (!match) { buffer = buffer.subarray(headerEnd + 4); continue; }
+		if (!match) {
+			// 没有长度就无法确定帧边界，继续解析会把 body 字节当成下一帧的头部
+			console.error("[blog-mcp] 请求缺少 Content-Length，已丢弃当前缓冲区");
+			buffer = Buffer.alloc(0);
+			return;
+		}
 		const length = Number(match[1]);
+		if (!Number.isFinite(length) || length < 0 || length > MAX_FRAME_BYTES) {
+			console.error(`[blog-mcp] 请求体长度不合法（${match[1]}），已丢弃当前缓冲区`);
+			buffer = Buffer.alloc(0);
+			return;
+		}
 		const start = headerEnd + 4;
 		if (buffer.length < start + length) return;
 		const body = buffer.subarray(start, start + length).toString("utf8");
 		buffer = buffer.subarray(start + length);
-		void handleMessage(body);
+		messageChain = messageChain.then(() => handleMessage(body)).catch(() => undefined);
 	}
 });
 process.stdin.resume();

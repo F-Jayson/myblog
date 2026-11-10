@@ -43,6 +43,9 @@ export function isFeatureKbEnabled(): boolean {
 	return process.env.FEATURE_KB_ENABLED === "true";
 }
 
+// 子开关刻意采用"默认开启"（!== "false"）：主开关 isFeatureKbEnabled 已经是严格的 === "true"，
+// 只有主开关打开后子开关才生效。若把子开关也改成默认关闭，已上线、未配置 FEATURE_KB_* 的部署
+// 会在一次升级后静默失去写入/公开/评论能力，属于破坏性变更。
 export function isFeatureKbWriteEnabled(): boolean {
 	if (!isFeatureKbEnabled()) return false;
 	return process.env.FEATURE_KB_WRITE_ENABLED !== "false";

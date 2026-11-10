@@ -78,7 +78,11 @@ function sha256(value: string): string {
 }
 
 function getEncryptionKey(): Buffer {
-	const secret = config.adminToken || "default-secret-for-kb-agent-encryption-key-32b";
+	// 交付令牌是数据库里唯一可逆的敏感字段：密钥缺失时必须失败，不能退回公开的内置常量
+	const secret = config.kbAgentTokenSecret || config.adminToken;
+	if (!secret) {
+		throw new KbAgentError("agent_secret_missing", "缺少 KB_AGENT_TOKEN_SECRET 或 ADMIN_API_TOKEN，无法加解密设备交付令牌", 500);
+	}
 	return createHash("sha256").update(secret).digest();
 }
 
@@ -106,7 +110,9 @@ function decryptDeliveryToken(ciphertext: string): string {
 	const encrypted = Buffer.from(encryptedHex, "hex");
 	const decipher = createDecipheriv("aes-256-gcm", key, iv);
 	decipher.setAuthTag(tag);
-	return decipher.update(encrypted) + decipher.final("utf8");
+	// update 可能分块返回，必须用 Buffer.concat 拼接后再统一转 utf8，
+	// 直接字符串相加会在多字节字符跨块时产生乱码
+	return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
 }
 
 /**
@@ -123,11 +129,49 @@ function generateUserCode(): string {
 }
 
 /**
+ * 解析库里可能以 JSON 数组字符串、逗号分隔字符串或数组三种形态存储的列表字段。
+ * JSON.parse 必须带保护：历史数据写坏时不能让整条查询跟着失败
+ */
+function parseStoredStringList(value: unknown): string[] {
+	if (Array.isArray(value)) {
+		return value.filter((item): item is string => typeof item === "string");
+	}
+	if (typeof value !== "string" || value.trim() === "") {
+		return [];
+	}
+	const trimmed = value.trim();
+	if (trimmed.startsWith("[")) {
+		try {
+			const parsed = JSON.parse(trimmed) as unknown;
+			if (Array.isArray(parsed)) {
+				return parsed.filter((item): item is string => typeof item === "string");
+			}
+			return [];
+		} catch {
+			// JSON 解析失败时按逗号分隔兜底
+		}
+	}
+	return trimmed
+		.split(",")
+		.map((item) => item.trim())
+		.filter((item) => item !== "");
+}
+
+/**
+ * 解析库里可能以 JSON 数组字符串、逗号分隔字符串或数组三种形态存储的库 ID 列表字段
+ */
+function parseStoredNumberList(value: unknown): number[] {
+	return parseStoredStringList(value)
+		.map((item) => Number(item))
+		.filter((item) => Number.isInteger(item) && item > 0);
+}
+
+/**
  * 1. 发起设备授权请求
  */
 export async function startKbDeviceRequest(
 	clientName: string,
-	requestedScopes: string[] = DEFAULT_KB_SCOPES as unknown as string[],
+	requestedScopes: string[] = [...DEFAULT_KB_SCOPES],
 ): Promise<{
 	deviceCode: string;
 	userCode: string;
@@ -217,8 +261,10 @@ export async function approveKbDeviceRequest(
 		await connection.beginTransaction();
 
 		const [rows] = await connection.query<RowDataPacket[]>(
-			`SELECT * FROM kb_device_requests 
-			WHERE user_code = ? FOR UPDATE`,
+			`SELECT * FROM kb_device_requests
+			WHERE user_code = ?
+			ORDER BY id DESC LIMIT 1
+			FOR UPDATE`,
 			[cleanCode],
 		);
 
@@ -246,9 +292,25 @@ export async function approveKbDeviceRequest(
 
 		// 规范与过滤参数
 		const days = Math.max(1, Math.min(30, expiresInDays));
-		const validGrantedScopes = grantedScopes.filter((s) => (ALL_KB_SCOPES as readonly string[]).includes(s));
+		// 授予的 scope 必须是客户端申请过的子集，不允许审批时擅自扩大授权范围
+		const requestedScopes = parseStoredStringList(reqRow.requested_scopes);
+		const validGrantedScopes = grantedScopes.filter(
+			(s) => (ALL_KB_SCOPES as readonly string[]).includes(s) && requestedScopes.includes(s),
+		);
 		if (validGrantedScopes.length === 0) {
-			throw new KbAgentError("invalid_scope", "至少需要授予一项权限 (如 kb:read)", 400);
+			throw new KbAgentError("invalid_scope", "至少需要授予一项客户端申请过的权限 (如 kb:read)", 400);
+		}
+		// 授权的库必须真实存在且归属当前用户，防止把别人的库写进授权范围
+		if (allowedLibraryIds.length > 0) {
+			const [libRows] = await connection.execute<RowDataPacket[]>(
+				`SELECT id FROM kb_libraries WHERE owner_user_id = ? AND id IN (${allowedLibraryIds.map(() => "?").join(",")})`,
+				[userId, ...allowedLibraryIds],
+			);
+			const ownedIds = new Set(libRows.map((row) => Number(row.id)));
+			const invalid = allowedLibraryIds.filter((id) => !ownedIds.has(id));
+			if (invalid.length > 0) {
+				throw new KbAgentError("invalid_target", "授权范围包含不存在的知识库或非本人知识库", 403);
+			}
 		}
 
 		// 生成 32 字节高熵访问 Token
@@ -318,14 +380,21 @@ export async function pollKbDeviceToken(deviceCode: string): Promise<{
 	const cleanCode = deviceCode.trim();
 	const codeHash = sha256(cleanCode);
 
-	// 限流检查
+	// 限流检查：被限流时不重置时间戳，避免客户端高频轮询把自己饿死在窗口里
 	const now = Date.now();
 	const lastPoll = pollLimiter.get(codeHash);
 	if (lastPoll && now - lastPoll < POLL_MIN_INTERVAL_MS) {
-		pollLimiter.set(codeHash, now);
 		throw new KbAgentError("slow_down", "轮询过于频繁，请降低请求频率 (至少间隔 5 秒)", 400, 5);
 	}
 	pollLimiter.set(codeHash, now);
+	// 顺带淘汰过期限流记录，防止 Map 随历史设备码无限增长
+	if (pollLimiter.size > 0) {
+		for (const [key, ts] of pollLimiter) {
+			if (now - ts > 60 * 60 * 1000) {
+				pollLimiter.delete(key);
+			}
+		}
+	}
 
 	const connection = await pool.getConnection();
 	try {
@@ -366,19 +435,25 @@ export async function pollKbDeviceToken(deviceCode: string): Promise<{
 				throw new KbAgentError("expired_token", "该授权凭据已被领取或已失效", 400);
 			}
 
-			// 查询 grant
+			// 查询 grant（必须仍然有效：未撤销且未过期）
 			const [grantRows] = await connection.query<RowDataPacket[]>(
-				`SELECT * FROM kb_user_grants WHERE id = ? AND revoked_at IS NULL LIMIT 1`,
+				`SELECT * FROM kb_user_grants WHERE id = ? AND revoked_at IS NULL AND expires_at > NOW() LIMIT 1`,
 				[reqRow.grant_id],
 			);
 
 			if (grantRows.length === 0) {
 				pollLimiter.delete(codeHash);
-				throw new KbAgentError("access_denied", "授权已被撤销", 400);
+				throw new KbAgentError("access_denied", "授权已被撤销或已过期", 400);
 			}
 
 			const grant = grantRows[0];
+
+			// 先把交付数据全部解析好再 commit：
+			// 若解析在 commit/置空之后才失败，明文 token 已经永久丢失
 			const plainToken = decryptDeliveryToken(reqRow.encrypted_delivery_token);
+			const allowedLibIds = parseStoredNumberList(grant.allowed_library_ids);
+			const grantExpiresAtMs = new Date(grant.expires_at).getTime();
+			const expiresInSeconds = Math.max(0, Math.floor((grantExpiresAtMs - Date.now()) / 1000));
 
 			// 一次性交付：交付后立即清空 encrypted_delivery_token
 			await connection.execute(
@@ -389,20 +464,11 @@ export async function pollKbDeviceToken(deviceCode: string): Promise<{
 			await connection.commit();
 			pollLimiter.delete(codeHash);
 
-			const grantExpiresAtMs = new Date(grant.expires_at).getTime();
-			const expiresInSeconds = Math.max(0, Math.floor((grantExpiresAtMs - Date.now()) / 1000));
-
-			const allowedLibIds = Array.isArray(grant.allowed_library_ids)
-				? grant.allowed_library_ids
-				: typeof grant.allowed_library_ids === "string"
-					? JSON.parse(grant.allowed_library_ids)
-					: [];
-
 			return {
 				accessToken: plainToken,
 				tokenType: "Bearer",
 				expiresIn: expiresInSeconds,
-				scopes: grant.scopes ? grant.scopes.split(",") : [],
+				scopes: parseStoredStringList(grant.scopes),
 				allowedLibraryIds: allowedLibIds,
 				clientName: grant.client_name,
 			};
@@ -447,18 +513,14 @@ export async function getKbGrantByToken(token: string): Promise<KbAgentGrant | n
 		.execute(`UPDATE kb_user_grants SET last_used_at = NOW() WHERE id = ?`, [row.id])
 		.catch(() => undefined);
 
-	const allowedLibIds = Array.isArray(row.allowed_library_ids)
-		? row.allowed_library_ids
-		: typeof row.allowed_library_ids === "string"
-			? JSON.parse(row.allowed_library_ids)
-			: [];
+	const allowedLibIds = parseStoredNumberList(row.allowed_library_ids);
 
 	return {
 		id: row.id,
 		userId: row.user_id,
 		tokenHash: row.token_hash,
 		clientName: row.client_name,
-		scopes: row.scopes ? row.scopes.split(",") : [],
+		scopes: parseStoredStringList(row.scopes),
 		allowedLibraryIds: allowedLibIds,
 		expiresAt: new Date(row.expires_at).toISOString(),
 		lastUsedAt: row.last_used_at ? new Date(row.last_used_at).toISOString() : null,
@@ -490,12 +552,8 @@ export async function listKbUserGrants(userId: number): Promise<KbAgentGrant[]> 
 		userId: row.user_id,
 		tokenHash: row.token_hash,
 		clientName: row.client_name,
-		scopes: row.scopes ? row.scopes.split(",") : [],
-		allowedLibraryIds: Array.isArray(row.allowed_library_ids)
-			? row.allowed_library_ids
-			: typeof row.allowed_library_ids === "string"
-				? JSON.parse(row.allowed_library_ids)
-				: [],
+		scopes: parseStoredStringList(row.scopes),
+		allowedLibraryIds: parseStoredNumberList(row.allowed_library_ids),
 		expiresAt: new Date(row.expires_at).toISOString(),
 		lastUsedAt: row.last_used_at ? new Date(row.last_used_at).toISOString() : null,
 		revokedAt: row.revoked_at ? new Date(row.revoked_at).toISOString() : null,
@@ -541,8 +599,8 @@ export async function withIdempotency<T>(
 	const reqHash = sha256(JSON.stringify(requestPayload));
 
 	const [rows] = await pool.query<RowDataPacket[]>(
-		`SELECT request_hash, result_payload, expires_at FROM kb_mutation_keys 
-		WHERE user_id = ? AND action_type = ? AND idempotency_key = ?`,
+		`SELECT request_hash, result_payload, expires_at FROM kb_mutation_keys
+		WHERE user_id = ? AND action_type = ? AND idempotency_key = ? AND expires_at > NOW()`,
 		[userId, actionType, cleanKey],
 	);
 
@@ -552,21 +610,27 @@ export async function withIdempotency<T>(
 			throw new KbAgentError("idempotency_conflict", "同 idempotencyKey 但请求内容不一致 (409 Conflict)", 409);
 		}
 		if (typeof row.result_payload === "string") {
-			return JSON.parse(row.result_payload) as T;
+			try {
+				return JSON.parse(row.result_payload) as T;
+			} catch {
+				// 存档损坏时按未命中处理，重新执行并覆盖
+			}
+		} else {
+			return row.result_payload as T;
 		}
-		return row.result_payload as T;
 	}
 
 	const result = await execute();
 
 	await pool
 		.execute(
-			`INSERT INTO kb_mutation_keys 
+			`INSERT INTO kb_mutation_keys
 			(user_id, grant_id, action_type, idempotency_key, request_hash, result_payload, expires_at)
-			VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))`,
+			VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))
+			ON DUPLICATE KEY UPDATE request_hash = VALUES(request_hash), result_payload = VALUES(result_payload), expires_at = VALUES(expires_at)`,
 			[userId, grantId, actionType, cleanKey, reqHash, JSON.stringify(result)],
 		)
-		.catch(() => undefined);
+		.catch(() => undefined); // 并发写入同一 key 时让唯一约束静默仲裁，不影响主流程结果
 
 	return result;
 }
@@ -587,6 +651,10 @@ export async function cleanupExpiredKbDeviceRequests(): Promise<number> {
 export async function cleanupExpiredKbGrants(): Promise<number> {
 	const [mKeys] = await pool.execute<ResultSetHeader>(
 		`DELETE FROM kb_mutation_keys WHERE expires_at < NOW()`,
+	);
+	// 过期 grant 的 token 已永久失效，一并删除避免表无限增长
+	await pool.execute(
+		`DELETE FROM kb_user_grants WHERE expires_at < DATE_SUB(NOW(), INTERVAL 7 DAY) AND revoked_at IS NOT NULL`,
 	);
 	return mKeys.affectedRows;
 }

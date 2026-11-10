@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Check,
@@ -7,7 +7,6 @@ import {
   ChevronUp,
   Copy,
   Download,
-  ExternalLink,
   FileText,
   HardDrive,
   History,
@@ -153,7 +152,8 @@ async function copyText(value: string) {
 }
 
 type SelectedAssetItem = {
-  driveFileId: number;
+  // [367] null 表示该资产没有对应的网盘文件（历史直链），仅作展示，不能再次提交 driveFileId
+  driveFileId: number | null;
   fileName: string;
   byteSize: number;
   downloadUrl: string;
@@ -189,8 +189,12 @@ export default function AdminAppRelease() {
 
   const candidateFiles = useMemo(() => {
     if (apkFiles.length > 0) return apkFiles;
-    return allFiles;
+    // [365] 网盘没有以 .apk 结尾的文件时不要把全部文件当候选，否则空态提示永远不出现
+    return allFiles.filter((f) => f.name.toLowerCase().endsWith(".apk"));
   }, [apkFiles, allFiles]);
+
+  // 建议信息只在首次加载时预填一次，避免用户每敲一个字符就重新请求并覆盖表单
+  const prefilledRef = useRef(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -205,11 +209,12 @@ export default function AdminAppRelease() {
       setAllFiles(data.allDriveFiles || []);
       setPublicOrigin(data.publicOrigin || "https://files.fjayson.com");
 
-      // 仅当表单完全空白时，根据最新发布版本预填充建议信息
-      if (data.release && !versionName && versionCode === "") {
-        setVersionName(data.release.versionName);
-        setVersionCode(data.release.versionCode + 1);
-        setReleaseNotes(data.release.releaseNotes);
+      const release = data.release;
+      if (release && !prefilledRef.current) {
+        prefilledRef.current = true;
+        setVersionName((current) => current || release.versionName);
+        setVersionCode((current) => (current === "" ? release.versionCode + 1 : current));
+        setReleaseNotes((current) => current || release.releaseNotes);
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "加载发布信息失败。");
@@ -217,7 +222,7 @@ export default function AdminAppRelease() {
     } finally {
       setLoading(false);
     }
-  }, [versionName, versionCode]);
+  }, []);
 
   useEffect(() => {
     void loadData();
@@ -229,9 +234,11 @@ export default function AdminAppRelease() {
     let next: SelectedAssetItem[];
 
     if (isSelected) {
+      // [361] 移除的若正好是主包，要把主包交给剩余列表的第一个：直接改数组元素会绕过 React 状态快照
+      const removed = selectedAssets.find((a) => a.driveFileId === file.id);
       next = selectedAssets.filter((a) => a.driveFileId !== file.id);
-      if (next.length > 0 && !next.some((a) => a.isPrimary)) {
-        next[0].isPrimary = true;
+      if (removed?.isPrimary && next.length > 0 && !next.some((a) => a.isPrimary)) {
+        next = next.map((a, index) => (index === 0 ? { ...a, isPrimary: true } : a));
       }
     } else {
       const autoAbi = detectAbiFromName(file.name);
@@ -244,7 +251,8 @@ export default function AdminAppRelease() {
           byteSize: file.byteSize,
           downloadUrl: file.downloadUrl,
           abi: autoAbi,
-          isPrimary: isFirst || autoAbi === "universal",
+          // [362] 主包必须唯一：已有主包时不再把 universal 设为主包，避免 handlePublish 取错
+          isPrimary: isFirst || (autoAbi === "universal" && !selectedAssets.some((a) => a.isPrimary)),
         },
       ];
 
@@ -300,18 +308,20 @@ export default function AdminAppRelease() {
       };
     });
 
+    // [361] 全选后若无主包，交给第一个元素（同样走不可变更新）
     if (!items.some((i) => i.isPrimary) && items.length > 0) {
-      items[0].isPrimary = true;
+      setSelectedAssets(items.map((a, index) => (index === 0 ? { ...a, isPrimary: true } : a)));
+      return;
     }
 
     setSelectedAssets(items);
 
-    // 智能提取版本
+    // [366] 智能提取版本：只取首个匹配并在循环外一次性 setState，避免列表里每个文件都触发一次渲染
     for (const f of candidateFiles) {
       const match = /(?:v)?(\d+\.\d+(?:\.\d+)?)/i.exec(f.name);
-      if (match && !versionName) setVersionName(match[1]);
+      if (match && !versionName) { setVersionName(match[1]); break; }
       const codeMatch = /code(\d+)/i.exec(f.name);
-      if (codeMatch && versionCode === "") setVersionCode(parseInt(codeMatch[1], 10));
+      if (codeMatch && versionCode === "") { setVersionCode(parseInt(codeMatch[1], 10)); break; }
     }
   };
 
@@ -363,6 +373,11 @@ export default function AdminAppRelease() {
     } else if (allowCustomFallback) {
       if (!customDownloadUrl.trim()) {
         setMessage("请选择网盘 APK 文件或输入自定义下载直链。");
+        setMessageType("error");
+        return;
+      }
+      if (!isSafeDownloadUrl(customDownloadUrl.trim())) {
+        setMessage("下载直链只支持 http(s) 地址。");
         setMessageType("error");
         return;
       }
@@ -461,7 +476,7 @@ export default function AdminAppRelease() {
     setForceUpdate(Boolean(target.forceUpdate));
     if (target.assets && target.assets.length > 0) {
       const loadedAssets: SelectedAssetItem[] = target.assets.map((a, idx) => ({
-        driveFileId: a.driveFileId || 0,
+        driveFileId: a.driveFileId ?? null,
         fileName: a.fileName,
         byteSize: a.byteSize,
         downloadUrl: a.downloadUrl,
@@ -503,8 +518,17 @@ export default function AdminAppRelease() {
     setCustomFileSize("");
   };
 
+  // [364] 下载直链会作为 href 渲染：只允许 http/https，杜绝 javascript: / data: 存储型 XSS
+  const isSafeDownloadUrl = (value: string) => {
+    try {
+      return /^https?:$/u.test(new URL(value).protocol);
+    } catch {
+      return false;
+    }
+  };
   const handleUnpublish = async () => {
-    if (!window.confirm("确定要下架当前的所有课表发布吗？下架后客户端将无法通过此源获取更新。")) return;
+    // [363] 该接口会清空全部发布记录且不可恢复：文案必须如实说明，不能让人误以为只是下架单个版本
+    if (!window.confirm("确定要清空当前的全部课表发布记录吗？该操作不可恢复，清空后客户端将无法通过此源获取更新。")) return;
     setSubmitting(true);
     try {
       await apiRequest<{ success: boolean }>("/api/admin/app-releases/schedule", {
@@ -522,8 +546,11 @@ export default function AdminAppRelease() {
     }
   };
 
-  const publicApiUrl = `${window.location.origin}/api/app/schedule/latest`;
-  const directDownloadUrl = `${window.location.origin}/api/app/schedule/download`;
+  // [360] 客户端真正请求的是 API 服务（VITE_API_ORIGIN），复制出去的地址必须与之一致；
+  // 未配置时才回退到当前页面域（开发同源部署的场景）。
+  const apiBase = API_ORIGIN || window.location.origin;
+  const publicApiUrl = `${apiBase}/api/app/schedule/latest`;
+  const directDownloadUrl = `${apiBase}/api/app/schedule/download`;
 
   return (
     <div className="fa-page fa-drive-page">
@@ -1210,7 +1237,7 @@ export default function AdminAppRelease() {
                         <input
                           type="checkbox"
                           checked={isChecked}
-                          onChange={() => {}} // 由外层 onClick 驱动
+                          onChange={() => toggleSelectApk(file)} // 与外层 onClick 等价，保证键盘触发也能切换
                           style={{
                             width: "18px",
                             height: "18px",

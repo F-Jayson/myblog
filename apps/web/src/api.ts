@@ -122,13 +122,22 @@ function jsonRequest<T>(path: string, method: string, body: unknown) {
 	return request<T>(path, { method, body: body as BodyInit });
 }
 
+// 登录态变化时广播一次，让已经加载过鉴权图片的组件重新拉取
+export const AUTH_CHANGED_EVENT = "site-auth-changed";
+
+function notifyAuthChanged() {
+	if (typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
+}
+
 function putUserToken(token: unknown) {
 	if (typeof token !== "string" || !token.trim()) return;
 	try { localStorage.setItem(USER_TOKEN_KEY, token.trim()); } catch { /* storage can be unavailable in private contexts */ }
+	notifyAuthChanged();
 }
 
 function clearUserToken() {
 	try { localStorage.removeItem(USER_TOKEN_KEY); } catch { /* ignore */ }
+	notifyAuthChanged();
 }
 
 function cachedRequest<T>(cacheKey: string, path: string): Promise<T> {

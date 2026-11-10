@@ -29,6 +29,7 @@ import {
 	connectKnowledge,
 	currentKnowledgeProfile,
 	disconnectKnowledge,
+	KnowledgeApiError,
 } from "./client.js";
 
 const server = new McpServer({
@@ -49,7 +50,22 @@ function jsonResponse(data: unknown) {
 	};
 }
 
+// 状态码到可操作提示的映射：嵌套三元既违反项目规范，也不方便继续扩展
+const STATUS_HINTS = new Map<number, string>([
+	[401, "请重新调用 kb_connect 完成配对授权。"],
+	[403, "当前授权范围不足，需要用户在知识库设置里扩大 scope 或库范围。"],
+	[409, "资源已被他人修改，请重新读取后重试。"],
+	[429, "请求过于频繁，请稍后重试。"],
+]);
+
+// 错误语义要原样带回：工具描述里承诺了 401/403/409 等状态，压平成一句话会让调用方无法判断下一步
 function handleFailure(error: unknown) {
+	if (error instanceof KnowledgeApiError) {
+		const hint = STATUS_HINTS.get(error.status) ?? "";
+		const detail = error.message || error.code || "请求失败";
+		const suffix = hint ? "（" + hint + "）" : "";
+		return textResponse("[" + error.status + " " + error.code + "] " + detail + suffix, true);
+	}
 	const message = error instanceof Error ? error.message : "操作执行失败";
 	return textResponse(message, true);
 }

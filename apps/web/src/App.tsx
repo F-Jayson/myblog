@@ -63,7 +63,6 @@ import {
 	Routes,
 	useLocation,
 	useNavigate,
-	useOutletContext,
 	useParams,
 	useSearchParams,
 } from "react-router-dom";
@@ -90,6 +89,7 @@ import { parseDynamicBody } from "./markdown";
 import { isSafeNavigationUrl, isSafeResourceUrl, resolveMediaUrl } from "./media";
 import type { ChangelogEntry, ManagedFriendLink, ManagedPage, ManagedPageKey, Post, PostSummary, SiteData, SiteMusic } from "./types";
 import { peekPrimedWallpaper, primeWallpaperCache, rememberWallpaper } from "./wallpaperCache";
+import { readStoredBoolean, readStoredNumber, readStoredValue, writeStoredValue } from "./storage";
 
 const SiteContext = createContext<SiteData>(fallbackSite);
 const MarkdownContent = lazy(() => import("./MarkdownContent"));
@@ -101,10 +101,32 @@ const WALLPAPER_CROSSFADE_MS = 1100;
 const MIN_CAROUSEL_INTERVAL_SEC = 15;
 const MAX_CAROUSEL_INTERVAL_SEC = 120;
 const DEFAULT_CAROUSEL_INTERVAL_SEC = 15;
+// 与后端默认分页大小保持一致，改一处即可同步分页按钮的显示条件
+const POSTS_PAGE_SIZE = 10;
 
 function clampCarouselInterval(value: number) {
 	if (!Number.isFinite(value)) return DEFAULT_CAROUSEL_INTERVAL_SEC;
 	return Math.min(MAX_CAROUSEL_INTERVAL_SEC, Math.max(MIN_CAROUSEL_INTERVAL_SEC, Math.round(value)));
+}
+
+// 存储里可能是脏数据（NaN、越界值），统一在这里收敛
+function clampNumber(value: number, min: number, max: number, fallback: number) {
+	if (!Number.isFinite(value)) return fallback;
+	return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function clampHue(value: number) {
+	return clampNumber(value, 0, 360, 240);
+}
+
+// 非法转义（例如访问 /posts/100%）会让 decodeURIComponent 抛 URIError，
+// 这类异常发生在渲染期，会把整页打挂，这里回退到原始字符串
+function safeDecodeURIComponent(value: string) {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
+	}
 }
 
 type WallpaperFrame = {
@@ -169,7 +191,7 @@ function randomFallbackFrame() {
 }
 
 function readRememberedCoverMode() {
-	try { return localStorage.getItem("site-cover-mode") || ""; } catch { return ""; }
+	return readStoredValue("site-cover-mode") || "";
 }
 
 function triggerBlobDownload(blob: Blob, filename: string) {
@@ -467,6 +489,14 @@ function Header({ dark, setDark, wallpaper, setWallpaper, settings }: { dark: bo
 			setSettingsOpen(false);
 		}, 250);
 	};
+
+	// 组件卸载时清掉悬浮关闭的定时器，避免在已卸载的组件上 setState
+	useEffect(() => () => {
+		if (settingsHoverTimeoutRef.current) {
+			clearTimeout(settingsHoverTimeoutRef.current);
+			settingsHoverTimeoutRef.current = null;
+		}
+	}, []);
 
 	const submitSearch = (event: FormEvent) => {
 		event.preventDefault();
@@ -877,12 +907,22 @@ function CalendarWidget() {
 }
 
 type TocItem = { id: string; title: string; depth: number };
+// 必须与 MarkdownContent 的 isTocDepth 保持一致：正文只给 h2–h4 生成 toc-N 锚点，
+// 这里也要跳过 h1/h5/h6 与代码块里的 #，否则目录和正文的编号会错位
 function extractToc(content: string): TocItem[] {
 	const items: TocItem[] = [];
-	const headingPattern = /^(#{2,4})\s+(.+)$/gmu;
-	let match: RegExpExecArray | null;
-	while ((match = headingPattern.exec(content)) !== null) {
-		items.push({ id: `toc-${items.length}`, title: match[2].replace(/[`*_~]/gu, "").trim(), depth: match[1].length });
+	let inFence = false;
+	for (const line of content.split(/\r?\n/u)) {
+		if (/^\s*(?:```|~~~)/u.test(line)) {
+			inFence = !inFence;
+			continue;
+		}
+		if (inFence) continue;
+		const heading = /^(#{1,6})\s+(.+)$/u.exec(line);
+		if (!heading) continue;
+		const depth = heading[1].length;
+		if (depth < 2 || depth > 4) continue;
+		items.push({ id: `toc-${items.length}`, title: heading[2].replace(/[`*_~]/gu, "").trim(), depth });
 	}
 	return items;
 }
@@ -890,7 +930,7 @@ function extractToc(content: string): TocItem[] {
 function RightSidebar() {
 	const site = useSite();
 	const location = useLocation();
-	const articleSlug = location.pathname.startsWith("/posts/") ? decodeURIComponent(location.pathname.slice("/posts/".length)).replace(/^guide$/u, "guide/index") : "";
+	const articleSlug = location.pathname.startsWith("/posts/") ? safeDecodeURIComponent(location.pathname.slice("/posts/".length)).replace(/^guide$/u, "guide/index") : "";
 	const runningDays = daysSince(site.stats.startDate);
 	const [toc, setToc] = useState<TocItem[]>([]);
 	useEffect(() => {
@@ -936,17 +976,22 @@ function PostsPanel({ query, category, tag, heading, initialPage = 1 }: { query?
 	const [posts, setPosts] = useState<PostSummary[]>([]);
 	const [total, setTotal] = useState(0);
 	const [loading, setLoading] = useState(true);
+	const [failed, setFailed] = useState(false);
 	useEffect(() => { setPage(initialPage); }, [query, category, tag, initialPage]);
 	useEffect(() => {
 		let active = true;
 		setLoading(true);
-		api.posts({ page, category, tag, q: query }).then((result) => { if (active) { setPosts(result.items); setTotal(result.total); } }).finally(() => { if (active) setLoading(false); });
+		setFailed(false);
+		api.posts({ page, category, tag, q: query })
+			.then((result) => { if (active) { setPosts(result.items); setTotal(result.total); } })
+			.catch(() => { if (active) { setPosts([]); setTotal(0); setFailed(true); } })
+			.finally(() => { if (active) setLoading(false); });
 		return () => { active = false; };
 	}, [page, query, category, tag]);
 	return <section className={`posts-panel ${heading ? "posts-panel-compact" : "posts-panel-home"}`}>
 		{heading ? <div className="page-heading compact"><h2>{heading}</h2><span>{total} 篇文章</span></div> : null}
-		<div className="post-list post-list-home">{loading ? Array.from({ length: 3 }, (_, index) => <div className="card skeleton" key={index} />) : posts.length ? posts.map((post) => <PostCard post={post} key={post.id} />) : <EmptyState title="没有找到文章" description="换个关键词或筛选条件试试。" />}</div>
-		{total > 10 ? <div className="pagination"><button type="button" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>上一页</button><span>{page}</span><button type="button" disabled={posts.length < 10} onClick={() => setPage((value) => value + 1)}>下一页</button></div> : null}
+		<div className="post-list post-list-home">{loading ? Array.from({ length: 3 }, (_, index) => <div className="card skeleton" key={index} />) : failed ? <EmptyState title="文章列表加载失败" description="接口暂时不可用，请稍后重试。" /> : posts.length ? posts.map((post) => <PostCard post={post} key={post.id} />) : <EmptyState title="没有找到文章" description="换个关键词或筛选条件试试。" />}</div>
+		{total > POSTS_PAGE_SIZE ? <div className="pagination"><button type="button" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>上一页</button><span>{page}</span><button type="button" disabled={page * POSTS_PAGE_SIZE >= total} onClick={() => setPage((value) => value + 1)}>下一页</button></div> : null}
 	</section>;
 }
 
@@ -1007,21 +1052,22 @@ function PostAccessGate({ post, onUnlocked, onLimitReached }: { post: Post; onUn
 	const [error, setError] = useState(post.inCooldown ? "密码错误次数过多，已被限制访问 24 小时" : "");
 	const hint = post.passwordHint || post.accessPasswordHint || "";
 
+	// 只在“开始冷却/结束冷却”时重建定时器，否则每秒都会重建一次
+	const cooling = cooldownSeconds > 0;
 	useEffect(() => {
-		if (cooldownSeconds <= 0) return;
+		if (!cooling) return;
 		const timer = window.setInterval(() => {
-			setCooldownSeconds((prev) => {
-				if (prev <= 1) {
-					clearInterval(timer);
-					setInCooldown(false);
-					setError("");
-					return 0;
-				}
-				return prev - 1;
-			});
+			setCooldownSeconds((prev) => (prev > 0 ? prev - 1 : 0));
 		}, 1000);
-		return () => clearInterval(timer);
-	}, [cooldownSeconds]);
+		return () => window.clearInterval(timer);
+	}, [cooling]);
+
+	// 归零后再收尾：副作用不能塞进 state 的 updater 里
+	useEffect(() => {
+		if (!inCooldown || cooldownSeconds > 0) return;
+		setInCooldown(false);
+		setError("");
+	}, [inCooldown, cooldownSeconds]);
 
 	const handleSubmit = async (event: FormEvent) => {
 		event.preventDefault();
@@ -1113,11 +1159,13 @@ function PostPage() {
 	const [limitReached, setLimitReached] = useState(false);
 	const [limitError, setLimitError] = useState("");
 	const [loading, setLoading] = useState(true);
+	const [loadError, setLoadError] = useState("");
 
 	useEffect(() => {
 		let active = true;
 		setLimitReached(false);
 		setLimitError("");
+		setLoadError("");
 		setLoading(true);
 		setPost(fallbackPosts.find((item) => item.slug === slug));
 		api.post(slug).then((result) => {
@@ -1133,6 +1181,11 @@ function PostPage() {
 					setLimitReached(true);
 					setLimitError(payload?.error || (err instanceof Error ? err.message : "已达到作者设定的单 IP / 账号最大查看次数上限"));
 					setPost(null);
+				} else if (status === 404) {
+					// 文章被删除/改名时不能继续展示本地的旧副本
+					setPost(null);
+				} else {
+					setLoadError("内容暂时无法从服务器加载，当前显示的是本地缓存版本。");
 				}
 				setLoading(false);
 			}
@@ -1178,6 +1231,7 @@ function PostPage() {
 				</div>
 				{cover ? <img className="article-cover" src={cover} alt="" width="1200" height="675" loading="eager" decoding="async" /> : null}
 			</header>
+			{loadError ? <p className="post-load-notice" role="status">{loadError}</p> : null}
 			{post.locked ? (
 				<PostAccessGate
 					post={post}
@@ -1355,7 +1409,7 @@ const LEFT_SIDEBAR_KEY = "site-sidebar-left";
 const RIGHT_SIDEBAR_KEY = "site-sidebar-right";
 
 function storedSidebarOpen(key: string) {
-	const value = localStorage.getItem(key);
+	const value = readStoredValue(key);
 	if (value === "open") return true;
 	if (value === "closed") return false;
 	return null;
@@ -1369,11 +1423,13 @@ function defaultSidebarOpen(side: "left" | "right") {
 
 function useSidebarOpen(side: "left" | "right") {
 	const key = side === "left" ? LEFT_SIDEBAR_KEY : RIGHT_SIDEBAR_KEY;
-	const chosen = useRef(storedSidebarOpen(key) !== null);
+	// 用惰性初始化的 ref 记住“用户是否手动选择过”，避免每次渲染都读一次存储
+	const chosenRef = useRef<boolean | null>(null);
+	if (chosenRef.current === null) chosenRef.current = storedSidebarOpen(key) !== null;
 	const [open, setOpen] = useState(() => storedSidebarOpen(key) ?? defaultSidebarOpen(side));
 	useEffect(() => {
 		const onResize = () => {
-			if (chosen.current) return;
+			if (chosenRef.current) return;
 			setOpen(defaultSidebarOpen(side));
 		};
 		window.addEventListener("resize", onResize);
@@ -1382,8 +1438,8 @@ function useSidebarOpen(side: "left" | "right") {
 	const toggle = () => {
 		setOpen((current) => {
 			const next = !current;
-			chosen.current = true;
-			localStorage.setItem(key, next ? "open" : "closed");
+			chosenRef.current = true;
+			writeStoredValue(key, next ? "open" : "closed");
 			return next;
 		});
 	};
@@ -1499,15 +1555,19 @@ function faviconMimeType(source: string): string {
 function SiteShell() {
 	const [site, setSite] = useState<SiteData>(fallbackSite);
 	const [siteLoaded, setSiteLoaded] = useState(false);
-	const [dark, setDark] = useState(() => localStorage.getItem("site-theme") === "dark" || (!localStorage.getItem("site-theme") && window.matchMedia("(prefers-color-scheme: dark)").matches));
-	const [wallpaper, setWallpaperState] = useState(() => localStorage.getItem("site-wallpaper") ?? "banner");
-	const [hue, setHueState] = useState(() => Number(localStorage.getItem("site-hue") ?? 240));
-	const [layout, setLayout] = useState<"list" | "grid">(() => (localStorage.getItem("site-layout") as "list" | "grid") ?? "list");
-	const [cardBorder, setCardBorder] = useState(() => localStorage.getItem("site-card-border") === "true");
-	const [cardFollowTheme, setCardFollowTheme] = useState(() => localStorage.getItem("site-card-theme") === "true");
-	const [bannerTitle, setBannerTitle] = useState(() => localStorage.getItem("site-banner-title") !== "false");
-	const [carousel, setCarousel] = useState(() => localStorage.getItem("site-carousel") === "true");
-	const [carouselInterval, setCarouselIntervalState] = useState(() => clampCarouselInterval(Number(localStorage.getItem("site-carousel-interval"))));
+	const [dark, setDark] = useState(() => {
+		const stored = readStoredValue("site-theme");
+		if (stored === null) return window.matchMedia("(prefers-color-scheme: dark)").matches;
+		return stored === "dark";
+	});
+	const [wallpaper, setWallpaperState] = useState(() => readStoredValue("site-wallpaper") ?? "banner");
+	const [hue, setHueState] = useState(() => clampHue(readStoredNumber("site-hue", 240)));
+	const [layout, setLayout] = useState<"list" | "grid">(() => (readStoredValue("site-layout") === "grid" ? "grid" : "list"));
+	const [cardBorder, setCardBorder] = useState(() => readStoredBoolean("site-card-border", false));
+	const [cardFollowTheme, setCardFollowTheme] = useState(() => readStoredBoolean("site-card-theme", false));
+	const [bannerTitle, setBannerTitle] = useState(() => readStoredBoolean("site-banner-title", true));
+	const [carousel, setCarousel] = useState(() => readStoredBoolean("site-carousel", false));
+	const [carouselInterval, setCarouselIntervalState] = useState(() => clampCarouselInterval(readStoredNumber("site-carousel-interval", DEFAULT_CAROUSEL_INTERVAL_SEC)));
 	const [wallpaperDownloadAvailable, setWallpaperDownloadAvailable] = useState(false);
 	const wallpaperDownloadRef = useRef<() => void>(() => undefined);
 	const bindWallpaperDownload = useCallback((download: (() => void) | null) => {
@@ -1515,27 +1575,38 @@ function SiteShell() {
 		setWallpaperDownloadAvailable(Boolean(download));
 	}, []);
 	const setCarouselInterval = (value: number) => setCarouselIntervalState(clampCarouselInterval(value));
-	const [wavesEnabled, setWavesEnabled] = useState(() => localStorage.getItem("site-waves") !== "false");
-	const [gradientEnabled, setGradientEnabled] = useState(() => localStorage.getItem("site-gradient") !== "false");
-	const [sakuraEnabled, setSakuraEnabled] = useState(() => localStorage.getItem("site-sakura") === "true");
-	const [overlayOpacity, setOverlayOpacity] = useState(() => Number(localStorage.getItem("site-overlay-opacity") ?? 80));
-	const [overlayBlur, setOverlayBlur] = useState(() => Number(localStorage.getItem("site-overlay-blur") ?? 10));
-	const [overlayCardOpacity, setOverlayCardOpacity] = useState(() => Number(localStorage.getItem("site-overlay-card-opacity") ?? 50));
+	const [wavesEnabled, setWavesEnabled] = useState(() => readStoredBoolean("site-waves", true));
+	const [gradientEnabled, setGradientEnabled] = useState(() => readStoredBoolean("site-gradient", true));
+	const [sakuraEnabled, setSakuraEnabled] = useState(() => readStoredBoolean("site-sakura", false));
+	const [overlayOpacity, setOverlayOpacity] = useState(() => clampNumber(readStoredNumber("site-overlay-opacity", 80), 0, 100, 80));
+	const [overlayBlur, setOverlayBlur] = useState(() => clampNumber(readStoredNumber("site-overlay-blur", 10), 0, 40, 10));
+	const [overlayCardOpacity, setOverlayCardOpacity] = useState(() => clampNumber(readStoredNumber("site-overlay-card-opacity", 50), 0, 100, 50));
 	useEffect(() => {
 		let active = true;
 		const refreshSite = () => {
-			api.site().then((result) => {
-				if (!active) return;
-				setSite(result);
-				setSiteLoaded(true);
-				if (result.title || result.cover) {
-					try { localStorage.setItem("site-cover-mode", result.cover?.mode || "static"); } catch { /* ignore */ }
-				}
-			});
+			// 页面在后台时不轮询，回到前台由 visibilitychange 立即补一次
+			if (document.hidden) return;
+			api.site()
+				.then((result) => {
+					if (!active) return;
+					setSite(result);
+					setSiteLoaded(true);
+					if (result.title || result.cover) {
+						writeStoredValue("site-cover-mode", result.cover?.mode || "static");
+					}
+				})
+				.catch(() => {
+					// 拉取失败时保留上一次成功的数据（或 fallback），30 秒后自动重试
+				});
 		};
 		refreshSite();
 		const retryTimer = window.setInterval(refreshSite, 30_000);
-		return () => { active = false; window.clearInterval(retryTimer); };
+		document.addEventListener("visibilitychange", refreshSite);
+		return () => {
+			active = false;
+			window.clearInterval(retryTimer);
+			document.removeEventListener("visibilitychange", refreshSite);
+		};
 	}, []);
 	useEffect(() => {
 		const favicon = document.head.querySelector<HTMLLinkElement>('link[rel~="icon"]');
@@ -1570,21 +1641,26 @@ function SiteShell() {
 		document.head.appendChild(style);
 		return () => style.remove();
 	}, [site.titleConfig]);
-	useEffect(() => { document.documentElement.classList.toggle("dark", dark); localStorage.setItem("site-theme", dark ? "dark" : "light"); }, [dark]);
-	useEffect(() => { document.documentElement.style.setProperty("--hue", String(hue)); localStorage.setItem("site-hue", String(hue)); }, [hue]);
-	useEffect(() => { document.documentElement.dataset.wallpaper = wallpaper; localStorage.setItem("site-wallpaper", wallpaper); }, [wallpaper]);
-	useEffect(() => { localStorage.setItem("site-layout", layout); }, [layout]);
-	useEffect(() => { localStorage.setItem("site-card-border", String(cardBorder)); }, [cardBorder]);
-	useEffect(() => { localStorage.setItem("site-card-theme", String(cardFollowTheme)); }, [cardFollowTheme]);
-	useEffect(() => { localStorage.setItem("site-banner-title", String(bannerTitle)); }, [bannerTitle]);
-	useEffect(() => { localStorage.setItem("site-carousel", String(carousel)); }, [carousel]);
-	useEffect(() => { localStorage.setItem("site-carousel-interval", String(carouselInterval)); }, [carouselInterval]);
-	useEffect(() => { localStorage.setItem("site-waves", String(wavesEnabled)); }, [wavesEnabled]);
-	useEffect(() => { localStorage.setItem("site-gradient", String(gradientEnabled)); }, [gradientEnabled]);
-	useEffect(() => { localStorage.setItem("site-sakura", String(sakuraEnabled)); }, [sakuraEnabled]);
-	useEffect(() => { localStorage.setItem("site-overlay-opacity", String(overlayOpacity)); }, [overlayOpacity]);
-	useEffect(() => { localStorage.setItem("site-overlay-blur", String(overlayBlur)); }, [overlayBlur]);
-	useEffect(() => { localStorage.setItem("site-overlay-card-opacity", String(overlayCardOpacity)); }, [overlayCardOpacity]);
+	useEffect(() => {
+		document.documentElement.classList.toggle("dark", dark);
+		writeStoredValue("site-theme", dark ? "dark" : "light");
+		// 与 index.html 的首屏脚本用同一套底色，避免地址栏颜色与页面不同步
+		document.head.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#080f0c" : "#e9f1ed");
+	}, [dark]);
+	useEffect(() => { document.documentElement.style.setProperty("--hue", String(hue)); writeStoredValue("site-hue", String(hue)); }, [hue]);
+	useEffect(() => { document.documentElement.dataset.wallpaper = wallpaper; writeStoredValue("site-wallpaper", wallpaper); }, [wallpaper]);
+	useEffect(() => { writeStoredValue("site-layout", layout); }, [layout]);
+	useEffect(() => { writeStoredValue("site-card-border", String(cardBorder)); }, [cardBorder]);
+	useEffect(() => { writeStoredValue("site-card-theme", String(cardFollowTheme)); }, [cardFollowTheme]);
+	useEffect(() => { writeStoredValue("site-banner-title", String(bannerTitle)); }, [bannerTitle]);
+	useEffect(() => { writeStoredValue("site-carousel", String(carousel)); }, [carousel]);
+	useEffect(() => { writeStoredValue("site-carousel-interval", String(carouselInterval)); }, [carouselInterval]);
+	useEffect(() => { writeStoredValue("site-waves", String(wavesEnabled)); }, [wavesEnabled]);
+	useEffect(() => { writeStoredValue("site-gradient", String(gradientEnabled)); }, [gradientEnabled]);
+	useEffect(() => { writeStoredValue("site-sakura", String(sakuraEnabled)); }, [sakuraEnabled]);
+	useEffect(() => { writeStoredValue("site-overlay-opacity", String(overlayOpacity)); }, [overlayOpacity]);
+	useEffect(() => { writeStoredValue("site-overlay-blur", String(overlayBlur)); }, [overlayBlur]);
+	useEffect(() => { writeStoredValue("site-overlay-card-opacity", String(overlayCardOpacity)); }, [overlayCardOpacity]);
 	const displaySettings: DisplaySettingsProps = { hue, setHue: setHueState, wallpaper, setWallpaper: setWallpaperState, layout, setLayout, cardBorder, setCardBorder, cardFollowTheme, setCardFollowTheme, bannerTitle, setBannerTitle, carousel, setCarousel, carouselInterval, setCarouselInterval, onDownloadWallpaper: () => wallpaperDownloadRef.current(), wallpaperDownloadAvailable, wavesEnabled, setWavesEnabled, gradientEnabled, setGradientEnabled, sakuraEnabled, setSakuraEnabled, overlayOpacity, setOverlayOpacity, overlayBlur, setOverlayBlur, overlayCardOpacity, setOverlayCardOpacity };
 	const shellClasses = [`site-shell wallpaper-${wallpaper}`, `post-layout-${layout}`, cardBorder ? "card-enhanced" : "", cardFollowTheme ? "card-follow-theme" : "", gradientEnabled ? "gradient-enabled" : "gradient-disabled"].filter(Boolean).join(" ");
 	const systemFontStack = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";

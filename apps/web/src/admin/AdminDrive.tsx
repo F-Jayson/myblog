@@ -106,6 +106,15 @@ export default function AdminDrive() {
   const [batchTotal, setBatchTotal] = useState(0);
   const [batchCurrent, setBatchCurrent] = useState(0);
   const [batchCurrentName, setBatchCurrentName] = useState("");
+  // [398] 上传区文案：从嵌套三元改为顺序 if 判定，新增分支时不易出错
+  let uploadLabel = "选择文件或拖到这里（支持多选批量上传）";
+  if (uploading) {
+    if (batchTotal > 1) {
+      uploadLabel = `正在上传 (${batchCurrent}/${batchTotal}): ${batchCurrentName}`;
+    } else {
+      uploadLabel = phase === "saving" ? "正在保存" : "正在上传";
+    }
+  }
   const [dragging, setDragging] = useState(false);
   const [message, setMessage] = useState("");
   const [latestUrl, setLatestUrl] = useState("");
@@ -115,7 +124,6 @@ export default function AdminDrive() {
   const [passwordFor, setPasswordFor] = useState<number | null>(null);
   const [passwordDraft, setPasswordDraft] = useState("");
   const [hintDraft, setHintDraft] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
   const uploadingRef = useRef(false);
 
   const load = useCallback(async (quiet = false) => {
@@ -180,9 +188,12 @@ export default function AdminDrive() {
   const sendChunk = (uploadId: string, body: Blob, offset: number, total: number) => new Promise<number>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", API_ORIGIN + "/api/admin/drive/sessions/" + uploadId);
-    xhr.timeout = 0;
-    const token = sessionStorage.getItem("site-admin-token");
-    if (token) xhr.setRequestHeader("authorization", "Bearer " + token);
+    // [397] timeout=0 表示永不超时：网络中断时上传会永久卡住，只能刷新页面。
+    // 分片请求是短事务，5 分钟足够覆盖最慢的链路。
+    xhr.timeout = 5 * 60 * 1000;
+    // [396] 复用 authHeaders()，避免再硬编码一次 site-admin-token 键名
+    const headers = authHeaders();
+    headers.forEach((value, key) => xhr.setRequestHeader(key, value));
     xhr.setRequestHeader("content-type", "application/octet-stream");
     xhr.setRequestHeader("x-upload-offset", String(offset));
     xhr.upload.onprogress = (event) => {
@@ -210,6 +221,7 @@ export default function AdminDrive() {
     };
     xhr.onerror = () => reject(new Error("无法连接到内容服务。"));
     xhr.onabort = () => reject(new Error("上传已中断。"));
+    xhr.ontimeout = () => reject(new Error("上传超时，请检查网络后重试。"));
     xhr.send(body);
   });
 
@@ -373,7 +385,7 @@ export default function AdminDrive() {
         <div>
           <span className="fa-kicker">SHARED FILES</span>
           <h1>文件网盘</h1>
-          <p>上传任意文件后获得下载链接。可以给文件设置访问密码，未设置时拿到链接即可下载；设置后必须输入正确密码才能下载。单个文件不超过 2GB，下载不限速。</p>
+          <p>上传任意文件后获得下载链接。可以给文件设置访问密码，未设置时拿到链接即可下载；设置后必须输入正确密码才能下载。单个文件最大 {bytesText(maxBytes)}，下载不限速。</p>
         </div>
       </div>
       {message ? <div className="fa-error fa-page-error">{message}</div> : null}
@@ -399,7 +411,6 @@ export default function AdminDrive() {
           }}
         >
           <input
-            ref={inputRef}
             type="file"
             multiple
             disabled={uploading}
@@ -413,11 +424,8 @@ export default function AdminDrive() {
           />
           <span className="fa-drive-drop-icon">{uploading ? <RefreshCw size={22} className="fa-spin" /> : <Upload size={22} />}</span>
           <strong>
-            {uploading
-              ? (batchTotal > 1
-                ? `正在上传 (${batchCurrent}/${batchTotal}): ${batchCurrentName}`
-                : (phase === "saving" ? "正在保存" : "正在上传"))
-              : "选择文件或拖到这里（支持多选批量上传）"}
+            {/* [398] 先算好文案再渲染，避免嵌套三元 */}
+            {uploadLabel}
           </strong>
           <small>任意格式，最大 {bytesText(maxBytes)}，支持批量上传</small>
         </label>
@@ -511,9 +519,11 @@ export default function AdminDrive() {
                     </div>
                   </td>
                 </tr>
-              )).flatMap((row, index) => {
-                const item = visible[index];
-                if (!item || passwordFor !== item.id) return [row];
+              /* [401] 密码行直接由 map 的 item 决定，不再用下标回查 visible */
+              )).flatMap((row) => {
+                if (passwordFor === null) return [row];
+                const item = visible.find((entry) => passwordFor === entry.id);
+                if (!item) return [row];
                 return [row, <tr key={`password-${item.id}`}>
                   <td colSpan={5}>
                     <form className="fa-drive-password-row" onSubmit={(event) => { event.preventDefault(); void savePassword(item, false); }}>

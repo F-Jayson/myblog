@@ -62,6 +62,7 @@ import {
 } from "./agentStore.js";
 import { savePublicFile } from "./storage.js";
 import type { AdminPrincipal } from "./repository.js";
+import { resolveClientIp } from "./clientIp.js";
 
 type AdminRequest = Request & { adminUser?: AdminPrincipal };
 type AgentRequest = Request & { agentGrant?: AgentGrant };
@@ -83,8 +84,7 @@ const upsertSchema = z.object({
 });
 
 function clientIp(req: Request) {
-	const forwarded = req.header("x-forwarded-for")?.split(",")[0]?.trim();
-	return forwarded || req.ip || req.socket.remoteAddress || "unknown";
+	return resolveClientIp(req) || "unknown";
 }
 
 function sendAgentError(res: Response, error: AgentError) {

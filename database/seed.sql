@@ -1,13 +1,17 @@
 USE jayson_blog;
 
+-- 整个 seed 在一个事务内执行，避免中途失败留下半套演示数据。
+START TRANSACTION;
+
 -- Do not seed a reusable administrator password. Run
 -- `pnpm --filter @jayson-blog/api db:migrate`, then pipe a unique
 -- 12+ character password to `tsx src/cli.ts set-admin-password`, or run it
 -- interactively in a terminal and follow the hidden prompts.
 
+-- 只在还没有任何作者时写入演示作者，重跑 seed 不覆盖管理员改过的资料。
 INSERT INTO authors (id, name, bio, avatar, email, github_url, qq_url, rss_url, links)
-VALUES (1, 'Jayson', 'Hello, I\'m Jayson.', '/images/avatar.avif', 'hello@example.com', 'https://github.com/', 'https://wpa.qq.com/', '/rss.xml', JSON_ARRAY())
-ON DUPLICATE KEY UPDATE name = VALUES(name), bio = VALUES(bio), avatar = VALUES(avatar), email = VALUES(email), github_url = VALUES(github_url), qq_url = VALUES(qq_url), rss_url = VALUES(rss_url), links = VALUES(links);
+SELECT 1, 'Jayson', 'Hello, I\'m Jayson.', '/images/avatar.avif', 'hello@example.com', 'https://github.com/', 'https://wpa.qq.com/', '/rss.xml', JSON_ARRAY()
+WHERE NOT EXISTS (SELECT 1 FROM authors);
 
 INSERT INTO categories (name, slug, description) VALUES
   ('博客指南', 'guide', 'Jayson''s Blog 的使用指南与布局说明'),
@@ -24,7 +28,7 @@ ON DUPLICATE KEY UPDATE name = VALUES(name), slug = VALUES(slug);
 
 -- Remove records from the initial scaffold so the demo archive matches the source site.
 DELETE FROM posts WHERE slug IN ('layout-system', 'react-and-express', 'a-small-archive');
-DELETE FROM categories WHERE slug IN ('dev-note', 'essay');
+-- dev-note / essay 分类仍被下文的示例文章引用，不能删除；只清理初始脚手架留下的示例文章。
 
 -- The first four records mirror the source theme content collection.
 INSERT INTO posts (slug, title, excerpt, content, cover, category_id, status, pinned, views, words, minutes, published_at)
@@ -135,8 +139,23 @@ SELECT 'video', '在文章中嵌入视频', '这篇文章演示如何在博客�
 FROM categories WHERE slug = 'examples'
 ON DUPLICATE KEY UPDATE title = VALUES(title), excerpt = VALUES(excerpt), content = VALUES(content), category_id = VALUES(category_id), status = VALUES(status), published_at = VALUES(published_at);
 
+-- posts.category_id 只是冗余列，阅读与分类页都通过 post_categories 统计，
+-- 所以这里按 posts.category_id 回填，否则全新初始化的库里分类投影为空。
+DELETE FROM post_categories
+WHERE post_id IN (SELECT id FROM posts WHERE slug IN ('journal', 'guide/index', 'guide/layout-system', 'code-examples', 'react-and-express', 'a-small-archive', 'markdown-extended', 'guide/wiki-link', 'encrypted-demo', 'katex-math-example', 'mdx-example', 'markdown-mermaid', 'markdown-plantuml', 'markdown-tutorial', 'video'));
+
+INSERT IGNORE INTO post_categories (post_id, category_id)
+SELECT id, category_id FROM posts WHERE category_id IS NOT NULL;
+
+-- 示例文章需要可用的访问密码才能真正演示解锁流程（演示密码：firefly-demo-2026）；
+-- 已由管理员设置过密码时保持原值。
+UPDATE posts
+SET access_password_hash = 'scrypt$a2c2e8b8bf1649dec75f8c639ddca3d7$e867201ab579176585c9e663c879855e177e7014de133bba5ed334aacc36edacb279e57404e61f9a27929fdcfe0fe710e3575861a1b550674cf8aae48edfb303',
+  access_password_hint = '演示密码：firefly-demo-2026'
+WHERE slug = 'encrypted-demo' AND access_password_hash IS NULL;
+
 DELETE FROM post_tags
-WHERE post_id IN (SELECT id FROM posts WHERE slug IN ('journal', 'guide/index', 'guide/layout-system', 'code-examples', 'react-and-express', 'a-small-archive', 'markdown-extended'));
+WHERE post_id IN (SELECT id FROM posts WHERE slug IN ('journal', 'guide/index', 'guide/layout-system', 'code-examples', 'react-and-express', 'a-small-archive', 'markdown-extended', 'guide/wiki-link', 'encrypted-demo', 'katex-math-example', 'mdx-example', 'markdown-mermaid', 'markdown-plantuml', 'markdown-tutorial', 'video'));
 
 INSERT IGNORE INTO post_tags (post_id, tag_id)
 SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('markdown', 'journal', 'blog', 'theme', 'template') WHERE p.slug = 'journal';
@@ -176,7 +195,7 @@ INSERT INTO dynamics (body, images, published_at) VALUES
   ('这是一条测试动态！', JSON_ARRAY('/images/posts/post-cover-1.avif'), '2026-07-15 02:06:13'),
   ('今天天气真不错。', JSON_ARRAY(), '2026-07-15 01:07:56');
 
-INSERT INTO site_settings (setting_key, setting_value) VALUES
+INSERT IGNORE INTO site_settings (setting_key, setting_value) VALUES
   ('site', JSON_OBJECT(
     'title', 'Jayson''s Blog',
     'subtitle', 'Demo site',
@@ -187,8 +206,7 @@ INSERT INTO site_settings (setting_key, setting_value) VALUES
     'music', JSON_OBJECT('enabled', true, 'src', '/assets/music/使一颗心免于哀伤-哼唱.mp3', 'title', '使一颗心免于哀伤', 'artist', '知更鸟 / HOYO-MiX / Chevy', 'cover', '/assets/music/cover/109951169585655912.webp', 'autoplay', false, 'loop', false)
   )),
   ('announcement', JSON_OBJECT('content', '欢迎来到我的博客！这是一则示例公告。', 'historyId', NULL)),
-  ('navigation', JSON_ARRAY('home', 'tags', 'archive', 'categories', 'more'))
-ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
+  ('navigation', JSON_ARRAY('home', 'tags', 'archive', 'categories', 'more'));
 
 -- Standalone Markdown pages and transfer links. Keep existing editorial
 -- changes when the seed is run again.
@@ -208,3 +226,6 @@ ON DUPLICATE KEY UPDATE slug = VALUES(slug);
 INSERT INTO site_settings (setting_key, setting_value) VALUES
   ('feedback', JSON_OBJECT('enabled', TRUE, 'maxFiles', 2, 'maxFileSizeMb', 20))
 ON DUPLICATE KEY UPDATE setting_key = VALUES(setting_key);
+
+-- 以上语句在同一事务内执行；中途失败时整体回滚，不会留下半套演示数据。
+COMMIT;

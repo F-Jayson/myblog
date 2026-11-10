@@ -44,11 +44,18 @@ function isObservabilityProbe(statement: string) {
 }
 
 function isWriteStatement(statement: string) {
-	return /^(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT|REVOKE)\b/iu.test(statement.trim());
+	// [219] 先剥离前导注释：/* ... */ INSERT 这类语句之前不会被识别，导致
+	// lastDatabaseWriteAt 长期失真；CTE（WITH ... UPDATE/INSERT）同样算写入
+	const stripped = statement.replace(/^(?:\s+|--[^\n]*\n|\/\*[\s\S]*?\*\/)+/u, "");
+	return /\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT|REVOKE)\b/iu.test(stripped) || /^WITH\b/iu.test(stripped);
 }
 
 export function recordRequest(metric: Omit<RequestMetric, "at">) {
-	droppedRequestRecords += retain(requests, { ...metric, at: Date.now() });
+	// [221] path 可能带查询串（?token=...&email=...）：入库前剥离 query/hash，
+	// 敏感参数不能通过 frequentPaths/recentExceptions 泄露给监控查看者
+	const queryIndex = metric.path.search(/[?#]/u);
+	const safePath = queryIndex === -1 ? metric.path : metric.path.slice(0, queryIndex);
+	droppedRequestRecords += retain(requests, { ...metric, path: safePath, at: Date.now() });
 }
 
 export function recordSql(statement: string, durationMs: number, failed = false) {
