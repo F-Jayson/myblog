@@ -228,6 +228,16 @@ export async function deletePublicFile(urlOrKey: string): Promise<boolean> {
 }
 
 /**
+ * Resolve the local disk path for a user-space object. Storage keys are flat,
+ * unique file names; keys containing a separator or traversal are rejected.
+ */
+export function userSpaceLocalPath(storageKey: string): string | null {
+	const name = basename(storageKey);
+	if (!name || name !== storageKey || name.includes("\\") || name === "." || name === "..") return null;
+	return resolve(userStorageUploadRoot, name);
+}
+
+/**
  * Upload a user space file to Worker, R2 or local disk
  */
 export async function saveUserSpaceFile(options: {

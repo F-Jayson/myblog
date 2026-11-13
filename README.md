@@ -91,6 +91,12 @@ pnpm --filter @jayson-blog/api exec tsx src/cli.ts set-admin-password
 
 后台新增「智能体授权」页，用来查看和撤销 Cursor 等智能体的连接。智能体写入文章前会打开浏览器授权页，管理员密码只提交给博客 API。接入方式、权限和接口见 [docs/agent-tools.md](docs/agent-tools.md)。
 
+## WebDAV 云盘
+
+管理员和注册用户都可以把本站云盘挂载成网络磁盘，支持 Windows 资源管理器、macOS Finder、手机客户端和 rclone，也可以在网页端管理文件：用户入口 `/user/drive`，管理员入口 `/admin/webdav`。生产环境挂载地址为 `https://你的域名/dav`，开发环境为 `http://localhost:5180/dav`。
+
+认证复用现有账号：管理员使用后台用户名和密码，注册用户使用账号或邮箱；注册用户与现有空间共享 30MB（本地）/50MB（Cloudflare）配额，管理员云盘独立 2GB。注册用户是否可用由「站点设置 → 功能开关」中的 WebDAV 云盘（`webdavEnabled`）控制，管理员始终可用。挂载步骤、HTTPS 要求和常见问题见 [docs/webdav-drive.md](docs/webdav-drive.md)。
+
 ## 页面与接口
 
 前端包含首页、文章详情、归档、分类、标签、搜索、关于、友链、留言板、动态、相册、书签导航和打赏页面。API 提供：

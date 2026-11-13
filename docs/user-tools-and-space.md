@@ -2,7 +2,7 @@
 
 ## Scope
 
-Authenticated users have a small-tools entry in the site sidebar. It provides an image host, an online clipboard, a container-backed compiler, a user centre and a space-management view. The image host and clipboard support private ownership, optional public sharing, public links and view counters. The compiler runs submitted code in a short-lived, network-isolated Docker container with resource limits, and supports syntax highlighting, formatting, standard input and line breakpoints. Python, JavaScript and TypeScript use real line tracing for breakpoints; other supported languages return run diagnostics. The user centre supports profile updates, and administrators can inspect and manage each user's stored data.
+Authenticated users have a small-tools entry in the site sidebar. It provides an image host, an online clipboard, a container-backed compiler, a user centre and a space-management view. The image host and clipboard support private ownership, optional public sharing, public links and view counters. The compiler runs submitted code in a short-lived, network-isolated Docker container with resource limits, and supports syntax highlighting, formatting, standard input and line breakpoints. Python, JavaScript and TypeScript use real line tracing for breakpoints; other supported languages return run diagnostics. The user centre supports profile updates, and administrators can inspect and manage each user's stored data. The same space is also available as a WebDAV drive at `/user/drive` in the browser or by mounting `/dav` in a desktop or mobile client; see [WebDAV drive guide](webdav-drive.md).
 
 ## Shared 30MB quota
 

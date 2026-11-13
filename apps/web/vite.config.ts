@@ -19,6 +19,8 @@ export default defineConfig(({ mode }) => {
         "/api": { target: proxyTarget, changeOrigin: true },
         // 知识库 OAuth 的 /oauth/* 端点在网关根路径上，开发环境必须一起代理
         "/oauth": { target: proxyTarget, changeOrigin: true },
+        // WebDAV 挂载端点：桌面/手机客户端直接连 /dav，开发环境同样走代理
+        "/dav": { target: proxyTarget, changeOrigin: true },
       },
     },
     build: {

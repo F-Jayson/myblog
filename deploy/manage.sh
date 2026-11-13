@@ -849,6 +849,40 @@ server {
         proxy_read_timeout 7200s;
     }
 
+    location = /dav {
+        client_max_body_size 2200m;
+        client_body_timeout 3600s;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
+    }
+
+    location /dav/ {
+        client_max_body_size 2200m;
+        client_body_timeout 3600s;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
+    }
+
     location /api/ {
         proxy_pass http://127.0.0.1:${API_PORT};
         proxy_http_version 1.1;
@@ -939,6 +973,40 @@ server {
         proxy_request_buffering off;
         proxy_max_temp_file_size 0;
         gzip off;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
+    }
+
+    location = /dav {
+        client_max_body_size 2200m;
+        client_body_timeout 3600s;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 7200s;
+        proxy_read_timeout 7200s;
+    }
+
+    location /dav/ {
+        client_max_body_size 2200m;
+        client_body_timeout 3600s;
+        proxy_pass http://127.0.0.1:${API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
         proxy_connect_timeout 30s;
         proxy_send_timeout 7200s;
         proxy_read_timeout 7200s;

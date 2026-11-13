@@ -174,6 +174,8 @@ export type FeatureSettings = {
 	publicResourcesEnabled: boolean;
 	compilerEnabled: boolean;
 	gamesEnabled: boolean;
+	/** WebDAV 云盘；旧版后端不下发该字段时视为开启 */
+	webdavEnabled?: boolean;
 };
 
 export type GamePlayer = {

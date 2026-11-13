@@ -40,6 +40,7 @@ const defaultFeatures: FeatureSettings = {
 	publicResourcesEnabled: true,
 	compilerEnabled: true,
 	gamesEnabled: true,
+	webdavEnabled: true,
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);

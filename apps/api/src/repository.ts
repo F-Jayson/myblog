@@ -935,13 +935,33 @@ function mapUserClipboard(row: RowDataPacket): UserClipboard {
 	};
 }
 
-async function lockedUserUsage(connection: Awaited<ReturnType<typeof pool.getConnection>>, userId: number) {
+// The WebDAV tables arrive with a manual migration on older installations. A
+// missing table must not break the existing image/clipboard upload paths, so it
+// is treated as "no drive bytes" until the migration has run.
+async function readDriveBytesForUser(client: mysql.Connection | mysql.Pool, userId: number) {
+	try {
+		const [[row]] = await (client as mysql.Connection).query<RowDataPacket[]>(
+			"SELECT COALESCE(SUM(byte_size), 0) AS bytes FROM drive_nodes WHERE owner_type = 'user' AND owner_id = ?",
+			[userId]
+		);
+		return Number(row?.bytes ?? 0);
+	} catch (error) {
+		if ((error as { code?: string }).code === "ER_NO_SUCH_TABLE") return 0;
+		throw error;
+	}
+}
+
+export async function lockedUserUsage(connection: Awaited<ReturnType<typeof pool.getConnection>>, userId: number) {
 	await connection.query<RowDataPacket[]>("SELECT id FROM comment_users WHERE id = ? FOR UPDATE", [userId]);
 	const [[row]] = await connection.query<RowDataPacket[]>(`SELECT
 		COALESCE((SELECT SUM(byte_size) FROM user_storage_items WHERE user_id = ?), 0) AS images,
 		COALESCE((SELECT SUM(byte_size) FROM user_clipboards WHERE user_id = ?), 0) AS clipboards,
 		COALESCE((SELECT SUM(byte_size) FROM comment_user_stickers WHERE user_id = ?), 0) AS stickers`, [userId, userId, userId]);
-	return { images: Number(row?.images ?? 0), clipboards: Number(row?.clipboards ?? 0), stickers: Number(row?.stickers ?? 0), total: Number(row?.images ?? 0) + Number(row?.clipboards ?? 0) + Number(row?.stickers ?? 0) };
+	const images = Number(row?.images ?? 0);
+	const clipboards = Number(row?.clipboards ?? 0);
+	const stickers = Number(row?.stickers ?? 0);
+	const drive = await readDriveBytesForUser(connection, userId);
+	return { images, clipboards, stickers, drive, total: images + clipboards + stickers + drive };
 }
 
 export async function getActiveStorageMigration(userId: number) {
@@ -981,6 +1001,7 @@ export async function getUserSpace(userId: number) {
 		COALESCE((SELECT SUM(byte_size) FROM user_storage_items WHERE user_id = ? AND kind = 'avatar'), 0) AS avatars,
 		COALESCE((SELECT SUM(byte_size) FROM user_clipboards WHERE user_id = ?), 0) AS clipboards,
 		COALESCE((SELECT SUM(byte_size) FROM comment_user_stickers WHERE user_id = ?), 0) AS stickers`, [userId, userId, userId, userId, userId, userId]);
+	const driveBytes = await readDriveBytesForUser(pool, userId);
 	const categories = {
 		images: Number(row?.images ?? 0),
 		imageHost: Number(row?.imageHost ?? 0),
@@ -988,8 +1009,9 @@ export async function getUserSpace(userId: number) {
 		avatars: Number(row?.avatars ?? 0),
 		clipboards: Number(row?.clipboards ?? 0),
 		stickers: Number(row?.stickers ?? 0),
+		drive: driveBytes,
 	};
-	const usedBytes = categories.images + categories.clipboards + categories.stickers;
+	const usedBytes = categories.images + categories.clipboards + categories.stickers + categories.drive;
 
 	let canSwitchLocation = true;
 	let nextSwitchAvailableAt: string | null = null;
@@ -2096,6 +2118,14 @@ export async function updateCommentStatus(id: number, status: "pending" | "appro
 export async function deleteComment(id: number) {
 	const [result] = await pool.execute<ResultSetHeader>("DELETE FROM comments WHERE id = ?", [id]);
 	return result.affectedRows > 0;
+}
+
+export async function verifyAdminCredentials(username: string, password: string): Promise<AdminUser | null> {
+	const login = username.trim();
+	if (!login || !password) return null;
+	const [[row]] = await pool.query<RowDataPacket[]>("SELECT * FROM admin_users WHERE username = ? LIMIT 1", [login]);
+	if (!row || !Boolean(Number(row.is_active)) || !verifyAdminPassword(password, String(row.password_hash))) return null;
+	return mapAdminUser(row);
 }
 
 export async function authenticateAdmin(username: string, password: string) {

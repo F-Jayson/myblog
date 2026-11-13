@@ -458,7 +458,7 @@ export const api = {
 		} catch { return fallback; }
 	},
 	async features(): Promise<FeatureSettings> {
-		const fallback: FeatureSettings = { commentsEnabled: true, registrationEnabled: true, loginEnabled: true, imageHostingEnabled: true, clipboardEnabled: true, userCenterEnabled: true, publicResourcesEnabled: true, compilerEnabled: true, gamesEnabled: true };
+		const fallback: FeatureSettings = { commentsEnabled: true, registrationEnabled: true, loginEnabled: true, imageHostingEnabled: true, clipboardEnabled: true, userCenterEnabled: true, publicResourcesEnabled: true, compilerEnabled: true, gamesEnabled: true, webdavEnabled: true };
 		try {
 			const result = await request<Partial<FeatureSettings>>("/api/features");
 			return { ...fallback, ...result };

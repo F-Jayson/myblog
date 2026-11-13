@@ -4,10 +4,11 @@ import { createReadStream } from "node:fs";
 import { mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { dirname, extname, resolve, sep } from "node:path";
+import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import cors from "cors";
-import express, { type NextFunction, type Request, type Response } from "express";
+import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import {
@@ -28,6 +29,29 @@ import {
 } from "./accessPassword.js";
 import { ADMIN_DRIVE_CHUNK_BYTES, ADMIN_DRIVE_MAX_BYTES, adminDriveFilePath, contentDispositionAttachment, countsAsDriveDownload, driveDownloadUrl, isDriveToken, normalizeDriveFileName, parseSingleByteRange, safeDriveMimeType } from "./adminDrive.js";
 import { mountAgentRoutes } from "./agentRoutes.js";
+import {
+	DriveError,
+	createDriveFolder,
+	deleteDriveNode,
+	driveBreadcrumbs,
+	driveEtagHeader,
+	getDriveNode,
+	getDriveQuota,
+	joinDrivePath,
+	listDriveChildren,
+	moveDriveNode,
+	normalizeDrivePath,
+	normalizeDriveSegment,
+	openDriveFile,
+	renameDriveNode,
+	saveDriveStream,
+	toDriveItem,
+	userDriveOwner,
+	adminDriveOwner,
+	copyDriveNode,
+	type DriveOwner,
+} from "./driveStore.js";
+import { createWebDavRouter, DRIVE_DAV_MOUNT } from "./webdav.js";
 import { config } from "./config.js";
 import { deletePublicFile, deleteUserSpaceFile, getR2ObjectStream, isR2Configured, savePublicFile, saveUserSpaceFile } from "./storage.js";
 import { pool } from "./db.js";
@@ -235,8 +259,23 @@ const userStorageUpload = multer({
 });
 
 app.disable("x-powered-by");
-app.use(cors({ origin: config.clientOrigin.split(","), credentials: false }));
-app.use(express.json({ limit: "32mb" }));
+const corsMiddleware = cors({ origin: config.clientOrigin.split(","), credentials: false });
+app.use((req, res, next) => {
+	// WebDAV clients depend on the DAV-specific OPTIONS response; the generic
+	// CORS preflight handler would otherwise answer OPTIONS /dav before the
+	// DAV router sees it.
+	if (req.path === DRIVE_DAV_MOUNT || req.path.startsWith(`${DRIVE_DAV_MOUNT}/`)) { next(); return; }
+	corsMiddleware(req, res, next);
+});
+const jsonBodyParser = express.json({ limit: "32mb" });
+app.use((req, res, next) => {
+	// WebDAV request bodies are XML/propfind payloads or raw file bytes; the
+	// JSON parser would either reject or consume them before the DAV router.
+	if (req.path === DRIVE_DAV_MOUNT || req.path.startsWith(`${DRIVE_DAV_MOUNT}/`)) { next(); return; }
+	// Drive uploads stream raw bytes straight into the storage layer.
+	if (req.path === "/api/user/drive/upload" || req.path === "/api/admin/webdav/upload") { next(); return; }
+	jsonBodyParser(req, res, next);
+});
 app.use("/api/uploads/user-space", (_req, res) => { res.status(404).end(); });
 app.use("/api/uploads/admin-drive", (_req, res) => { res.status(404).end(); });
 app.use("/api/uploads", express.static(uploadsDirectory, { fallthrough: true, index: false, maxAge: "1d" }));
@@ -260,6 +299,7 @@ function auditExcludedRequest(method: string, path: string) {
 	// Reading the audit stream must not add another row on every refresh. Keep
 	// mutating audit actions (such as clear) observable through the same hook.
 	if ((method === "GET" || method === "HEAD") && (path === "/api/admin/audit-logs" || path === "/api/admin/audit")) return true;
+	if (path === DRIVE_DAV_MOUNT || path.startsWith(`${DRIVE_DAV_MOUNT}/`)) return true;
 	if ((method === "GET" || method === "HEAD") && path.startsWith("/api/files/")) return true;
 	if ((method === "GET" || method === "HEAD") && path.startsWith("/api/games")) return true;
 	return false;
@@ -276,15 +316,18 @@ app.use((req, res, next) => {
 	const started = performance.now();
 	res.on("finish", () => {
 		const durationMs = Math.round(performance.now() - started);
-		const metricPath = req.path.startsWith("/api/files/") ? "/api/files/:token" : req.path;
+		// originalUrl keeps the full path (including /dav) even while a mounted
+		// router has temporarily stripped it from req.url.
+		const auditPath = (req.originalUrl || req.url).split("?")[0] || req.path;
+		const metricPath = auditPath.startsWith("/api/files/") ? "/api/files/:token" : auditPath;
 		recordRequest({ method: req.method, path: metricPath, status: res.statusCode, durationMs });
-		if (auditExcludedRequest(req.method, req.path)) return;
+		if (auditExcludedRequest(req.method, auditPath)) return;
 		const admin = (req as RequestWithAdmin).adminUser;
 		void writeAuditLog({
 			ip: requestClientIp(req),
 			method: req.method,
-			path: req.path,
-			action: req.method + " " + req.path,
+			path: auditPath,
+			action: req.method + " " + auditPath,
 			statusCode: res.statusCode,
 			actorRole: admin?.role,
 			actorId: admin?.id,
@@ -299,6 +342,13 @@ app.use((req, res, next) => {
 	});
 	next();
 });
+
+app.use(
+	DRIVE_DAV_MOUNT,
+	createWebDavRouter({
+		isUserWebDavEnabled: async () => (await getFeatureSettings()).webdavEnabled,
+	}),
+);
 
 function parsePositiveInteger(value: unknown, fallback: number, max: number) {
 	const parsed = Number(value);
@@ -322,6 +372,7 @@ const FEATURE_KEYS = [
 	"publicResourcesEnabled",
 	"compilerEnabled",
 	"gamesEnabled",
+	"webdavEnabled",
 ] as const;
 type FeatureKey = typeof FEATURE_KEYS[number];
 type FeatureSettings = Record<FeatureKey, boolean>;
@@ -335,6 +386,7 @@ const DEFAULT_FEATURE_SETTINGS: FeatureSettings = {
 	publicResourcesEnabled: true,
 	compilerEnabled: true,
 	gamesEnabled: true,
+	webdavEnabled: true,
 };
 
 function normalizeFeatureSettings(value: unknown): FeatureSettings {
@@ -721,6 +773,193 @@ const userProfilePatchInput = z.object({
 app.get("/api/user/space", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try { res.json(await getUserSpace(req.commentUser!.id)); } catch (error) { next(error); }
 });
+
+const driveFolderInput = z.object({
+	path: z.string().trim().max(700).optional(),
+	name: z.string().trim().min(1).max(240),
+}).strict();
+const driveRenameInput = z.object({
+	path: z.string().trim().min(1).max(700),
+	name: z.string().trim().min(1).max(240),
+}).strict();
+
+function driveRequestPath(req: Request) {
+	return normalizeDrivePath(queryText(req.query.path) ?? "/");
+}
+
+function driveUploadContentLength(req: Request) {
+	const raw = req.header("content-length");
+	if (!raw) return undefined;
+	const value = Number(raw);
+	return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function driveWebDavEndpoint(req: Request) {
+	const forwardedProto = req.header("x-forwarded-proto")?.split(",")[0]?.trim();
+	const forwardedHost = req.header("x-forwarded-host")?.split(",")[0]?.trim();
+	const proto = forwardedProto || req.protocol || "http";
+	const host = forwardedHost || req.header("host") || `localhost:${config.port}`;
+	return `${proto}://${host}${DRIVE_DAV_MOUNT}`;
+}
+
+function driveWebDavInfo(req: Request, owner: DriveOwner) {
+	return { url: driveWebDavEndpoint(req), username: owner.username, root: "/" };
+}
+
+function userDriveOwnerFromRequest(req: RequestWithCommentUser) {
+	const user = req.commentUser!;
+	return userDriveOwner({ id: user.id, account: user.account, nickname: user.nickname, storageLocation: user.storageLocation });
+}
+
+async function adminDriveOwnerFromRequest(req: RequestWithAdmin) {
+	const admin = req.adminUser!;
+	return adminDriveOwner({ id: admin.id, username: admin.username, displayName: admin.displayName });
+}
+
+async function respondDriveListing(req: Request, res: Response, owner: DriveOwner) {
+	const path = driveRequestPath(req);
+	const node = await getDriveNode(owner, path);
+	if (!node) throw new DriveError(404, "路径不存在");
+	if (node.type !== "folder") throw new DriveError(400, "路径不是目录");
+	const [items, quota] = await Promise.all([listDriveChildren(owner, path), getDriveQuota(owner)]);
+	res.json({
+		path,
+		breadcrumbs: driveBreadcrumbs(path),
+		items: items.map(toDriveItem),
+		quota,
+		webdav: driveWebDavInfo(req, owner),
+		storageLocation: owner.storageLocation,
+	});
+}
+
+async function respondDriveInfo(req: Request, res: Response, owner: DriveOwner) {
+	const path = driveRequestPath(req);
+	const node = await getDriveNode(owner, path);
+	if (!node) throw new DriveError(404, "路径不存在");
+	res.json({
+		path,
+		breadcrumbs: driveBreadcrumbs(path),
+		item: path === "/" ? null : toDriveItem(node),
+		quota: await getDriveQuota(owner),
+		webdav: driveWebDavInfo(req, owner),
+		storageLocation: owner.storageLocation,
+	});
+}
+
+async function respondDriveUpload(req: Request, res: Response, owner: DriveOwner) {
+	const parent = driveRequestPath(req);
+	const rawName = queryText(req.query.name);
+	if (!rawName) throw new DriveError(400, "缺少文件名");
+	const target = joinDrivePath(parent, normalizeDriveSegment(rawName));
+	const result = await saveDriveStream(owner, target, req as unknown as Readable, {
+		mimeType: req.header("content-type"),
+		contentLength: driveUploadContentLength(req),
+	});
+	res.status(201).json({ item: toDriveItem(result.node), quota: await getDriveQuota(owner) });
+}
+
+async function respondDriveFolder(req: Request, res: Response, owner: DriveOwner) {
+	const input = driveFolderInput.parse(req.body);
+	const target = joinDrivePath(normalizeDrivePath(input.path ?? "/"), normalizeDriveSegment(input.name));
+	const node = await createDriveFolder(owner, target);
+	res.status(201).json({ item: toDriveItem(node), quota: await getDriveQuota(owner) });
+}
+
+async function respondDriveRename(req: Request, res: Response, owner: DriveOwner) {
+	const input = driveRenameInput.parse(req.body);
+	const node = await renameDriveNode(owner, normalizeDrivePath(input.path), input.name);
+	res.json({ item: toDriveItem(node), quota: await getDriveQuota(owner) });
+}
+
+async function respondDriveDelete(req: Request, res: Response, owner: DriveOwner) {
+	const deleted = await deleteDriveNode(owner, driveRequestPath(req));
+	res.json({ ok: true, deleted, quota: await getDriveQuota(owner) });
+}
+
+function driveEtagMatches(header: string | undefined, etag: string) {
+	if (!header) return false;
+	const quoted = driveEtagHeader(etag);
+	return header.split(",").map((value) => value.trim()).some((value) => value === "*" || value === quoted);
+}
+
+async function respondDriveFile(req: Request, res: Response, owner: DriveOwner) {
+	const handle = await openDriveFile(owner, driveRequestPath(req));
+	const etag = driveEtagHeader(handle.node.etag);
+	if (driveEtagMatches(req.header("if-none-match"), handle.node.etag)) {
+		res.status(304).setHeader("ETag", etag).end();
+		return;
+	}
+	let start = 0;
+	let end = Math.max(0, handle.size - 1);
+	let status = 200;
+	const rangeHeader = req.header("range");
+	if (rangeHeader && handle.localPath) {
+		const range = parseSingleByteRange(rangeHeader, handle.size);
+		if (range === "unsatisfiable") {
+			res.status(416).setHeader("Content-Range", `bytes */${handle.size}`).end();
+			return;
+		}
+		if (range) {
+			start = range.start;
+			end = range.end;
+			status = 206;
+			res.setHeader("Content-Range", `bytes ${start}-${end}/${handle.size}`);
+		}
+	}
+	res.status(status);
+	res.setHeader("Content-Type", handle.node.mimeType || "application/octet-stream");
+	res.setHeader("Content-Length", String(handle.stream ? handle.size : Math.max(0, end - start + 1)));
+	res.setHeader("Content-Disposition", contentDispositionAttachment(handle.node.name));
+	res.setHeader("Accept-Ranges", "bytes");
+	res.setHeader("ETag", etag);
+	res.setHeader("Cache-Control", "private, no-cache");
+	const updated = handle.node.updatedAt ? new Date(handle.node.updatedAt.replace(" ", "T")) : null;
+	if (updated && !Number.isNaN(updated.getTime())) res.setHeader("Last-Modified", updated.toUTCString());
+	if (req.method === "HEAD") { res.end(); return; }
+	if (handle.stream) { handle.stream.pipe(res); return; }
+	if (handle.localPath) { createReadStream(handle.localPath, { start, end }).pipe(res); return; }
+	res.end();
+}
+
+function registerDriveRoutes(
+	prefix: string,
+	guards: RequestHandler[],
+	ownerOf: (req: Request) => Promise<DriveOwner> | DriveOwner,
+) {
+	app.get(prefix, ...guards, async (req, res, next) => {
+		try { await respondDriveListing(req, res, await ownerOf(req)); } catch (error) { next(error); }
+	});
+	app.get(`${prefix}/info`, ...guards, async (req, res, next) => {
+		try { await respondDriveInfo(req, res, await ownerOf(req)); } catch (error) { next(error); }
+	});
+	app.get(`${prefix}/file`, ...guards, async (req, res, next) => {
+		try { await respondDriveFile(req, res, await ownerOf(req)); } catch (error) { next(error); }
+	});
+	app.post(`${prefix}/upload`, ...guards, async (req, res, next) => {
+		try { await respondDriveUpload(req, res, await ownerOf(req)); } catch (error) { next(error); }
+	});
+	app.post(`${prefix}/folder`, ...guards, async (req, res, next) => {
+		try { await respondDriveFolder(req, res, await ownerOf(req)); } catch (error) { next(error); }
+	});
+	app.patch(prefix, ...guards, async (req, res, next) => {
+		try { await respondDriveRename(req, res, await ownerOf(req)); } catch (error) { next(error); }
+	});
+	app.delete(prefix, ...guards, async (req, res, next) => {
+		try { await respondDriveDelete(req, res, await ownerOf(req)); } catch (error) { next(error); }
+	});
+}
+
+registerDriveRoutes(
+	"/api/user/drive",
+	[requireFeature("webdavEnabled", "WebDAV 云盘当前已关闭"), requireCommentUser],
+	(req) => userDriveOwnerFromRequest(req as RequestWithCommentUser),
+);
+registerDriveRoutes(
+	"/api/admin/webdav",
+	[requireAdmin],
+	(req) => adminDriveOwnerFromRequest(req as RequestWithAdmin),
+);
+
 
 app.get("/api/user/storage-location", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try {
@@ -2101,6 +2340,7 @@ const featureSettingsInput = z.object({
 	publicResourcesEnabled: z.boolean().optional(),
 	compilerEnabled: z.boolean().optional(),
 	gamesEnabled: z.boolean().optional(),
+	webdavEnabled: z.boolean().optional(),
 }).strict();
 
 app.get("/api/admin/features", requireAdmin, async (_req, res, next) => {
@@ -3504,6 +3744,10 @@ app.delete("/api/admin/app-releases/schedule", requireAdmin, async (req: Request
 mountAgentRoutes(app, { requireAdmin, imageUpload: agentImageUpload });
 
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
+	if (error instanceof DriveError) {
+		res.status(error.status).json({ error: error.message });
+		return;
+	}
 	if (error instanceof CompilerError) {
 		res.status(error.statusCode).json({ error: error.message, code: error.code });
 		return;

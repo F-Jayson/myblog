@@ -77,6 +77,7 @@ import { AuthImage } from "../AuthImage";
 import { markdownToPlainText, parseDynamicBody, parseDynamicImageSize, withDynamicImageSize, type DynamicImageSize } from "../markdown";
 import { absoluteMediaUrl } from "../media";
 import AdminDrive from "./AdminDrive";
+import { AdminDrivePage } from "../WebDavDrive";
 import AdminAgents from "./AdminAgents";
 import AdminAppRelease from "./AdminAppRelease";
 import MdEditorBridge from "./MdEditorBridge";
@@ -884,6 +885,12 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
         icon: HardDrive,
       },
       {
+        href: "/admin/webdav",
+        label: "WebDAV 云盘",
+        hint: "网页管理云盘并挂载到设备",
+        icon: Cloud,
+      },
+      {
         href: "/admin/app-release",
         label: "应用发布",
         hint: "课表安装包与下载源",
@@ -987,6 +994,7 @@ function AdminShell() {
   else if (location.pathname === "/admin/users") page = <AdminUsers />;
   else if (location.pathname === "/admin/storage") page = <AdminUserSpace />;
   else if (location.pathname === "/admin/drive") page = <AdminDrive />;
+  else if (location.pathname === "/admin/webdav") page = <AdminDrivePage />;
   else if (location.pathname === "/admin/app-release") page = <AdminAppRelease />;
   else if (location.pathname === "/admin/site") page = <AdminSiteSettings />;
   else if (location.pathname === "/admin/accounts") page = <AdminAccounts />;
@@ -3935,6 +3943,7 @@ type FeatureSettings = {
   publicResourcesEnabled: boolean;
   compilerEnabled: boolean;
   gamesEnabled: boolean;
+  webdavEnabled: boolean;
 };
 
 const DEFAULT_FEATURE_SETTINGS: FeatureSettings = {
@@ -3947,6 +3956,7 @@ const DEFAULT_FEATURE_SETTINGS: FeatureSettings = {
   publicResourcesEnabled: true,
   compilerEnabled: true,
   gamesEnabled: true,
+  webdavEnabled: true,
 };
 
 const FEATURE_SETTINGS_ENDPOINT = "/api/admin/features";
@@ -3965,6 +3975,7 @@ const FEATURE_SETTINGS_FIELDS: Array<{
   { key: "publicResourcesEnabled", label: "公开资源访问", description: "允许通过公开链接访问图床图片和剪贴板内容。" },
   { key: "compilerEnabled", label: "在线编译器", description: "允许已登录用户在容器沙箱中运行、格式化和调试代码。" },
   { key: "gamesEnabled", label: "小游戏", description: "开放贪吃蛇、扫雷、2048 和斐波那契 2048，并记录排行榜。" },
+  { key: "webdavEnabled", label: "WebDAV 云盘", description: "开放注册用户的 WebDAV 挂载与网页文件管理器；管理员网盘始终可用。" },
 ];
 
 function normalizeFeatureSettings(value: unknown): FeatureSettings {
