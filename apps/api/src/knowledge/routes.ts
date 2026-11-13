@@ -18,6 +18,7 @@ import {
 	getSharedDocumentSnapshotService,
 	getUserEligibility,
 	getUserLibraryTree,
+	getVisibleLibraryRecord,
 	getUserQuotaUsageService,
 	listCommentsService,
 	listDocumentAttachmentsService,
@@ -189,8 +190,8 @@ knowledgeRoutes.get("/libraries/:id", async (req: Request, res: Response, next: 
 			res.status(403).json({ error: "KB_LIBRARY_NOT_ALLOWED", message: "该知识库未在当前 AI 授权范围内" });
 			return;
 		}
-		const lib = await getLibraryRecord(id);
-		if (!lib || lib.deletedAt) {
+		const lib = await getVisibleLibraryRecord(userId, id);
+		if (!lib) {
 			res.status(404).json({ error: "KB_NOT_FOUND", message: "知识库不存在" });
 			return;
 		}

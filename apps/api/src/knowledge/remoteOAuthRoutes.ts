@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { Router } from "express";
 import { z } from "zod";
+import { publicRequestOrigin } from "../clientIp.js";
 import { config } from "../config.js";
 import type { RowDataPacket } from "mysql2/promise";
 import { pool } from "../db.js";
@@ -51,9 +52,9 @@ async function assertClientAuthenticated(
 
 // 工具函数：获取基础 Issuer URL
 function getIssuer(req: Request): string {
-	const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
-	const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${config.port}`;
-	return `${proto}://${host}`;
+	const origin = publicRequestOrigin(req);
+	const host = origin.host || `localhost:${config.port}`;
+	return `${origin.protocol}://${host}`;
 }
 
 // =============================================================================

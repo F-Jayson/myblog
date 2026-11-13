@@ -665,9 +665,11 @@ export async function getLibraryTreeNodes(
 		        d.current_revision_id,
 		        d.published_revision_id,
 		        d.deleted_at,
-		        COALESCE(r.title, '') AS title
+		        COALESCE(r.title, '') AS title,
+		        COALESCE(pr.title, '') AS published_title
 		 FROM kb_documents d
 		 LEFT JOIN kb_revisions r ON r.id = d.current_revision_id
+		 LEFT JOIN kb_revisions pr ON pr.id = d.published_revision_id
 		 WHERE d.library_id = ? ${deletedCondition}
 		 ORDER BY d.sort_order ASC, d.id ASC`,
 		[libraryId],
@@ -681,6 +683,7 @@ export async function getLibraryTreeNodes(
 		sortOrder: Number(r.sort_order),
 		accessMode: r.access_mode as KbAccessMode,
 		title: String(r.title),
+		publishedTitle: String(r.published_title ?? ""),
 		version: Number(r.version),
 		currentRevisionId: r.current_revision_id !== null ? Number(r.current_revision_id) : null,
 		publishedRevisionId: r.published_revision_id !== null ? Number(r.published_revision_id) : null,

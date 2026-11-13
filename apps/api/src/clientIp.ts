@@ -14,14 +14,26 @@ export interface ClientIpRequest {
  * （每个请求换一个值就绕过）。因此只有显式打开 TRUST_PROXY 才读取该头部，并且取
  * 最后一段：反向代理会把真实地址追加在伪造链的末尾，第一段恰恰是最容易被伪造的。
  */
+export function lastForwardedValue(value: string | undefined): string {
+	if (!value) return "";
+	const parts = value.split(",").map((part) => part.trim()).filter(Boolean);
+	return parts[parts.length - 1] ?? "";
+}
+
 export function resolveClientIp(req: ClientIpRequest): string {
 	if (config.trustProxy) {
-		const forwarded = req.header("x-forwarded-for");
-		if (forwarded) {
-			const parts = forwarded.split(",").map((part) => part.trim()).filter(Boolean);
-			const last = parts[parts.length - 1];
-			if (last) return last;
-		}
+		const last = lastForwardedValue(req.header("x-forwarded-for"));
+		if (last) return last;
 	}
 	return req.ip || req.socket?.remoteAddress || "";
+}
+
+/** 直连时忽略客户端自带的转发头，避免把 Cookie 和 OAuth issuer 指到攻击者的域名。 */
+export function publicRequestOrigin(req: ClientIpRequest & { protocol?: string }): { protocol: string; host: string; secure: boolean } {
+	const host = req.header("host") || "";
+	const protocol = (req.protocol || "http").split(",")[0]?.trim() || "http";
+	if (!config.trustProxy) return { protocol, host, secure: protocol === "https" };
+	const forwardedProtocol = lastForwardedValue(req.header("x-forwarded-proto")) || protocol;
+	const forwardedHost = lastForwardedValue(req.header("x-forwarded-host")) || host;
+	return { protocol: forwardedProtocol, host: forwardedHost, secure: forwardedProtocol === "https" };
 }

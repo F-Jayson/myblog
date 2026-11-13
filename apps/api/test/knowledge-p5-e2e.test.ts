@@ -253,8 +253,10 @@ describe("P5: V1 综合端到端全链路验收测试 (覆盖 A01–A22 闭环)"
 	});
 
 	it("E2E-5 分享链接高熵与即时撤销闭环 (A10)", async () => {
+		// 上一用例已撤回发布。分享链接只交付已发布快照，所以先重新发布。
+		await publishKnowledgeDocumentService(ownerUserId, docId);
 		// 1. 创建只读分享链接
-		const link = await createShareLinkService(ownerUserId, docId, { expireDays: 3 });
+		const link = await createShareLinkService(ownerUserId, docId, { expiresInDays: 3 });
 		assert.ok(link.token);
 		assert.ok(link.token.length >= 32);
 

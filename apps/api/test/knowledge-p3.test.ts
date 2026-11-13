@@ -8,6 +8,7 @@ import {
 	createShareLinkService,
 	createUserLibrary,
 	getDocumentDetail,
+	getKnowledgeDocument,
 	getPublicDocumentSnapshotService,
 	getSharedDocumentSnapshotService,
 	listCommentsService,
@@ -22,6 +23,7 @@ import {
 	saveKnowledgeDocument,
 	unpublishKnowledgeDocumentService,
 	updateDocumentAccessService,
+	updateLibrary,
 	upsertLibraryMemberService,
 	KbAccessDeniedError,
 	KbNotFoundError,
@@ -218,11 +220,21 @@ describe("P3: 协作、受限ACL、草稿公开彻底隔离、分享链接与评
 			}
 		);
 
-		// 2. 发布快照 v2
+		// 2. 发布快照 v2。私有库即使发布了，匿名公开接口也不能读取。
 		const pubResult = await publishKnowledgeDocumentService(ownerUserId, docAId);
 		assert.ok(pubResult.publishedRevisionId > 0);
+		await assert.rejects(
+			async () => {
+				await getPublicDocumentSnapshotService(docAId);
+			},
+			(err: unknown) => {
+				assert.ok(err instanceof KbNotFoundError);
+				return true;
+			}
+		);
+		await updateLibrary(libraryId, { visibility: "public" });
 
-		// 3. 公开接口即可读取到已发布快照
+		// 3. 公开库的公开接口即可读取到已发布快照
 		const snapshot = await getPublicDocumentSnapshotService(docAId);
 		assert.equal(snapshot.id, docAId);
 		assert.equal(snapshot.title, "公开方案白皮书 - Editor修改版");
@@ -243,7 +255,7 @@ describe("P3: 协作、受限ACL、草稿公开彻底隔离、分享链接与评
 		// 6. 撤回公开发布快照
 		await unpublishKnowledgeDocumentService(ownerUserId, docAId);
 
-		// 7. 撤回后公开接口立即 404
+		// 7. 撤回后公开接口立即 404，并把库恢复为私有，避免影响后续协作用例
 		await assert.rejects(
 			async () => {
 				await getPublicDocumentSnapshotService(docAId);
@@ -253,9 +265,27 @@ describe("P3: 协作、受限ACL、草稿公开彻底隔离、分享链接与评
 				return true;
 			}
 		);
+		await updateLibrary(libraryId, { visibility: "private" });
 	});
 
 	it("A10 安全分享链接：高熵哈希、免登录只读访问与即时撤销", async () => {
+		await assert.rejects(
+			async () => {
+				await createShareLinkService(viewerUserId, docAId, { expiresInDays: 7 });
+			},
+			(err: unknown) => {
+				assert.ok(err instanceof KbAccessDeniedError);
+				return true;
+			}
+		);
+		await publishKnowledgeDocumentService(ownerUserId, docAId);
+		const published = await getKnowledgeDocument(ownerUserId, docAId);
+		await saveKnowledgeDocument(ownerUserId, docAId, {
+			expectedVersion: published.version,
+			title: published.title,
+			markdown: "SHARE_SHOULD_NOT_SEE_THIS_DRAFT",
+		});
+
 		// 1. 创建分享链接（7 天有效期）
 		const shareLink = await createShareLinkService(ownerUserId, docAId, {
 			expiresInDays: 7,
@@ -265,10 +295,11 @@ describe("P3: 协作、受限ACL、草稿公开彻底隔离、分享链接与评
 		assert.ok(shareLink.token.length >= 32);
 		assert.ok(shareLink.url.startsWith("/ks/"));
 
-		// 2. 通过分享 Token 免登录读取文档快照
+		// 2. 通过分享 Token 免登录读取已发布快照，而不是之后的草稿
 		const sharedData = await getSharedDocumentSnapshotService(shareLink.token);
 		assert.equal(sharedData.document.id, docAId);
 		assert.equal(sharedData.library.id, libraryId);
+		assert.equal(sharedData.document.markdown.includes("SHARE_SHOULD_NOT_SEE_THIS_DRAFT"), false);
 
 		// 3. 撤销分享链接
 		await revokeShareLinkService(ownerUserId, shareLink.id);

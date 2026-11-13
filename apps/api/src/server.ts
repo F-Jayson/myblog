@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { createReadStream } from "node:fs";
 import { mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
@@ -72,7 +72,10 @@ import {
 } from "./knowledge/index.js";
 import { gameRouter } from "./games.js";
 import { locateIp, warmIpLocation } from "./ipLocation.js";
-import { resolveClientIp } from "./clientIp.js";
+import { publicRequestOrigin, resolveClientIp } from "./clientIp.js";
+import { ImageRejectedError, promoteStoredImage, sniffImageMime } from "./imageSignature.js";
+import { loginGate } from "./loginThrottle.js";
+import { KbError } from "./knowledge/errors.js";
 import {
 	archivePosts,
 	authenticateAdmin,
@@ -278,7 +281,15 @@ app.use((req, res, next) => {
 });
 app.use("/api/uploads/user-space", (_req, res) => { res.status(404).end(); });
 app.use("/api/uploads/admin-drive", (_req, res) => { res.status(404).end(); });
-app.use("/api/uploads", express.static(uploadsDirectory, { fallthrough: true, index: false, maxAge: "1d" }));
+app.use("/api/uploads", express.static(uploadsDirectory, {
+	fallthrough: true,
+	index: false,
+	maxAge: "1d",
+	setHeaders(response) {
+		response.setHeader("X-Content-Type-Options", "nosniff");
+		response.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+	},
+}));
 function auditExcludedRequest(method: string, path: string) {
 	if (path === "/api/health" || path === "/api/wallpaper" || path.startsWith("/api/uploads/")) return true;
 	// Compiler source and stdin are user code; never persist them in the audit
@@ -306,6 +317,18 @@ function auditExcludedRequest(method: string, path: string) {
 }
 function requestClientIp(req: Request) {
 	return resolveClientIp(req);
+}
+
+function beginPasswordAttempt(req: Request, res: Response, account: string) {
+	const ip = resolveClientIp(req) || "unknown";
+	const normalized = account.trim().toLowerCase() || "unknown";
+	const decision = loginGate.check("password", ip, normalized);
+	if (!decision.allowed) {
+		res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+		res.status(429).json({ error: "尝试次数过多，请稍后再试" });
+		return null;
+	}
+	return { ip, account: normalized };
 }
 function requestAuditPayload(req: Request) {
 	return req.method === "GET" || req.method === "HEAD" ? req.query : req.body;
@@ -481,6 +504,10 @@ function userImageUploadRoute(kind: UserStorageKind, defaultPublic: boolean) {
 				const limitViews = parseBooleanInput(req.body?.limitViews, false);
 				const rawMaxViews = req.body?.maxViews !== undefined ? Number(req.body.maxViews) : null;
 				const maxViews = limitViews && rawMaxViews && Number.isFinite(rawMaxViews) ? Math.max(1, Math.floor(rawMaxViews)) : null;
+				const image = await promoteStoredImage(req.file.path, req.file.filename);
+				req.file.filename = image.filename;
+				req.file.path = image.path;
+				req.file.mimetype = image.mimeType;
 				const targetStorage = req.commentUser.storageLocation === "cloudflare" ? "cloudflare" : "server";
 				const saved = await saveUserSpaceFile({
 					filename: req.file.filename,
@@ -533,14 +560,25 @@ app.post("/api/admin/login", async (req, res, next) => {
 		const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
 		const password = typeof req.body?.password === "string" ? req.body.password : "";
 		const legacyToken = typeof req.body?.token === "string" ? req.body.token.trim() : "";
-		if (legacyToken && config.adminToken && legacyToken === config.adminToken) {
+		const attempt = beginPasswordAttempt(req, res, username || "legacy");
+		if (!attempt) return;
+		const legacyTokenBytes = Buffer.from(legacyToken);
+		const adminTokenBytes = Buffer.from(config.adminToken);
+		const legacyMatches = Boolean(legacyToken && config.adminToken && legacyTokenBytes.length === adminTokenBytes.length && timingSafeEqual(legacyTokenBytes, adminTokenBytes));
+		if (legacyMatches) {
+			loginGate.succeed("password", attempt.ip, attempt.account);
 			(req as RequestWithAdmin).adminUser = { id: null, username: config.adminName, displayName: config.adminName, role: "legacy", isActive: true };
 			res.json({ token: legacyToken, username: config.adminName, user: { id: null, username: config.adminName, displayName: config.adminName, role: "legacy" }, expiresIn: "session" });
 			return;
 		}
-		if (!username || !password) { res.status(400).json({ error: "请输入管理员账号和密码" }); return; }
+		if (legacyToken && config.adminToken) loginGate.fail("password", attempt.ip, attempt.account);
+		if (!username || !password) {
+			res.status(legacyToken ? 401 : 400).json({ error: legacyToken ? "账号或密码错误" : "请输入管理员账号和密码" });
+			return;
+		}
 		const result = await authenticateAdmin(username, password);
-		if (!result) { res.status(401).json({ error: "账号或密码错误" }); return; }
+		if (!result) { loginGate.fail("password", attempt.ip, attempt.account); res.status(401).json({ error: "账号或密码错误" }); return; }
+		loginGate.succeed("password", attempt.ip, attempt.account);
 		(req as RequestWithAdmin).adminUser = result.user;
 		res.json({ ...result, username: result.user.username });
 	} catch (error) {
@@ -670,8 +708,12 @@ app.post("/api/auth/login", async (req, res, next) => {
 		const features = await getFeatureSettings();
 		if (!features.loginEnabled) { res.status(403).json({ error: "用户登录功能未开启" }); return; }
 		const input = commentLoginInput.parse(req.body);
-		const result = await authenticateCommentUser(input.account ?? input.username ?? input.email ?? "", input.password);
-		if (!result) { res.status(401).json({ error: "账号或密码错误" }); return; }
+		const account = input.account ?? input.username ?? input.email ?? "";
+		const attempt = beginPasswordAttempt(req, res, account);
+		if (!attempt) return;
+		const result = await authenticateCommentUser(account, input.password);
+		if (!result) { loginGate.fail("password", attempt.ip, attempt.account); res.status(401).json({ error: "账号或密码错误" }); return; }
+		loginGate.succeed("password", attempt.ip, attempt.account);
 		void recordUserDailyLogin(result.user.id).catch(() => undefined);
 		res.json(result);
 	} catch (error) { next(error); }
@@ -681,8 +723,12 @@ app.post("/api/auth/verify-password", async (req, res, next) => {
 		const features = await getFeatureSettings();
 		if (!features.loginEnabled) { res.status(403).json({ error: "用户登录功能未开启" }); return; }
 		const input = commentLoginInput.parse(req.body);
-		const user = await verifyCommentUserCredentials(input.account ?? input.username ?? input.email ?? "", input.password);
-		if (!user) { res.status(401).json({ error: "账号或密码错误" }); return; }
+		const account = input.account ?? input.username ?? input.email ?? "";
+		const attempt = beginPasswordAttempt(req, res, account);
+		if (!attempt) return;
+		const user = await verifyCommentUserCredentials(account, input.password);
+		if (!user) { loginGate.fail("password", attempt.ip, attempt.account); res.status(401).json({ error: "账号或密码错误" }); return; }
+		loginGate.succeed("password", attempt.ip, attempt.account);
 		res.json({ user });
 	} catch (error) { next(error); }
 });
@@ -691,8 +737,12 @@ app.post("/api/user/auth/login", async (req, res, next) => {
 		const features = await getFeatureSettings();
 		if (!features.loginEnabled) { res.status(403).json({ error: "用户登录功能未开启" }); return; }
 		const input = commentLoginInput.parse(req.body);
-		const result = await authenticateCommentUser(input.account ?? input.username ?? input.email ?? "", input.password);
-		if (!result) { res.status(401).json({ error: "账号或密码错误" }); return; }
+		const account = input.account ?? input.username ?? input.email ?? "";
+		const attempt = beginPasswordAttempt(req, res, account);
+		if (!attempt) return;
+		const result = await authenticateCommentUser(account, input.password);
+		if (!result) { loginGate.fail("password", attempt.ip, attempt.account); res.status(401).json({ error: "账号或密码错误" }); return; }
+		loginGate.succeed("password", attempt.ip, attempt.account);
 		void recordUserDailyLogin(result.user.id).catch(() => undefined);
 		res.json(result);
 	} catch (error) { next(error); }
@@ -795,11 +845,9 @@ function driveUploadContentLength(req: Request) {
 }
 
 function driveWebDavEndpoint(req: Request) {
-	const forwardedProto = req.header("x-forwarded-proto")?.split(",")[0]?.trim();
-	const forwardedHost = req.header("x-forwarded-host")?.split(",")[0]?.trim();
-	const proto = forwardedProto || req.protocol || "http";
-	const host = forwardedHost || req.header("host") || `localhost:${config.port}`;
-	return `${proto}://${host}${DRIVE_DAV_MOUNT}`;
+	const origin = publicRequestOrigin(req);
+	const host = origin.host || `localhost:${config.port}`;
+	return `${origin.protocol}://${host}${DRIVE_DAV_MOUNT}`;
 }
 
 function driveWebDavInfo(req: Request, owner: DriveOwner) {
@@ -1324,6 +1372,10 @@ function handlePublicUpload(upload: multer.Multer, field: string) {
 			if (error) { next(error); return; }
 			if (!req.file) { res.status(400).json({ error: "请选择图片文件" }); return; }
 			try {
+				const image = await promoteStoredImage(req.file.path, req.file.filename);
+				req.file.filename = image.filename;
+				req.file.path = image.path;
+				req.file.mimetype = image.mimeType;
 				const stored = await savePublicFile({
 					filename: req.file.filename,
 					localPath: req.file.path,
@@ -1365,6 +1417,10 @@ app.post("/api/user/stickers", requireFeature("commentsEnabled", "评论功能�
 		if (error) { next(error); return; }
 		try {
 			if (!req.file || !req.commentUser) { res.status(400).json({ error: "请选择表情图片" }); return; }
+			const image = await promoteStoredImage(req.file.path, req.file.filename);
+			req.file.filename = image.filename;
+			req.file.path = image.path;
+			req.file.mimetype = image.mimeType;
 			const name = typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim().slice(0, 120) : "我的表情";
 			const stored = await savePublicFile({
 				filename: req.file.filename,
@@ -1533,12 +1589,7 @@ async function assertPublicHttpUrl(value: string) {
 }
 
 function sniffImageType(buffer: Buffer) {
-	if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
-	if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return "image/png";
-	if (buffer.length >= 6 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) return "image/gif";
-	if (buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP") return "image/webp";
-	if (buffer.length >= 12 && buffer.toString("ascii", 4, 8) === "ftyp") return "image/avif";
-	return "";
+	return sniffImageMime(buffer);
 }
 
 function wallpaperFilename(url: URL, contentType: string) {
@@ -2135,6 +2186,10 @@ app.post("/api/uploads/comment-images", requireFeature("commentsEnabled", "评�
 		if (!files.length) { res.status(400).json({ error: "请选择图片" }); return; }
 		try {
 			const items = await Promise.all(files.map(async (file) => {
+				const image = await promoteStoredImage(file.path, file.filename);
+				file.filename = image.filename;
+				file.path = image.path;
+				file.mimetype = image.mimeType;
 				const stored = await savePublicFile({
 					filename: file.filename,
 					localPath: file.path,
@@ -3477,7 +3532,7 @@ app.post("/api/files/:token/unlock", async (req, res, next) => {
 		if (!file) { res.status(404).json({ error: "文件不存在或链接已失效" }); return; }
 		if (!file.accessPasswordHash) { res.json({ ok: true, locked: false }); return; }
 		const grant = await verifyAndApplyAccessPassword(`drive:${file.id}`, req.body?.password, file.accessPasswordHash, req);
-		const secure = req.header("x-forwarded-proto") === "https" || req.secure;
+		const secure = publicRequestOrigin(req).secure || req.secure;
 		res.setHeader("Cache-Control", "no-store");
 		res.setHeader("Set-Cookie", driveAccessCookie(token, grant, secure));
 		res.json({ ok: true, locked: false });
@@ -3744,6 +3799,14 @@ app.delete("/api/admin/app-releases/schedule", requireAdmin, async (req: Request
 mountAgentRoutes(app, { requireAdmin, imageUpload: agentImageUpload });
 
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
+	if (error instanceof ImageRejectedError) {
+		res.status(error.statusCode).json({ error: error.message });
+		return;
+	}
+	if (error instanceof KbError) {
+		res.status(error.statusCode).json({ error: error.code, message: error.message });
+		return;
+	}
 	if (error instanceof DriveError) {
 		res.status(error.status).json({ error: error.message });
 		return;

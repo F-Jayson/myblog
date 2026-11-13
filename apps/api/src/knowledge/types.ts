@@ -170,6 +170,8 @@ export interface TreeNode {
 	version: number;
 	currentRevisionId: number | null;
 	publishedRevisionId: number | null;
+	/** 已发布快照标题。公开目录用它替换工作版本标题，避免草稿标题外泄。 */
+	publishedTitle?: string;
 	deletedAt: string | null;
 	children?: TreeNode[];
 }

@@ -60,6 +60,7 @@ import {
 	type AgentGrant,
 	type AgentScope,
 } from "./agentStore.js";
+import { promoteStoredImage } from "./imageSignature.js";
 import { savePublicFile } from "./storage.js";
 import type { AdminPrincipal } from "./repository.js";
 import { resolveClientIp } from "./clientIp.js";
@@ -387,6 +388,10 @@ async function getAgentPostRoute(req: AgentRequest) {
 async function storeAgentImage(req: AgentRequest, res: Response, next: NextFunction) {
 	if (!req.file || !req.agentGrant) { res.status(400).json({ error: "invalid_request", message: "请上传 jpeg、png、gif、webp 或 avif 图片" }); return; }
 	try {
+		const image = await promoteStoredImage(req.file.path, req.file.filename);
+		req.file.filename = image.filename;
+		req.file.path = image.path;
+		req.file.mimetype = image.mimeType;
 		const stored = await savePublicFile({ filename: req.file.filename, localPath: req.file.path, mimeType: req.file.mimetype });
 		await recordUpload(req.agentGrant, req.file.originalname || req.file.filename, stored.url);
 		res.status(201).json({ url: stored.url, name: req.file.originalname, size: req.file.size, mimeType: req.file.mimetype, markdown: `![](${stored.url})` });

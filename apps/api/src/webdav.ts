@@ -29,6 +29,8 @@ import {
 	type DriveNode,
 	type DriveOwner,
 } from "./driveStore.js";
+import { resolveClientIp } from "./clientIp.js";
+import { loginGate } from "./loginThrottle.js";
 import { verifyAdminCredentials, verifyCommentUserCredentials } from "./repository.js";
 
 export const DRIVE_DAV_MOUNT = "/dav";
@@ -100,10 +102,18 @@ async function authenticate(req: Request, res: Response, isUserWebDavEnabled: ()
 		challenge(res);
 		return null;
 	}
+	const ip = resolveClientIp(req) || "unknown";
+	const decision = loginGate.check("password", ip, username);
+	if (!decision.allowed) {
+		res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+		res.status(429).type("text/plain; charset=utf-8").send("登录尝试过于频繁，请稍后再试");
+		return null;
+	}
 
 	const cached = readCachedPrincipal(username, password);
 	if (cached !== undefined) {
 		if (!cached) {
+			loginGate.fail("password", ip, username);
 			challenge(res);
 			return null;
 		}
@@ -111,11 +121,13 @@ async function authenticate(req: Request, res: Response, isUserWebDavEnabled: ()
 			res.status(403).type("text/plain; charset=utf-8").send("WebDAV 云盘当前已关闭");
 			return null;
 		}
+		loginGate.succeed("password", ip, username);
 		return cached;
 	}
 
 	const admin = await verifyAdminCredentials(username, password);
 	if (admin) {
+		loginGate.succeed("password", ip, username);
 		const principal: DrivePrincipal = { kind: "admin", id: admin.id, username: admin.username, displayName: admin.displayName };
 		rememberPrincipal(username, password, principal);
 		return principal;
@@ -127,6 +139,7 @@ async function authenticate(req: Request, res: Response, isUserWebDavEnabled: ()
 			res.status(403).type("text/plain; charset=utf-8").send("WebDAV 云盘当前已关闭");
 			return null;
 		}
+		loginGate.succeed("password", ip, username);
 		const principal: DrivePrincipal = {
 			kind: "user",
 			id: user.id,
@@ -137,6 +150,7 @@ async function authenticate(req: Request, res: Response, isUserWebDavEnabled: ()
 		rememberPrincipal(username, password, principal);
 		return principal;
 	}
+	loginGate.fail("password", ip, username);
 	rememberPrincipal(username, password, null);
 	challenge(res);
 	return null;
