@@ -33,6 +33,8 @@ sudo ./deploy/manage.sh
 
 脚本固定使用 Node.js 22 和 pnpm `11.22.0`。它会安装 Git、curl、CA 证书、GnuPG、OpenSSL、编译工具、Nginx、Docker、MySQL 客户端和 `util-linux`；本地数据库模式还会安装默认 MySQL 服务端。因此目标服务器需能访问系统软件源和 NodeSource。
 
+`/tools/puml` 绘图工具还需要 Java 17 或更新版本（`apt install openjdk-17-jre-headless`）和中文字体（`apt install fonts-noto-cjk`，缺字体时中文标签会掉字形），这两项不在脚本自动安装范围内。装完执行 `pnpm --filter @jayson-blog/api puml:install` 下载 `plantuml.jar`。类图、ER 图、组件图默认用 `graphviz`（`apt install graphviz`）排版，没装时会自动改用 PlantUML 自带的 Smetana 布局。
+
 在线编译器使用 Docker 作为执行边界。首次部署、更新和重新配置会启动 Docker daemon，将编译器服务用户加入 `docker` 组，并预拉取 JavaScript/TypeScript、Python、Java、C/C++、C#、Go、Rust、PHP、Ruby、Kotlin、Swift 和 Bash 镜像。每次任务仍由 API 以 `--network=none`、非 root 用户、只读根文件系统、临时 `/tmp`、CPU/内存/PID 和超时限制启动一次性容器；代码和标准输入不会写入数据库。请确保服务器允许安装 Docker 并有足够磁盘空间保存这些镜像。
 
 首次部署必须以隐藏输入方式两次输入 `admin` 的初始密码。密码须为 12 至 128 位且不能含换行；脚本会先完成迁移和可选 seed，再通过 CLI 写入该密码并验证。seed 不会创建或修改管理员凭据。

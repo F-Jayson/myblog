@@ -486,6 +486,22 @@ function assertSafeSource(text: string) {
 	}
 }
 
+/**
+ * Graphviz is optional: when it is missing PlantUML refuses class/ER/component
+ * diagrams instead of drawing them, so retry such failures with the bundled
+ * Smetana layout engine. Sequence and activity diagrams never hit this path.
+ */
+const GRAPHVIZ_MISSING = /cannot find graphviz|dot executable does not exist|failed to execute dot/iu;
+
+function withSmetanaLayout(source: string) {
+	if (/!pragma\s+layout\s+smetana/iu.test(source)) return source;
+	const lines = source.split("\n");
+	const startLine = lines.findIndex((line) => /^\s*@startuml\b/iu.test(line));
+	if (startLine >= 0) lines.splice(startLine + 1, 0, "!pragma layout smetana");
+	else lines.unshift("!pragma layout smetana");
+	return lines.join("\n");
+}
+
 async function renderRemote(source: string, timeoutMs: number) {
 	const base = config.puml.serverUrl;
 	if (!base) throw new PumlError("未配置远程 PlantUML 服务", 503, "PUML_NO_REMOTE");
@@ -523,11 +539,16 @@ export async function renderPuml(source: string, options: { ip?: string } = {}):
 			try {
 				svg = await localEngine.render(text, config.puml.timeoutMs);
 			} catch (error) {
-				// A broken JDK or a corrupt jar should not take the tool down when a
-				// remote renderer is configured: only real diagram errors skip this.
-				if (!config.puml.serverUrl || error instanceof PumlRenderFailure) throw error;
-				svg = await renderRemote(text, config.puml.timeoutMs);
-				used = "remote";
+				if (error instanceof PumlRenderFailure && GRAPHVIZ_MISSING.test(error.body)) {
+					svg = await localEngine.render(withSmetanaLayout(text), config.puml.timeoutMs);
+				} else if (!config.puml.serverUrl || error instanceof PumlRenderFailure) {
+					// A broken JDK or a corrupt jar should not take the tool down when a
+					// remote renderer is configured: only real diagram errors skip this.
+					throw error;
+				} else {
+					svg = await renderRemote(text, config.puml.timeoutMs);
+					used = "remote";
+				}
 			}
 		}
 		if (/Welcome to PlantUML!/iu.test(svg)) {

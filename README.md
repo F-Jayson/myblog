@@ -45,7 +45,7 @@ Windows 也可以直接双击根目录中的 `start.bat`。它优先使用 Power
 pnpm --filter @jayson-blog/api puml:install
 ```
 
-本机需要 Java 17 或更新版本（可用 `PUML_JAVA` 指定路径）。没有 Java 或 jar 时工具会给出安装提示；如果配置了 `PUML_SERVER_URL`，API 会改为请求该远程 PlantUML 服务。
+本机需要 Java 17 或更新版本（可用 `PUML_JAVA` 指定路径）。没有 Java 或 jar 时工具会给出安装提示；如果配置了 `PUML_SERVER_URL`，API 会改为请求该远程 PlantUML 服务。类图、ER 图、组件图这类需要图形布局的图默认调用 Graphviz（`dot`，Debian/Ubuntu 上 `apt install graphviz`）；系统里没有 Graphviz 时会自动改用 PlantUML 自带的 Smetana 布局重画一次，只是排版略有差异，不会报错。
 
 安全方面：渲染接口会拒绝 `!include` 读取服务器文件、`!includeurl` 远程抓取以及 `%getenv`、`%load_json` 一类预处理函数（`!include <标准库文件>` 仍然可用），JVM 也从空的临时目录启动。需要注意 PlantUML 的 picoweb 模式只能监听 `0.0.0.0`（它忽略绑定地址设置），端口随机、空闲 5 分钟后自动退出；如果部署在不受信任的局域网里，请用防火墙限制该端口，或改用隔离环境中的 `PUML_SERVER_URL`。
 
