@@ -296,12 +296,13 @@ export async function getDriveNodeOrThrow(owner: DriveOwner, path: string) {
 export async function listDriveChildren(owner: DriveOwner, path: string): Promise<DriveNode[]> {
 	const parent = await getDriveNodeOrThrow(owner, path);
 	if (parent.type !== "folder") throw new DriveError(400, "该路径不是目录");
+	const atRoot = parent.id <= 0;
 	const [rows] = await pool.query<RowDataPacket[]>(
 		`SELECT * FROM drive_nodes
 		 WHERE owner_type = ? AND owner_id = ?
-		   AND parent_id ${parent.id === 0 ? "IS NULL" : "= ?"}
+		   AND ${atRoot ? "(parent_id IS NULL OR parent_id = 0)" : "parent_id = ?"}
 		 ORDER BY node_type = 'folder' DESC, name ASC`,
-		parent.id === 0 ? [owner.kind, owner.id] : [owner.kind, owner.id, parent.id]
+		atRoot ? [owner.kind, owner.id] : [owner.kind, owner.id, parent.id]
 	);
 	return rows.map(mapDriveNode);
 }
@@ -412,8 +413,17 @@ async function withTransaction<T>(work: (connection: DbConnection) => Promise<T>
 	}
 }
 
+/**
+ * Root is a synthetic folder (id 0) and has no row. Its children must be stored
+ * with a NULL parent. Writing 0 makes them invisible, because the root listing
+ * looks for NULL and never matches a numeric zero.
+ */
+function storedParentId(parent: { id: number }): number | null {
+	return parent.id > 0 ? parent.id : null;
+}
+
 async function touchDriveParent(connection: DbConnection, owner: DriveOwner, parentId: number | null) {
-	if (parentId === null) return;
+	if (parentId === null || parentId <= 0) return;
 	await connection.execute("UPDATE drive_nodes SET etag = ?, updated_at = NOW() WHERE owner_type = ? AND owner_id = ? AND id = ?", [
 		newDriveEtag(), owner.kind, owner.id, parentId,
 	]);
@@ -524,10 +534,10 @@ export async function saveDriveStream(owner: DriveOwner, path: string, source: R
 			} else {
 				await connection.execute(
 					"INSERT INTO drive_nodes (owner_type, owner_id, parent_id, path, name, node_type, storage_key, mime_type, byte_size, etag) VALUES (?, ?, ?, ?, ?, 'file', ?, ?, ?, ?)",
-					[owner.kind, owner.id, parentFolder.id, normalized, name, storageKey, mimeType, byteSize, newDriveEtag()]
+					[owner.kind, owner.id, storedParentId(parentFolder), normalized, name, storageKey, mimeType, byteSize, newDriveEtag()]
 				);
 			}
-			await touchDriveParent(connection, owner, parentFolder.id);
+			await touchDriveParent(connection, owner, storedParentId(parentFolder));
 			const saved = await queryDriveNode(connection, owner, normalized);
 			if (!saved) throw new DriveError(500, "文件记录保存失败");
 			return saved;
@@ -551,9 +561,9 @@ export async function createDriveFolder(owner: DriveOwner, path: string): Promis
 		try {
 			const [result] = await connection.execute<ResultSetHeader>(
 				"INSERT INTO drive_nodes (owner_type, owner_id, parent_id, path, name, node_type, storage_key, mime_type, byte_size, etag) VALUES (?, ?, ?, ?, ?, 'folder', '', 'httpd/unix-directory', 0, ?)",
-				[owner.kind, owner.id, parent.id, normalized, name, newDriveEtag()]
+				[owner.kind, owner.id, storedParentId(parent), normalized, name, newDriveEtag()]
 			);
-			await touchDriveParent(connection, owner, parent.id);
+			await touchDriveParent(connection, owner, storedParentId(parent));
 			const row = await queryDriveNode(connection, owner, normalized);
 			if (!row) throw new DriveError(500, "目录创建失败");
 			return { ...row, id: Number(result.insertId) };
@@ -664,8 +674,12 @@ export async function moveDriveNode(owner: DriveOwner, sourcePath: string, desti
 		const removed = destinationExisting ? await deleteNodeRows(connection, owner, destination) : [];
 		const newName = normalizeDriveSegment(drivePathName(destination));
 		await renameSubtree(connection, owner, source, destination, newName);
+		await connection.execute(
+			"UPDATE drive_nodes SET parent_id = ? WHERE owner_type = ? AND owner_id = ? AND path = ?",
+			[storedParentId(destParent), owner.kind, owner.id, destination]
+		);
 		await touchDriveParent(connection, owner, node.parentId);
-		await touchDriveParent(connection, owner, destParent.id);
+		await touchDriveParent(connection, owner, storedParentId(destParent));
 		return removed;
 	});
 	for (const storageKey of replacedStorageKeys) await removeStoredDriveFile(storageKey);
@@ -863,9 +877,9 @@ export async function lockDriveNode(owner: DriveOwner, path: string, options: {
 			const parent = await getParentFolder(connection, owner, normalized);
 			await connection.execute(
 				"INSERT INTO drive_nodes (owner_type, owner_id, parent_id, path, name, node_type, storage_key, mime_type, byte_size, etag) VALUES (?, ?, ?, ?, ?, 'file', '', 'application/octet-stream', 0, ?)",
-				[owner.kind, owner.id, parent.id, normalized, normalizeDriveSegment(drivePathName(normalized)), newDriveEtag()]
+				[owner.kind, owner.id, storedParentId(parent), normalized, normalizeDriveSegment(drivePathName(normalized)), newDriveEtag()]
 			);
-			await touchDriveParent(connection, owner, parent.id);
+			await touchDriveParent(connection, owner, storedParentId(parent));
 		}).catch((error) => {
 			if (isDuplicateError(error)) throw new DriveError(423, "资源已被其他客户端锁定");
 			throw error;

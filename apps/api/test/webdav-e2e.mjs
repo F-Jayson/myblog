@@ -181,14 +181,21 @@ async function run() {
 	check(res.status === 200, `GET /api/user/drive 返回 200（实际 ${res.status}）`);
 	const listing = JSON.parse(res.text);
 	check(Array.isArray(listing.items), "用户列表返回 items 数组");
+	check(listing.items.some((item) => item.path === "/user-file.txt"), `根目录列表包含刚写入的文件（实际 ${(listing.items ?? []).map((item) => item.path).join(",") || "空"}）`);
 	check((listing.webdav?.url ?? "").endsWith("/dav"), `用户列表返回 WebDAV 地址（实际 ${listing.webdav?.url}）`);
 	check(typeof listing.quota?.usedBytes === "number" && listing.quota.limitBytes > 0, "用户列表返回配额");
 
 	res = await call("POST", "/api/user/drive/folder", { headers: { ...bearer, "Content-Type": "application/json" }, body: JSON.stringify({ name: "json-folder" }) });
 	check(res.status === 201, `JSON 创建目录返回 201（实际 ${res.status}）`);
+	res = await call("GET", "/api/user/drive", { headers: bearer });
+	const rootAfterFolder = JSON.parse(res.text);
+	check(rootAfterFolder.items?.some((item) => item.path === "/json-folder" && item.type === "folder"), `根目录列表包含新建文件夹（实际 ${(rootAfterFolder.items ?? []).map((item) => item.path).join(",") || "空"}）`);
 
 	res = await call("POST", "/api/user/drive/upload?path=%2Fjson-folder&name=note.txt", { headers: { ...bearer, "Content-Type": "text/plain" }, body: "hello json" });
 	check(res.status === 201, `JSON 上传返回 201（实际 ${res.status}）`);
+	res = await call("GET", "/api/user/drive?path=%2Fjson-folder", { headers: bearer });
+	const folderListing = JSON.parse(res.text);
+	check(folderListing.items?.some((item) => item.path === "/json-folder/note.txt"), `子目录列表包含刚上传的文件（实际 ${(folderListing.items ?? []).map((item) => item.path).join(",") || "空"}）`);
 
 	res = await call("GET", "/api/user/drive/file?path=%2Fjson-folder%2Fnote.txt", { headers: bearer });
 	check(res.status === 200 && res.text === "hello json", `JSON 下载内容正确（实际 ${res.status}/${res.text}）`);
