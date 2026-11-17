@@ -87,7 +87,7 @@ img { display: block; max-width: 100%; }
 .icon-button:hover, .icon-button.is-active { background: var(--btn-bg); color: var(--primary); }
 .icon-button:active { transform: scale(.94); }
 .mobile-menu-button, .mobile-search-button { display: none; }
-.floating-panel { position: absolute; right: .6rem; top: 4.15rem; z-index: 90; border: 1px solid var(--line); border-radius: var(--radius); background: color-mix(in srgb, var(--card-bg) 85%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: var(--shadow); }
+.floating-panel { position: absolute; right: .6rem; top: calc(var(--navbar-height) + .55rem); z-index: 90; border: 1px solid var(--line); border-radius: var(--radius); background: color-mix(in srgb, var(--card-bg) 85%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: var(--shadow); }
 .search-panel { display: flex; align-items: center; gap: .5rem; width: min(20rem, calc(100vw - 2rem)); padding: .55rem .6rem .55rem .85rem; color: var(--primary); }
 .search-panel input, .drawer-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--deep-text); }
 .search-panel input::placeholder, .drawer-search input::placeholder { color: var(--faint-text); }
@@ -378,7 +378,7 @@ img { display: block; max-width: 100%; }
 .account-entry-user > span:not(.user-avatar) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-menu {
 	position: absolute;
-	top: calc(100% + .55rem);
+	top: calc(100% + 1.5rem);
 	right: 0;
 	z-index: 95;
 	display: grid;
@@ -733,10 +733,11 @@ img { display: block; max-width: 100%; }
 	.desktop-navigation > a, .nav-dropdown > button { align-self: center; height: 2.7rem; margin: 0; padding: 0 .7rem; border-radius: .55rem; color: var(--deep-text); font-size: .95rem; line-height: 1; font-weight: 730; white-space: nowrap; }
 	.desktop-navigation > a.active { background: transparent; color: var(--deep-text); }
 	.desktop-navigation > a:hover, .nav-dropdown:hover > button, .nav-dropdown:focus-within > button { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
-	.dropdown-menu { top: calc(100% + .12rem); min-width: 10.5rem; padding: .5rem; border-color: rgb(255 255 255 / .32); background: rgb(255 255 255 / .62); backdrop-filter: blur(18px) saturate(140%); box-shadow: 0 14px 38px rgb(0 0 0 / .12); }
+	.dropdown-menu { top: calc(100% + 1rem); min-width: 10.5rem; padding: .5rem; border-color: rgb(255 255 255 / .32); background: rgb(255 255 255 / .62); backdrop-filter: blur(18px) saturate(140%); box-shadow: 0 14px 38px rgb(0 0 0 / .12); }
 	:root.dark .dropdown-menu { border-color: rgb(255 255 255 / .14); background: rgb(22 30 30 / .72); }
 	.dropdown-menu a { font-size: .9rem; }
-	.nav-dropdown::after { content: ""; position: absolute; top: calc(100% - .2rem); right: 0; left: 0; height: .5rem; }
+	/* 透明悬停桥，覆盖按钮与弹层之间的空隙，避免鼠标穿过时菜单收起 */
+	.nav-dropdown::after { content: ""; position: absolute; top: 100%; right: 0; left: 0; height: 1.05rem; }
 }
 
 .profile-avatar-link { display: block; width: 100%; border-radius: .75rem; }
