@@ -19,12 +19,14 @@ import {
 	Pipette,
 	Type,
 	Upload,
+	Workflow,
 	Wrench,
 	type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import CodeHighlightPage from "./CodeHighlightPage";
+import PumlPage from "./PumlPage";
 import { useAuth } from "./auth";
 import {
 	MAX_TOOL_FILE_BYTES,
@@ -76,6 +78,7 @@ export const DEV_TOOLS: ToolItem[] = [
 	{ id: "case", title: "大小写转换", description: "转换成大写、小写、驼峰、蛇形或常量命名。", icon: CaseSensitive },
 	{ id: "html", title: "HTML 转义", description: "转义或还原 HTML 文本。", icon: FileCode2 },
 	{ id: "highlight", title: "代码高亮", description: "识别语言并高亮代码，复制到 Word 时使用浅色斑马纹。", icon: Highlighter },
+	{ id: "puml", title: "PlantUML 绘图", description: "粘贴 PlantUML 代码即时出图，可复制图片或导出 PNG / SVG。", icon: Workflow },
 ];
 
 const toolById = (id: string) => DEV_TOOLS.find((tool) => tool.id === id);
@@ -121,7 +124,13 @@ function ResultBox({ label, value }: { label: string; value: string }) {
 }
 
 function ToolSwitcher({ current }: { current: string }) {
-	return <nav className="card dev-tool-switch-bar" aria-label="切换小工具">
+	const barRef = useRef<HTMLElement | null>(null);
+	// The bar scrolls horizontally and the active tool may sit far to the right,
+	// so bring it into view whenever the route changes.
+	useEffect(() => {
+		barRef.current?.querySelector("a.selected")?.scrollIntoView({ block: "nearest", inline: "center" });
+	}, [current]);
+	return <nav ref={barRef} className="card dev-tool-switch-bar" aria-label="切换小工具">
 		<Link to="/tools">全部</Link>
 		{DEV_TOOLS.map((tool) => <Link key={tool.id} to={`/tools/${tool.id}`} className={tool.id === current ? "selected" : ""} aria-current={tool.id === current ? "page" : undefined}>{tool.title}</Link>)}
 	</nav>;
@@ -555,7 +564,7 @@ function Catalog({ notice }: { notice?: string }) {
 			<div>
 				<span className="tool-eyebrow">DEV TOOLS</span>
 				<h2><Wrench size={22} /> 开发小工具</h2>
-				<p>取色、编码、JSON、时间戳和代码高亮都在这台浏览器里运行，内容不会上传。</p>
+				<p>取色、编码、JSON、时间戳和代码高亮都在这台浏览器里运行；PlantUML 绘图由站点后端渲染图片。</p>
 			</div>
 		</header>
 		{notice ? <p className="user-tool-error" role="alert">{notice}</p> : null}
@@ -592,6 +601,7 @@ export default function ToolsPage() {
 	if (!toolId) return <Catalog />;
 	if (!toolById(toolId)) return <Catalog notice="没有这个小工具，请从下面重新选择。" />;
 	if (toolId === "highlight") return <><ToolSwitcher current={toolId} /><CodeHighlightPage /></>;
+	if (toolId === "puml") return <><ToolSwitcher current={toolId} /><PumlPage /></>;
 	const initialColor = toolId === "picker" || toolId === "color" ? search.get("color") ?? undefined : undefined;
 	return <>
 		<ToolSwitcher current={toolId} />

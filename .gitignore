@@ -36,3 +36,8 @@ Thumbs.db
 *.swo
 .vscode/
 .idea/
+
+# PlantUML 渲染引擎（体积较大，用 pnpm puml:install 重新下载）
+data/plantuml/*.jar
+data/plantuml/*.download
+.puml-tmp/

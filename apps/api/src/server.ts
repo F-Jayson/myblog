@@ -58,6 +58,7 @@ import { pool } from "./db.js";
 import { getDatabaseStatus, pingDatabase } from "./db.js";
 import { getProcessSnapshot, getRequestMetrics, recordRequest } from "./telemetry.js";
 import { CompilerError, executeCompiler, formatCompilerCode, listCompilerLanguages } from "./compiler.js";
+import { PUML_MAX_SOURCE_BYTES, PumlError, getPumlStatus, renderPuml, shutdownPuml } from "./puml.js";
 import {
 	knowledgeRoutes,
 	kbAgentRoutes,
@@ -295,6 +296,9 @@ function auditExcludedRequest(method: string, path: string) {
 	// Compiler source and stdin are user code; never persist them in the audit
 	// payload, while the request metrics middleware still records duration/status.
 	if (path.startsWith("/api/compiler/") || path.startsWith("/api/user/compiler/")) return true;
+	// PlantUML diagrams are user content too and can be large; keep them out of
+	// the audit trail while metrics still record duration and status.
+	if (path.startsWith("/api/tools/puml/")) return true;
 	// Agent bodies contain article markdown and one-time device secrets.
 	if (path.startsWith("/api/agent/")) return true;
 	// Knowledge base bodies contain private notes, search terms, and tokens.
@@ -807,6 +811,30 @@ app.post(compilerRoutePaths("format"), requireFeature("compilerEnabled", "在线
 		res.json({ language: input.language.trim().toLowerCase(), code: formattedCode, formattedCode });
 	} catch (error) {
 		compilerErrorResponse(error, res, next);
+	}
+});
+
+// PlantUML rendering for the /tools/puml page. Deliberately not behind a
+// feature flag: it is a public drawing helper, and the render queue plus the
+// per-IP window inside puml.ts are what keep it from being abused.
+const pumlRenderInput = z.object({ source: z.string().min(1).max(PUML_MAX_SOURCE_BYTES) }).strict();
+
+app.get("/api/tools/puml/status", (_req: Request, res: Response) => {
+	res.json(getPumlStatus());
+});
+
+app.post("/api/tools/puml/render", async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const input = pumlRenderInput.parse(req.body);
+		// Syntax errors are a normal tool result, so they come back as 200 with
+		// `ok: false`; only transport-level problems use a 4xx/5xx status.
+		res.json(await renderPuml(input.source, { ip: req.ip ?? "" }));
+	} catch (error) {
+		if (error instanceof PumlError) {
+			res.status(error.statusCode).json({ ok: false, error: { message: error.message, hint: error.hint, code: error.code } });
+			return;
+		}
+		next(error);
 	}
 });
 
@@ -3873,3 +3901,14 @@ const server = app.listen(config.port, config.host, () => {
 });
 server.requestTimeout = 2 * 60 * 60 * 1000;
 server.timeout = 0;
+
+// The PlantUML renderer is a separate JVM; make sure it dies with the API
+// instead of lingering as an orphan (a SIGKILL still leaves it behind, which is
+// what the idle shutdown in puml.ts is for).
+process.once("exit", () => shutdownPuml());
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+	process.once(signal, () => {
+		shutdownPuml();
+		process.exit(0);
+	});
+}

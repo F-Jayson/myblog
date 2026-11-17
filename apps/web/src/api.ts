@@ -676,4 +676,87 @@ async function uploadFile(path: string, file: File): Promise<string> {
 	return url;
 }
 
+// [plantuml] 渲染接口：语法错误也走 200 + ok:false，所以这里不能用 request()（它对非 2xx 直接抛错）
+export type PumlRenderEngine = "local" | "remote";
+
+export type PumlRenderOk = {
+	ok: true;
+	svg: string;
+	engine: PumlRenderEngine;
+	ms: number;
+	width: number | null;
+	height: number | null;
+	cached: boolean;
+};
+
+export type PumlRenderFail = {
+	ok: false;
+	engine?: PumlRenderEngine | null;
+	error: { message: string; line?: number | null; raw?: string; hint?: string };
+	ms?: number;
+};
+
+export type PumlRenderResult = PumlRenderOk | PumlRenderFail;
+
+export type PumlEngineStatus = {
+	available: boolean;
+	engine: PumlRenderEngine | null;
+	java: { found: boolean; path: string | null };
+	jar: { found: boolean; path: string; size: number | null };
+	running: boolean;
+	version: string | null;
+	remoteFallback: boolean;
+};
+
+const PUML_TIMEOUT_MS = 25_000;
+
+export async function renderPuml(source: string, signal?: AbortSignal): Promise<PumlRenderResult> {
+	const controller = new AbortController();
+	const timer = window.setTimeout(() => controller.abort(), PUML_TIMEOUT_MS);
+	const relayAbort = () => controller.abort();
+	signal?.addEventListener("abort", relayAbort, { once: true });
+	try {
+		const response = await fetch(`${API_ORIGIN}/api/tools/puml/render`, {
+			method: "POST",
+			headers: authHeaders({ "content-type": "application/json" }),
+			body: JSON.stringify({ source }),
+			signal: controller.signal,
+		});
+		const text = await response.text();
+		let payload: unknown = null;
+		if (text) { try { payload = JSON.parse(text); } catch { payload = null; } }
+		if (payload && typeof payload === "object" && "ok" in payload) return payload as PumlRenderResult;
+		const fallbackMessage = (payload && typeof payload === "object" && "error" in payload)
+			? String((payload as { error?: unknown }).error ?? "")
+			: "";
+		return { ok: false, error: { message: fallbackMessage || `渲染服务返回了异常响应（HTTP ${response.status}）` } };
+	} catch (error) {
+		if (isAbortError(error)) {
+			return { ok: false, error: { message: signal?.aborted ? "渲染已取消" : "渲染超时，请稍后重试" } };
+		}
+		return { ok: false, error: { message: "无法连接渲染服务，请确认后端服务已启动" } };
+	} finally {
+		window.clearTimeout(timer);
+		signal?.removeEventListener("abort", relayAbort);
+	}
+}
+
+export async function getPumlStatus(): Promise<PumlEngineStatus | null> {
+	try {
+		const payload = await request<Partial<PumlEngineStatus> & { ok?: boolean }>("/api/tools/puml/status");
+		if (!payload || typeof payload.available !== "boolean") return null;
+		return {
+			available: payload.available,
+			engine: payload.engine ?? null,
+			java: payload.java ?? { found: false, path: null },
+			jar: payload.jar ?? { found: false, path: "", size: null },
+			running: payload.running === true,
+			version: payload.version ?? null,
+			remoteFallback: payload.remoteFallback === true,
+		};
+	} catch {
+		return null;
+	}
+}
+
 export { USER_TOKEN_KEY };

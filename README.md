@@ -39,6 +39,16 @@ Windows 也可以直接双击根目录中的 `start.bat`。它优先使用 Power
 
 登录后可在 `/tools/compiler` 使用在线编译器。工具支持 JavaScript/TypeScript、Python、Java、C/C++、C#、Go、Rust、PHP、Ruby、Kotlin、Swift 和 Bash，代码高亮、格式化、标准输入以及双击行号断点调试均在同一页面完成；Python、JavaScript 和 TypeScript 提供真实行追踪，其它语言返回断点元数据和运行诊断。代码执行由 API 调用网络隔离的 Docker 一次性容器完成；未登录用户和被管理员关闭的功能开关都会在前端与 API 两层被拒绝。
 
+`/tools/puml` 是 PlantUML 绘图工具：把 `.puml` 代码粘贴进去就会自动渲染，图片可以复制到剪贴板、导出 PNG（1x/2x/3x）或 SVG，也可以切换配色主题、背景和缩放后全屏查看。图形由 API 侧常驻的 PlantUML 引擎（`plantuml.jar` 的 picoweb 模式）绘制，源码只在本站内使用、不会发送到第三方服务，最多 64 KB，并带缓存、并发上限和按 IP 限流。首次使用前需要下载引擎：
+
+```powershell
+pnpm --filter @jayson-blog/api puml:install
+```
+
+本机需要 Java 17 或更新版本（可用 `PUML_JAVA` 指定路径）。没有 Java 或 jar 时工具会给出安装提示；如果配置了 `PUML_SERVER_URL`，API 会改为请求该远程 PlantUML 服务。
+
+安全方面：渲染接口会拒绝 `!include` 读取服务器文件、`!includeurl` 远程抓取以及 `%getenv`、`%load_json` 一类预处理函数（`!include <标准库文件>` 仍然可用），JVM 也从空的临时目录启动。需要注意 PlantUML 的 picoweb 模式只能监听 `0.0.0.0`（它忽略绑定地址设置），端口随机、空闲 5 分钟后自动退出；如果部署在不受信任的局域网里，请用防火墙限制该端口，或改用隔离环境中的 `PUML_SERVER_URL`。
+
 没有配置数据库时，前端会使用内置演示数据保持页面可预览；配置 MySQL 后，启动脚本会先更新数据库 schema（包括后台公告历史所需的表），再由 API 读取文章、分类、标签、动态和评论。
 
 ## 部署
@@ -116,6 +126,8 @@ GET  /api/compiler/languages
 POST /api/compiler/run
 POST /api/compiler/debug
 POST /api/compiler/format
+GET  /api/tools/puml/status
+POST /api/tools/puml/render
 POST /api/admin/login
 POST /api/admin/logout
 GET  /api/admin/me

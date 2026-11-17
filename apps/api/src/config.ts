@@ -1,7 +1,11 @@
 import dotenv from "dotenv";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 dotenv.config({ path: fileURLToPath(new URL("../../../.env", import.meta.url)) });
+
+// 仓库根目录：.env 与 data/ 都相对它定位，避免受当前工作目录影响
+const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
 function numberFromEnv(value: string | undefined, fallback: number) {
 	const trimmed = value?.trim();
@@ -91,6 +95,17 @@ export const config = {
 		maxQueuedJobs: numberFromEnv(process.env.COMPILER_MAX_QUEUED, 8),
 		memoryLimit: process.env.COMPILER_MEMORY_LIMIT?.trim() || "256m",
 		cpuLimit: process.env.COMPILER_CPU_LIMIT?.trim() || "1",
+	},
+	puml: {
+		// 整个 PlantUML 功能的开关；关闭后本地引擎与远程回退都不会被调用
+		enabled: booleanFromEnv(process.env.PUML_ENABLED, true),
+		// 留空表示自动探测：PATH -> JAVA_HOME/bin -> 常见安装目录
+		javaPath: process.env.PUML_JAVA?.trim() || "",
+		// 相对路径按仓库根解析，默认使用 `pnpm puml:install` 下载的位置
+		jarPath: resolve(repositoryRoot, process.env.PUML_JAR?.trim() || "data/plantuml/plantuml.jar"),
+		// 远程渲染服务地址（例如 https://www.plantuml.com/plantuml），留空表示禁用回退
+		serverUrl: (process.env.PUML_SERVER_URL?.trim() || "").replace(/\/+$/u, ""),
+		timeoutMs: numberFromEnv(process.env.PUML_TIMEOUT_MS, 8_000),
 	},
 	db: {
 		host: process.env.MYSQL_HOST ?? "127.0.0.1",
