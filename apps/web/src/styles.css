@@ -121,6 +121,8 @@ img { display: block; max-width: 100%; }
 .hero-content h1 { margin: 0; font-size: clamp(2.2rem, 5vw, 4rem); line-height: 1.12; font-weight: 680; }
 .hero-content p { margin: .75rem 0 0; font-size: clamp(1rem, 2vw, 1.38rem); color: rgb(255 255 255 / .88); }
 .hero-inner .hero-content h1 { font-size: clamp(2rem, 4vw, 3.4rem); }
+.hero .hero-content.hero-page-content h1 { font-size: clamp(2rem, 4.6vw, 3.4rem); font-weight: 680; letter-spacing: .02em; text-shadow: 0 1px 2px rgb(0 0 0 / .38), 0 6px 28px rgb(0 0 0 / .55); }
+.hero .hero-content.hero-page-content { padding-inline: 1.25rem; }
 .hero-download { position: absolute; right: 1.05rem; left: auto; bottom: calc(15vh + .7rem); z-index: 4; display: grid; place-items: center; width: 1.85rem; height: 1.85rem; border-radius: .42rem; background: color-mix(in srgb, var(--primary) 26%, rgb(255 255 255 / .16)); color: color-mix(in srgb, var(--primary) 18%, rgb(255 255 255 / .78)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 22%, rgb(255 255 255 / .2)); backdrop-filter: blur(8px); pointer-events: auto; }
 .hero-download:hover, .hero-download:focus-visible { background: color-mix(in srgb, var(--primary) 46%, rgb(255 255 255 / .28)); color: #fff; }
 .hero-scroll { position: absolute; right: 0; bottom: 10.5vh; left: 0; z-index: 4; display: grid; place-items: center; width: fit-content; margin: 0 auto; color: rgb(255 255 255 / .9); filter: drop-shadow(0 2px 8px rgb(0 0 0 / .42)); pointer-events: auto; animation: hero-scroll-bob 1.9s ease-in-out infinite; }

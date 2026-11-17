@@ -77,7 +77,7 @@ import KnowledgeAuthorizePage from "./knowledge/KnowledgeAuthorizePage";
 import KnowledgeOAuthAuthorizePage from "./knowledge/KnowledgeOAuthAuthorizePage";
 import Comments from "./Comments";
 import { AccountMenu, AuthProvider, useAuth } from "./auth";
-import ToolsPage from "./ToolsPage";
+import ToolsPage, { DEV_TOOLS } from "./ToolsPage";
 import CompilerPage from "./CompilerPage";
 import GamesPage, { GameSidebarRank } from "./games/GamesPage";
 import { GameSidebarProvider } from "./games/sidebarSlot";
@@ -590,6 +590,57 @@ function Header({ dark, setDark, wallpaper, setWallpaper, settings }: { dark: bo
 	);
 }
 
+// 内页横幅标题：静态页面走映射，工具页复用工具清单，其余（文章、知识库文档）保留页面自身的标题
+const PAGE_TITLES: Record<string, string> = {
+	"/about": "关于",
+	"/tags": "标签",
+	"/archive": "归档",
+	"/timeline": "时间归档",
+	"/archive/timeline": "时间归档",
+	"/categories": "分类",
+	"/search": "搜索",
+	"/guestbook": "留言板",
+	"/dynamic": "动态",
+	"/dynamic/comments": "动态",
+	"/gallery": "相册",
+	"/booknav": "书签导航",
+	"/sponsor": "赞助",
+	"/transfer": "传送",
+	"/friends": "传送",
+	"/issues": "问题总结",
+	"/feedback": "问题反馈",
+	"/changelog": "更新日志",
+	"/author": "作者",
+	"/tools": "开发小工具",
+	"/tools/games": "小游戏",
+	"/tools/compiler": "在线编译器",
+	"/tools/image-host": "图床",
+	"/tools/clipboard": "在线剪贴板",
+	"/knowledge": "知识库",
+	"/user/center": "用户中心",
+	"/user/space": "个人空间",
+	"/user/drive": "我的云盘",
+	"/rss": "RSS",
+	"/rss.xml": "RSS"
+};
+
+function pageHeroTitle(pathname: string): string {
+	const normalized = pathname.replace(/\/+$/u, "") || "/";
+	const exact = PAGE_TITLES[normalized];
+	if (exact) return exact;
+	if (normalized.startsWith("/tools/")) {
+		const toolId = decodeURIComponent(normalized.slice("/tools/".length).split("/")[0] || "");
+		return DEV_TOOLS.find((tool) => tool.id === toolId)?.title || "";
+	}
+	if (normalized.startsWith("/gallery/")) return "相册";
+	if (normalized.startsWith("/knowledge/")) return "知识库";
+	if (normalized.startsWith("/page/")) {
+		const pageNumber = normalized.slice("/page/".length);
+		return pageNumber ? `第 ${pageNumber} 页` : "";
+	}
+	return "";
+}
+
 function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, gradientEnabled, siteLoaded, onWallpaperDownloadChange }: { wallpaper: string; showTitle: boolean; carousel: boolean; carouselInterval: number; wavesEnabled: boolean; gradientEnabled: boolean; siteLoaded: boolean; onWallpaperDownloadChange: (download: (() => void) | null) => void }) {
 	const location = useLocation();
 	const site = useSite();
@@ -761,6 +812,7 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 	if (wallpaper === "overlay") return <div className={`hero-overlay-layer ${gradientEnabled ? "" : "hero-gradient-off"}`}>{crossfadeImages()}<div className="hero-scrim" /></div>;
 	const title = site.titleConfig?.title?.trim() || site.title || "Jayson's Blog";
 	const subtitle = site.titleConfig?.subtitle?.trim() || site.subtitle || "愿每一颗心，都能免于哀伤。";
+	const pageTitle = isHome ? "" : pageHeroTitle(location.pathname);
 	return (
 		<section className={`hero ${wallpaper === "full" ? "hero-full" : ""} ${gradientEnabled ? "" : "hero-gradient-off"} hero-home`}>
 			{crossfadeImages()}
@@ -768,6 +820,7 @@ function Hero({ wallpaper, showTitle, carousel, carouselInterval, wavesEnabled, 
 			{showTitle && isHome ? <div className="hero-content">
 				<h1>{title}</h1><TypewriterSubtitle fallbackText={subtitle} mode={site.titleConfig?.subtitleMode || "text"} endpoint={site.titleConfig?.hitokotoApi} />
 			</div> : null}
+			{showTitle && !isHome && pageTitle ? <div className="hero-content hero-page-content"><h1>{pageTitle}</h1></div> : null}
 			{downloadButton}
 			{wallpaper === "full" && isHome ? <a className="hero-scroll" href="#content" aria-label="向下查看内容"><ChevronDown size={34} strokeWidth={1.8} /></a> : null}
 			{wavesEnabled ? <div className="hero-waves" aria-hidden="true"><svg viewBox="0 24 150 28" preserveAspectRatio="none" shapeRendering="geometricPrecision"><defs><path id="site-wave" d="M-160 44c30 0 58-18 88-18s58 18 88 18 58-18 88-18 58 18 88 18v48h-352z" /></defs><g className="wave-parallax"><use className="wave-layer wave-layer-one" href="#site-wave" x="48" y="0" /><use className="wave-layer wave-layer-two" href="#site-wave" x="48" y="3" /><use className="wave-layer wave-layer-three" href="#site-wave" x="48" y="5" /><use className="wave-layer wave-layer-four" href="#site-wave" x="48" y="7" /></g></svg></div> : null}
