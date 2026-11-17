@@ -1408,6 +1408,9 @@ function EmptyState({ title, description }: { title: string; description: string
 
 const LEFT_SIDEBAR_KEY = "site-sidebar-left";
 const RIGHT_SIDEBAR_KEY = "site-sidebar-right";
+// 工具页面默认铺满整幅宽度，所以侧栏开关单独记一组键，不影响其他页面里的选择
+const WIDE_LEFT_SIDEBAR_KEY = "tools-sidebar-left";
+const WIDE_RIGHT_SIDEBAR_KEY = "tools-sidebar-right";
 
 function storedSidebarOpen(key: string) {
 	const value = readStoredValue(key);
@@ -1416,33 +1419,33 @@ function storedSidebarOpen(key: string) {
 	return null;
 }
 
-function defaultSidebarOpen(side: "left" | "right") {
+function defaultSidebarOpen(side: "left" | "right", wide: boolean) {
+	if (wide) return false;
 	if (side === "left") return true;
 	const width = window.innerWidth;
 	return width < 768 || width >= 1280;
 }
 
-function useSidebarOpen(side: "left" | "right") {
-	const key = side === "left" ? LEFT_SIDEBAR_KEY : RIGHT_SIDEBAR_KEY;
-	// 用惰性初始化的 ref 记住“用户是否手动选择过”，避免每次渲染都读一次存储
-	const chosenRef = useRef<boolean | null>(null);
-	if (chosenRef.current === null) chosenRef.current = storedSidebarOpen(key) !== null;
-	const [open, setOpen] = useState(() => storedSidebarOpen(key) ?? defaultSidebarOpen(side));
+function useSidebarOpen(side: "left" | "right", wide: boolean) {
+	const key = wide ? (side === "left" ? WIDE_LEFT_SIDEBAR_KEY : WIDE_RIGHT_SIDEBAR_KEY) : side === "left" ? LEFT_SIDEBAR_KEY : RIGHT_SIDEBAR_KEY;
+	const initial = () => storedSidebarOpen(key) ?? defaultSidebarOpen(side, wide);
+	// 记住用户手动选过哪些页面的侧栏，避免窗口缩放把他们的选择覆盖掉
+	const chosenRef = useRef<Set<string>>(new Set());
+	const [state, setState] = useState(() => ({ key, open: initial() }));
+	// 普通页面和工具页面各用一组存储键，这里按当前键派生，避免先渲染出上一页的状态
+	const open = state.key === key ? state.open : initial();
 	useEffect(() => {
 		const onResize = () => {
-			if (chosenRef.current) return;
-			setOpen(defaultSidebarOpen(side));
+			if (chosenRef.current.has(key) || storedSidebarOpen(key) !== null) return;
+			setState({ key, open: defaultSidebarOpen(side, wide) });
 		};
 		window.addEventListener("resize", onResize);
 		return () => window.removeEventListener("resize", onResize);
-	}, [side]);
+	}, [side, wide, key]);
 	const toggle = () => {
-		setOpen((current) => {
-			const next = !current;
-			chosenRef.current = true;
-			writeStoredValue(key, next ? "open" : "closed");
-			return next;
-		});
+		chosenRef.current.add(key);
+		writeStoredValue(key, open ? "closed" : "open");
+		setState({ key, open: !open });
 	};
 	return { open, toggle };
 }
@@ -1677,9 +1680,12 @@ function SiteShell() {
 	fontVars["--font-post-content"] = fontVars["--site-post-content-font"];
 	fontVars["--font-tag"] = fontVars["--site-tag-font"];
 	const shellStyle = { "--overlay-opacity": overlayOpacity / 100, "--overlay-blur": `${overlayBlur}px`, "--overlay-card-opacity": overlayCardOpacity / 100, ...fontVars } as CSSProperties;
-	const leftSidebar = useSidebarOpen("left");
-	const rightSidebar = useSidebarOpen("right");
-	const gridClass = ["site-grid", leftSidebar.open ? "" : "collapse-left", rightSidebar.open ? "" : "collapse-right"].filter(Boolean).join(" ");
+	const { pathname } = useLocation();
+	// /tools 和 /tools/* 都是工具页面，默认收起左右侧栏，把整幅宽度留给工具本身
+	const wideLayout = pathname === "/tools" || pathname.startsWith("/tools/");
+	const leftSidebar = useSidebarOpen("left", wideLayout);
+	const rightSidebar = useSidebarOpen("right", wideLayout);
+	const gridClass = ["site-grid", wideLayout ? "wide-layout" : "", leftSidebar.open ? "" : "collapse-left", rightSidebar.open ? "" : "collapse-right"].filter(Boolean).join(" ");
 	return <GameSidebarProvider><SiteContext.Provider value={site}><MusicPlaybackProvider><div className={shellClasses} style={shellStyle}><Header dark={dark} setDark={setDark} wallpaper={wallpaper} setWallpaper={setWallpaperState} settings={displaySettings} /><Hero wallpaper={wallpaper} showTitle={bannerTitle} carousel={carousel} carouselInterval={carouselInterval} wavesEnabled={wavesEnabled} gradientEnabled={gradientEnabled} siteLoaded={siteLoaded} onWallpaperDownloadChange={bindWallpaperDownload} />{sakuraEnabled ? <SakuraEffect /> : null}<main id="content" className={gridClass}><LeftSidebar /><div className="main-column"><Outlet context={site} /></div><RightSidebar /></main><footer className="site-footer"><span>Jayson's Blog</span><a href="/rss.xml">RSS</a><a href="/sitemap.xml">Sitemap</a></footer><CornerActions leftOpen={leftSidebar.open} rightOpen={rightSidebar.open} onToggleLeft={leftSidebar.toggle} onToggleRight={rightSidebar.toggle} /><WallpaperNavigationScroll wallpaper={wallpaper} /></div></MusicPlaybackProvider></SiteContext.Provider></GameSidebarProvider>;
 }
 

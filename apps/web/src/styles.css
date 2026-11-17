@@ -158,6 +158,8 @@ img { display: block; max-width: 100%; }
 .tools-widget-links a { display:flex; align-items:center; gap:.5rem; padding:.5rem .55rem; border-radius:.5rem; color:var(--muted-text); font-size:.8rem; }
 .tools-widget-links a:hover { background:var(--btn-bg); color:var(--primary); }
 .user-tool-page { max-width: 58rem; margin: 0 auto; }
+/* 工具页收起左右侧栏后，把多出来的宽度全部留给工具本身 */
+.site-grid.wide-layout .main-column .user-tool-page { max-width: none; }
 .user-tool-heading { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-bottom:1.25rem; }
 .user-tool-heading h2 { display:flex; align-items:center; gap:.5rem; margin:.2rem 0; }
 .user-tool-heading p { margin:.3rem 0 0; color:var(--muted-text); font-size:.85rem; }
