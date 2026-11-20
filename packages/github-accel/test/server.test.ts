@@ -167,6 +167,7 @@ describe("基础路由", () => {
 			const response = await fetch(app.base + "/api/health", { method: "POST" });
 			assert.equal(response.status, 405);
 			assert.equal(response.headers.get("allow"), "GET, HEAD");
+			assert.equal(response.headers.get("cache-control"), "no-store");
 		});
 	});
 
@@ -210,6 +211,8 @@ describe("/download 鉴权", () => {
 		await withApp(async (app) => {
 			const response = await fetch(app.base + "/download/not-a-ticket");
 			assert.equal(response.status, 401);
+			// CDN 顶在节点前面时，401 若被边缘缓存住，正常用户会在一段时间内一直拿错误页。
+			assert.equal(response.headers.get("cache-control"), "no-store");
 			const payload = (await response.json()) as { code: string };
 			assert.equal(payload.code, "TICKET_INVALID");
 		});
@@ -381,6 +384,8 @@ describe("/download 流式转发与磁盘缓存", () => {
 			const second = await fetch(app.base + target);
 			assert.equal(second.status, 429);
 			assert.equal(second.headers.get("retry-after") !== null, true);
+			// 429 更不能被缓存：否则一次突发限流会变成一段时间内所有人一起被挡。
+			assert.equal(second.headers.get("cache-control"), "no-store");
 			const payload = (await second.json()) as { code: string };
 			assert.equal(payload.code, "RATE_LIMITED");
 		}, { ACCEL_RATE_PER_MINUTE: "1" }, { fetcher: bodyFetcher("ok") });

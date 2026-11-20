@@ -83,7 +83,9 @@ function respondError(
 	message: string,
 	options: { retryAfterSeconds?: number; head?: boolean; headers?: ResponseHeaders } = {},
 ): void {
-	const headers: ResponseHeaders = { ...options.headers };
+	// 错误响应一律不许缓存：节点现在常被 CDN 顶在前面，一次 429/401 若被边缘缓存住，
+	// 后续正常请求会在一段时间内继续吃错误页。调用方显式给了 cache-control 时以调用方为准。
+	const headers: ResponseHeaders = { "cache-control": "no-store", ...options.headers };
 	// Retry-After 是 RFC 7231 定义的等待秒数，客户端（含浏览器）会据此退避。
 	if (options.retryAfterSeconds !== undefined && options.retryAfterSeconds > 0) {
 		headers["retry-after"] = String(options.retryAfterSeconds);
@@ -96,6 +98,8 @@ function allowMethods(req: IncomingMessage, res: ServerResponse, allowed: readon
 	if (allowed.includes(method)) return true;
 	res.writeHead(405, {
 		...corsHeaders(),
+		// 同 respondError：405 也不该被 CDN 记住。
+		"cache-control": "no-store",
 		allow: allowed.join(", "),
 		"content-type": "application/json; charset=utf-8",
 	});
