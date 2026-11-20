@@ -97,6 +97,10 @@ ticket  = eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0In0.e3b1ec8cf96bc2
 
 公开下载路径按 IP 限流：`ACCEL_RATE_PER_MINUTE`（默认 30）；全局并发 `ACCEL_MAX_CONCURRENCY`（默认 64）。超限返回 `429`（带 `Retry-After`）或 `503`。
 
+**所有错误响应都带 `cache-control: no-store`**（401/403/404/405/429/5xx 一律如此）。节点常被 CDN 顶在前面，
+若一次 429 或一次过期 ticket 的 401 被边缘缓存住，接下来一段时间内所有用户都会拿到同一个错误页，
+所以成功响应是否可缓存交由 CDN 决定，失败响应一律不许缓存。
+
 ### 3.1 分档限速（游客 / 登录用户）
 
 带宽按**单个连接**限速，档位来自 ticket 的 `t`，客户端改不了：

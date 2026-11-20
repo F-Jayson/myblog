@@ -174,7 +174,79 @@ proxy_http_version 1.1;
 
 - `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` 必须保留。节点用这个头的**最后一段**做每 IP 限流，前面的段客户端可以随便伪造；少了这行，所有请求都算同一个 IP，全站会被一个人限死。
 - `http2 on;` 需要 Nginx ≥ 1.25.1。旧版把 `listen 443 ssl;` 改成 `listen 443 ssl http2;`，同时删掉 `http2 on;`。
-- 如果前面还有 CDN 或负载均衡，务必确认它把真实客户端地址写在 `X-Forwarded-For` **末尾**，否则限流的"每 IP"粒度会失真。
+
+> 如果节点前面还有一层 CDN 在吃带宽，上面最后这条会变成**反效果**：`$proxy_add_x_forwarded_for` 追加的是 CDN 回源 IP，所有用户会被压成同一个限流桶。套 CDN 时按下面 2.3.1 节改。
+
+### 2.3.1 前面套一层 CDN 时的额外配置
+
+CDN 回源时，真实客户端地址不是 `$remote_addr`（那是 CDN 的回源节点），而是 CDN 写在请求头里的。这时要做三处调整，否则会踩两个坑。
+
+**坑一：限流桶塌成一个。** 节点按 `X-Forwarded-For` 的最后一段做每 IP 限流，而 `$proxy_add_x_forwarded_for` 会把 `$remote_addr`（CDN 回源 IP）追加到末尾，于是所有用户都被认成同一个 IP：游客的"每 IP 1 个并发"变成**全站共 1 个并发**，每分钟 30 次的额度也变成全站共享。CDN 回源 IP 往往还是轮换的，表现为"有时能用有时 429"。
+
+**坑二：证书其实不需要自己签。** CDN 终止 TLS 时，回源可以是明文 HTTP，节点这层只要 `listen 80`。此时 `server_name` 要写 CDN 回源时用的 Host（有的 CDN 回源用 IP，那就保留 `_` 兜底）。
+
+改法（模板里没有，套 CDN 时手动加）：
+
+```nginx
+# 放在 server{} 之外，http 段里
+map $http_x_forwarded_for $accel_client_xff {
+    ""      $remote_addr;             # 没带 XFF（CDN 直连或本机自检）就用连接地址
+    default $http_x_forwarded_for;    # CDN 已经写好了真实地址，原样透传，不要再追加
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name gh.example.com _;
+
+    location / {
+        proxy_pass http://github_accel;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        # 关键：不是 $proxy_add_x_forwarded_for。那样会在末尾追加 CDN 回源 IP，
+        # 节点取最后一段时就拿到回源 IP 了。
+        proxy_set_header X-Forwarded-For $accel_client_xff;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+        # 下面几行与 2.3 节完全一致，不能省
+        proxy_buffering off;
+        proxy_request_buffering off;
+        client_max_body_size 0;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        gzip off;
+    }
+}
+```
+
+验证方式很简单：从**外部**网络连两次节点，看节点日志里的客户端 IP 是不是自己的公网 IP 而不是 CDN 的：
+
+```bash
+# 节点机上看最近几条请求的来源 IP
+sudo journalctl -u github-accel -n 20 --no-pager | grep -o 'from [0-9.]*' | sort -u
+```
+
+如果这里出现的是**自己的公网 IP**，配置就对了。如果只出现两三个固定 IP（CDN 回源 IP），只有两种可能：
+
+1. map 放错了位置——它必须在 `server { }` 之外。
+2. 有些 CDN 会在 `X-Forwarded-For` 末尾**再追加自己的回源 IP**，这时"原样透传"也会把回源 IP 送到最后一段。改用 Nginx 的 `real_ip` 模块把真实地址纠正回 `$remote_addr`，再单独下发：
+
+   ```nginx
+   # 回源 IP 网段问 CDN 服务商要，或用日志里观察到的那几个换算出网段
+   set_real_ip_from 198.51.100.0/24;
+   real_ip_header    X-Forwarded-For;
+   real_ip_recursive on;          # 从右往左跳过可信地址，取真正的客户端
+   # 然后在 location 里用纠正后的 $remote_addr，而不是 add_x_forwarded_for
+   proxy_set_header X-Forwarded-For $remote_addr;
+   ```
+
+   好处是 `$remote_addr` 一并变成真实客户端地址，依赖它的 `allow`/`deny` 也恢复有效；代价是 CDN 换回源网段时要跟着改。
+
+**另外两条与 CDN 相关的取舍：**
+
+- CDN 边缘缓存与节点的磁盘缓存是两层，别指望它们互相"命中加速"：节点的 `x-cache` 只反映节点自己。如果 CDN 把 `/download` 也缓存了，用户可能拿到 CDN 边缘上的旧副本；节点已经给所有错误响应加了 `cache-control: no-store`（401/403/429/5xx 与 405），避免"一次限流被缓存成一段时间全站 429"，但**成功响应**的缓存策略取决于 CDN 配置，必要时在 CDN 侧对大文件路径关掉缓存。
+- CDN 边缘带宽通常不是一个稳定值：同一份缓存文件隔几分钟再测，速度可能从 3 MB/s 掉到 0.4 MB/s。判断"是节点慢还是 CDN 慢"的方法是**绕过 CDN 直连节点**再测一次（节点上 `curl -o /dev/null -w '%{speed_download}\n' http://127.0.0.1:8787/download/<ticket>`，或在节点本机对 GitHub 测原始带宽）。节点到 GitHub 单连接应该能到几十 MB/s；如果直连节点很快、走 CDN 很慢，问题在 CDN 侧，与节点档位配置无关。
 
 ### 2.4 防火墙
 
@@ -406,6 +478,9 @@ sudo certbot renew --dry-run
 | 速度一直是游客档 | ticket 里没有 `member`：签发时没有登录态 | 看响应头 `x-accel-tier`；确认下载前页面身份行是"登录用户" |
 | 速度完全没变（还是旧速度） | 节点没升级，不认识 `t` | `/api/health` 缺 `guestBytesPerSecond` 即为旧版 |
 | 429 `IP_CONCURRENCY_LIMITED` 变多 | 游客每 IP 只允许 1 个并发会话 | 调 `ACCEL_GUEST_CONCURRENCY_PER_IP`，或让用户登录 |
+| 明明是不同的人，却互相抢并发、一起 429 | 节点把 CDN 回源 IP 当成了客户端地址（只有两三个 IP 在轮换） | 节点机看日志来源 IP，按 2.3.1 节换成 `$accel_client_xff` |
+| 一段时间内所有人一起 401/429，过后自己恢复 | 错误响应被 CDN 边缘缓存了 | 新版节点会给所有错误响应发 `cache-control: no-store`；若仍复现，在 CDN 侧对该路径关缓存 |
+| 走 CDN 只有 0.x MB/s，直连节点却有 3 MB/s 以上 | CDN 边缘带宽被限速或不稳定，与节点档位无关 | 绕开 CDN 直连节点再测一次（2.3.1 节最后一段） |
 | 429 `RATE_LIMITED` 变多 | 节点每 IP 每分钟 30 次请求（含 HEAD 预检） | 调 `ACCEL_RATE_PER_MINUTE` |
 | 429 `GITHUB_ACCEL_RATE_LIMITED` | **主站**自己的限流：解析 30 次/分钟、签发 60 次/分钟，刷新页面与反复解析都会计数 | 主站日志；这是应用层限流，改节点变量没用 |
 | 503 `GLOBAL_CONCURRENCY_LIMITED` | 节点并发打满 | 调 `ACCEL_MAX_CONCURRENCY`，或加带宽/加实例 |
