@@ -3,16 +3,24 @@ import { config } from "./config.js";
 
 export type TicketKind = "file" | "git";
 
+/** 速率档位：游客 10 MiB/s、登录用户 100 MiB/s，具体数值只在节点侧决定。 */
+export type TicketTier = "guest" | "member";
+
 export interface TicketPayload {
 	readonly u: string;
 	readonly e: number;
 	readonly k: TicketKind;
+	/** 档位可缺省：滚动发布窗口里主站可能还在签发不带 t 的旧 ticket。 */
+	readonly t?: TicketTier;
 }
+
+/** 验签之后的载荷：t 一定已归一化，调用方不必再判空。 */
+export type VerifiedTicketPayload = TicketPayload & { readonly t: TicketTier };
 
 export type TicketFailureCode = "TICKET_INVALID" | "TICKET_EXPIRED";
 
 export type TicketVerification =
-	| { readonly ok: true; readonly payload: TicketPayload }
+	| { readonly ok: true; readonly payload: VerifiedTicketPayload }
 	| { readonly ok: false; readonly code: TicketFailureCode; readonly error: string };
 
 /** 文档第 2 节：签名是 HMAC-SHA256 十六进制的前 32 个字符（16 字节）。 */
@@ -33,9 +41,20 @@ function isTicketKind(value: unknown): value is TicketKind {
 	return value === "file" || value === "git";
 }
 
+/**
+ * 缺省或非法值一律归为游客：旧 ticket 没有 t，给它们一个确定的档位，
+ * 而不是让请求因为字段缺失/写错直接失败（滚动发布期这是常态）。
+ */
+function normalizeTier(value: unknown): TicketTier {
+	return value === "member" ? "member" : "guest";
+}
+
 export function createTicket(payload: TicketPayload, secret: string = config.secret): string {
-	// 字段顺序固定成 u,e,k：两端必须产出同一段 payload 字符串，否则文档里的固定向量会对不上。
-	const body = Buffer.from(JSON.stringify({ u: payload.u, e: payload.e, k: payload.k }), "utf8").toString("base64url");
+	// 字段顺序固定成 u,e,k,t：两端必须产出同一段 payload 字符串，否则文档里的固定向量会对不上。
+	const body = Buffer.from(
+		JSON.stringify({ u: payload.u, e: payload.e, k: payload.k, t: payload.t ?? "guest" }),
+		"utf8",
+	).toString("base64url");
 	return body + "." + sign(body, secret);
 }
 
@@ -82,5 +101,6 @@ export function verifyTicket(
 		return fail("TICKET_INVALID", "ticket 类型不匹配（期望 " + expectedKind + "，实际 " + k + "）");
 	}
 	if (e <= nowSeconds) return fail("TICKET_EXPIRED", "ticket 已过期，请重新获取下载链接");
-	return { ok: true, payload: { u, e, k } };
+	// 档位在签名之内，篡改不了；但短链可被转发，转发者拿到的是签发者的档位（设计 4.1 的安全边界）。
+	return { ok: true, payload: { u, e, k, t: normalizeTier(record.t) } };
 }

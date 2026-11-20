@@ -14,6 +14,11 @@ import { createTicket } from "../src/ticket.ts";
 
 const SECRET = "test-secret-0123456789abcdef0123456789";
 const DOWNLOAD_URL = "https://github.com/o/r/releases/download/v1/a.zip";
+const KIB = 1024;
+/** 加 t 之前的旧 file ticket（payload 里没有 t），用来验证滚动发布期的兼容性。 */
+const LEGACY_FILE_TICKET =
+	"eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIn0"
+	+ ".1fdb9326cecbc1dae9177cd18b229837";
 
 interface TestApp {
 	readonly base: string;
@@ -66,6 +71,44 @@ function bodyFetcher(body: string, headers: Record<string, string> = {}): Upstre
 	return async () => upstream(200, { "content-type": "application/zip", etag: '"v1"', "last-modified": "Wed, 01 Jan 2026 00:00:00 GMT", ...headers }, body);
 }
 
+/** 懒生成的假上游：总量给定，按 64 KiB 分块吐，供限速用例计量速率。 */
+function bigUpstream(totalBytes: number): IncomingMessage {
+	const chunk = Buffer.alloc(64 * KIB, 0x39);
+	const stream = Readable.from((function* generate() {
+		let sent = 0;
+		while (sent < totalBytes) {
+			sent += chunk.length;
+			yield chunk;
+		}
+	})());
+	return Object.assign(stream, {
+		statusCode: 200,
+		headers: { "content-type": "application/zip", "content-length": String(totalBytes) },
+	}) as unknown as IncomingMessage;
+}
+
+/**
+ * 在固定时间窗内计量客户端收到的字节数。
+ * 从第一个字节之后才开始计量：突发额度（桶容量）在那一刻已经发完，窗口里剩下的就只有稳态速率。
+ */
+async function measureWindowBytes(app: TestApp, ticket: string, windowMs: number): Promise<number> {
+	const response = await fetch(app.base + "/download/" + ticket);
+	assert.equal(response.status, 200);
+	const reader = response.body?.getReader();
+	assert.ok(reader !== undefined);
+	const first = await reader.read();
+	if (first.done) return 0;
+	let received = first.value?.length ?? 0;
+	const started = Date.now();
+	while (Date.now() - started < windowMs) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		received += value?.length ?? 0;
+	}
+	await reader.cancel().catch(() => undefined);
+	return received;
+}
+
 async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 3000): Promise<void> {
 	const started = Date.now();
 	for (;;) {
@@ -83,7 +126,13 @@ describe("基础路由", () => {
 			assert.match(response.headers.get("content-type") ?? "", /application\/json/u);
 			assert.equal(response.headers.get("x-content-type-options"), "nosniff");
 			assert.equal(response.headers.get("access-control-allow-origin"), "*");
-			assert.deepEqual(await response.json(), { ok: true, version: VERSION, publicAllowed: true });
+			assert.deepEqual(await response.json(), {
+				ok: true,
+				version: VERSION,
+				publicAllowed: true,
+				guestBytesPerSecond: 10_485_760,
+				memberBytesPerSecond: 104_857_600,
+			});
 		});
 	});
 
@@ -335,5 +384,120 @@ describe("/download 流式转发与磁盘缓存", () => {
 			const payload = (await second.json()) as { code: string };
 			assert.equal(payload.code, "RATE_LIMITED");
 		}, { ACCEL_RATE_PER_MINUTE: "1" }, { fetcher: bodyFetcher("ok") });
+	});
+});
+
+describe("分档限速", () => {
+	it("公开路径 /download?url= 按游客档出流", async () => {
+		await withApp(async (app) => {
+			const response = await fetch(app.base + "/download?url=" + encodeURIComponent(DOWNLOAD_URL));
+			assert.equal(response.status, 200);
+			assert.equal(response.headers.get("x-accel-tier"), "guest");
+			assert.equal(response.headers.get("x-accel-rate"), "10485760");
+			assert.equal(await response.text(), "ok");
+		}, {}, { fetcher: bodyFetcher("ok") });
+	});
+
+	it("速率配 0 时游客档头里报 0（不限速），档位仍是 guest", async () => {
+		await withApp(async (app) => {
+			const response = await fetch(app.base + "/download?url=" + encodeURIComponent(DOWNLOAD_URL));
+			assert.equal(response.headers.get("x-accel-tier"), "guest");
+			assert.equal(response.headers.get("x-accel-rate"), "0");
+			assert.equal(await response.text(), "ok");
+		}, { ACCEL_GUEST_BYTES_PER_SECOND: "0" }, { fetcher: bodyFetcher("ok") });
+	});
+
+	it("ticket 的 t 决定档位：member 报登录档速率", async () => {
+		const ticket = createTicket({ u: DOWNLOAD_URL, e: Math.floor(Date.now() / 1000) + 600, k: "file", t: "member" }, SECRET);
+		await withApp(async (app) => {
+			const response = await fetch(app.base + "/download/" + ticket);
+			assert.equal(response.status, 200);
+			assert.equal(response.headers.get("x-accel-tier"), "member");
+			assert.equal(response.headers.get("x-accel-rate"), "104857600");
+			assert.equal(await response.text(), "ok");
+		}, { ACCEL_CACHE_DIR: "" }, { fetcher: bodyFetcher("ok") });
+	});
+
+	it("旧的无 t ticket 继续可用，并按游客档限速", async () => {
+		await withApp(async (app) => {
+			const response = await fetch(app.base + "/download/" + LEGACY_FILE_TICKET);
+			assert.equal(response.status, 200);
+			assert.equal(response.headers.get("x-accel-tier"), "guest");
+			assert.equal(response.headers.get("x-accel-rate"), "10485760");
+			assert.equal(await response.text(), "ok");
+		}, { ACCEL_CACHE_DIR: "" }, { fetcher: bodyFetcher("ok") });
+	});
+
+	it("缓存命中路径同样带档位头（命中缓存不绕过限速）", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "github-accel-tier-"));
+		const cache = new DiskCache({ dir, maxBytes: 1 << 20, ttlMs: 3_600_000 });
+		const body = "0123456789";
+		try {
+			const ticket = createTicket({ u: DOWNLOAD_URL, e: Math.floor(Date.now() / 1000) + 600, k: "file", t: "member" }, SECRET);
+			await withApp(async (app) => {
+				const first = await fetch(app.base + "/download/" + ticket);
+				assert.equal(first.status, 200);
+				assert.equal(first.headers.get("x-cache"), "MISS");
+				assert.equal(first.headers.get("x-accel-tier"), "member");
+				assert.equal(first.headers.get("x-accel-rate"), "104857600");
+				assert.equal(await first.text(), body);
+
+				await waitFor(async () => (await cache.read(DOWNLOAD_URL, Date.now())) !== null);
+
+				const hit = await fetch(app.base + "/download/" + ticket);
+				assert.equal(hit.status, 200);
+				assert.equal(hit.headers.get("x-cache"), "HIT");
+				assert.equal(hit.headers.get("x-accel-tier"), "member");
+				assert.equal(hit.headers.get("x-accel-rate"), "104857600");
+				assert.equal(await hit.text(), body);
+
+				// Range 命中也走限速分支，头一样要带上。
+				const ranged = await fetch(app.base + "/download/" + ticket, { headers: { range: "bytes=0-3" } });
+				assert.equal(ranged.status, 206);
+				assert.equal(ranged.headers.get("x-accel-tier"), "member");
+				assert.equal(await ranged.text(), "0123");
+			}, { ACCEL_CACHE_DIR: dir }, { cache, fetcher: bodyFetcher(body) });
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("/git 的 pack 流也带档位头", async () => {
+		const fetcher: UpstreamFetcher = async () => upstream(200, { "content-type": "application/x-git-upload-pack-result" }, "PACK");
+		const ticket = createTicket({ u: "/o/r.git", e: Math.floor(Date.now() / 1000) + 600, k: "git", t: "member" }, SECRET);
+		await withApp(async (app) => {
+			const response = await fetch(app.base + "/git/" + ticket + "/o/r.git/git-upload-pack", {
+				method: "POST",
+				headers: { "content-type": "application/x-git-upload-pack-request", "user-agent": "git/2.43.0" },
+				body: "0032want 0000",
+			});
+			assert.equal(response.status, 200);
+			assert.equal(response.headers.get("x-accel-tier"), "member");
+			assert.equal(response.headers.get("x-accel-rate"), "104857600");
+			assert.equal(await response.text(), "PACK");
+		}, {}, { fetcher });
+	});
+
+	it("游客与登录用户的实测速率比约为 10:1", { timeout: 60_000 }, async () => {
+		// 24 MiB 保证两档在整个计量窗口里都没下完，窗口里量到的就是稳态速率。
+		const total = 24 * 1024 * KIB;
+		const fetcher: UpstreamFetcher = async () => bigUpstream(total);
+		const expires = Math.floor(Date.now() / 1000) + 600;
+		const guest = createTicket({ u: DOWNLOAD_URL, e: expires, k: "file", t: "guest" }, SECRET);
+		const member = createTicket({ u: DOWNLOAD_URL, e: expires, k: "file", t: "member" }, SECRET);
+		await withApp(async (app) => {
+			const guestBytes = await measureWindowBytes(app, guest, 1000);
+			const memberBytes = await measureWindowBytes(app, member, 1000);
+			const ratio = memberBytes / Math.max(guestBytes, 1);
+			// 期望 10:1；socket 缓冲、定时器粒度、首块大小都会带来偏差，给足容差只要求量级正确。
+			assert.ok(
+				ratio > 5 && ratio < 18,
+				"游客 " + guestBytes + " B/s vs 登录 " + memberBytes + " B/s，比值 " + ratio.toFixed(2),
+			);
+		}, {
+			ACCEL_GUEST_BYTES_PER_SECOND: String(1024 * KIB),
+			ACCEL_MEMBER_BYTES_PER_SECOND: String(10 * 1024 * KIB),
+			ACCEL_CACHE_DIR: "",
+		}, { fetcher });
 	});
 });

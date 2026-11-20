@@ -7,16 +7,20 @@ import {
 	ExternalLink,
 	Github,
 	LoaderCircle,
+	LogIn,
 	RefreshCw,
+	UserRound,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { createGithubClone, createGithubDownload, fetchGithubAccelConfig, fetchGithubReleases, resolveGithubInput } from "./api";
+import { createGithubClone, createGithubDownload, fetchGithubAccelConfig, fetchGithubReleases, probeGithubDownload, resolveGithubInput } from "./api";
 import { useAuth } from "./auth";
 import {
+	GITHUB_ACCEL_DEFAULT_RATES,
 	GITHUB_INPUT_EXAMPLES,
 	GITHUB_SUPPORTED_PATTERNS,
 	formatBytes,
+	formatBytesPerSecond,
 	formatCount,
 	formatRelativeTime,
 	githubAccelStatus,
@@ -58,46 +62,6 @@ async function copyText(text: string) {
 	area.select();
 	document.execCommand("copy");
 	area.remove();
-}
-
-/**
- * 先探一次再下载：直接用 window.location 跳到下载短链，一旦节点返回 4xx/5xx（ticket 过期、
- * 上游超时、限流），浏览器会把整个页面换成错误页，用户既看不到原因也丢了当前输入。
- * 这里先用 HEAD 预检状态码（不发 Range，避免为探测真的向上游拉一次字节、污染缓存语义），
- * 失败就把节点/主站的中文错误留在页面上，成功才真正触发下载。
- */
-async function probeDownload(path: string): Promise<string> {
-	let response: Response;
-	try {
-		// HEAD 不传输文件字节：命中缓存时只回响应头，未命中时节点也只向上游发一次 HEAD。
-		response = await fetch(path, { method: "HEAD", redirect: "follow", cache: "no-store" });
-	} catch {
-		// 网络层异常（离线、被插件拦截）交给后面真正的下载去尝试，不在这里拦。
-		return "";
-	}
-	// 405 说明这条链路不支持 HEAD，不能据此判定失败，交给真正的下载去试。
-	if (response.ok || response.status === 405) {
-		await response.body?.cancel().catch(() => undefined);
-		return "";
-	}
-	const raw = await response.text().catch(() => "");
-	await response.body?.cancel().catch(() => undefined);
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (parsed && typeof parsed === "object") {
-			const message = (parsed as { error?: unknown }).error;
-			if (typeof message === "string" && message.trim()) return message.trim();
-		}
-	} catch {
-		/* 非 JSON 响应，退回到状态码 */
-	}
-	// 节点对上游错误是透传的，body 往往是 GitHub 的纯文本 "Not Found"，
-	// 这里按状态码给中文说明，比把英文原文丢给用户更容易理解。
-	if (response.status === 404) return "GitHub 返回 404：仓库、Release 或附件不存在，请检查地址。";
-	if (response.status === 429) return "请求过于频繁，已被限流，请稍后再试。";
-	if (response.status === 401 || response.status === 403) return "下载被拒绝（ticket 无效或已过期），请重新点一次下载。";
-	if (response.status >= 500) return "加速节点暂时不可用（HTTP " + response.status + "），请稍后重试。";
-	return "加速节点返回 HTTP " + response.status + "，请稍后重试。";
 }
 
 /** 用临时 <a download> 触发下载：不接管当前页面，失败也不会把工具页顶掉。 */
@@ -241,7 +205,7 @@ function ReleaseList({ phase, error, releases, expandedTag, missingTag, actionsE
 }
 
 export default function GithubAccelPage() {
-	const { features } = useAuth();
+	const { features, user, loading: authLoading, openAuth } = useAuth();
 	const featureEnabled = features.githubAccelEnabled !== false;
 	const [config, setConfig] = useState<GithubAccelConfig | null>(null);
 	const [configError, setConfigError] = useState("");
@@ -262,6 +226,8 @@ export default function GithubAccelPage() {
 
 	const status = githubAccelStatus(config, configError);
 	const actionsEnabled = featureEnabled && config?.enabled !== false && config?.configured === true;
+	// 主站没下发 rates（旧版节点/主站）时按节点默认档位展示，避免身份行出现空速率
+	const rates = config?.rates ?? GITHUB_ACCEL_DEFAULT_RATES;
 
 	const loadConfig = useCallback(async () => {
 		if (!featureEnabled) {
@@ -317,7 +283,8 @@ export default function GithubAccelPage() {
 		setDownloadNote("");
 		try {
 			const ticket = await createGithubDownload(url);
-			const failure = await probeDownload(ticket.downloadPath);
+			// 预检失败只把原因留在页面上：直接跳转的话，节点/上游的错误会顶掉整个工具页。
+			const failure = await probeGithubDownload(ticket.downloadPath);
 			if (failure) {
 				setDownloadError(failure);
 				return;
@@ -403,6 +370,30 @@ export default function GithubAccelPage() {
 				<span className={"github-accel-badge is-" + status.tone}>{status.label}</span>
 				<span className="github-accel-status-text">{status.detail}</span>
 				{configError ? <button className="user-tool-button" type="button" onClick={() => void loadConfig()}><RefreshCw size={14} />重试</button> : null}
+			</div>
+
+			{/* 状态条下面补一行当前身份：档位由登录态决定，速率由节点决定，两者都在这里说清楚 */}
+			<div className="github-accel-identity">
+				<span className="github-accel-identity-label"><UserRound size={14} />当前身份</span>
+				{authLoading ? (
+					<span className="github-accel-identity-value">正在确认登录状态…</span>
+				) : user ? (
+					<span className="github-accel-identity-value is-member">已登录 · {formatBytesPerSecond(rates.member)}</span>
+				) : (
+					<>
+						<span className="github-accel-identity-value is-guest">游客 · {formatBytesPerSecond(rates.guest)}</span>
+						<span className="github-accel-identity-hint">登录后单连接提速到 {formatBytesPerSecond(rates.member)}，档位在签发下载链接时确定。</span>
+						<button
+							className="github-accel-identity-login"
+							type="button"
+							disabled={!features.loginEnabled}
+							title={features.loginEnabled ? "登录 / 注册" : "站点已关闭登录"}
+							onClick={() => openAuth("login")}
+						>
+							<LogIn size={13} />登录 / 注册
+						</button>
+					</>
+				)}
 			</div>
 
 			<p className="github-accel-lead">文件由加速节点直传浏览器，本站只做签名与跳转。</p>
@@ -563,9 +554,10 @@ export default function GithubAccelPage() {
 			<section className="github-accel-limits">
 				<h3>使用限制</h3>
 				<ul>
+					<li>档位：游客单连接 {formatBytesPerSecond(rates.guest)}、单 IP 同时 1 个下载；登录用户单连接 {formatBytesPerSecond(rates.member)}。</li>
 					<li>只支持公开仓库：私有仓库需要 token，本方案不保存任何用户凭据，因此一律拒绝。</li>
 					<li>只加速下载与 clone，不支持 git push；push 请求会被加速节点直接拒绝。</li>
-					<li>按 IP 限流：默认每分钟 30 次、同时最多 3 个连接；超限时会提示稍后再试。</li>
+					<li>按 IP 限流：每分钟最多 30 次请求；并发连接数按档位区分，超限时会提示稍后再试。</li>
 					<li>下载短链有有效期，过期后重新点一次"下载"即可重新签发。</li>
 				</ul>
 			</section>

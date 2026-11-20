@@ -247,15 +247,20 @@ export function parseGithubInput(input: string): GithubResolved {
 }
 
 // ---------------------------------------------------------------------------
-// ticket：base64url(JSON{u,e,k}) + "." + hmacSha256Hex 的前 32 个字符
+// ticket：base64url(JSON{u,e,k,t}) + "." + hmacSha256Hex 的前 32 个字符
 // ---------------------------------------------------------------------------
 
 export type TicketKind = "file" | "git";
+
+/** 速率档位：与 packages/github-accel 里的同名同义，节点只信签名内的 t，不查用户库。 */
+export type TicketTier = "guest" | "member";
 
 export interface TicketPayload {
 	u: string;
 	e: number;
 	k: TicketKind;
+	/** 缺省表示滚动发布期还在飞的旧 ticket，验签后一律归为 "guest"。 */
+	t?: TicketTier;
 }
 
 export type TicketVerification =
@@ -281,12 +286,20 @@ function isValidPayload(value: unknown): value is TicketPayload {
 		&& (record.k === "file" || record.k === "git");
 }
 
+// 档位缺失或非法都当游客：旧 ticket 必须继续可用，非法值也不该让下载直接失败。
+function normalizeTicketTier(value: unknown): TicketTier {
+	return value === "member" ? "member" : "guest";
+}
+
 export function createTicket(payload: TicketPayload, secret?: string): string {
 	const signingSecret = resolveTicketSecret(secret);
 	if (!payload.u || !Number.isFinite(payload.e)) throw new GithubAccelError("ticket 内容不完整", 500, "TICKET_INVALID");
-	// 字段顺序必须与文档一致（u、e、k）：两端签名 message 是同一个字符串，
+	// 字段顺序必须与文档一致（u、e、k、t）：两端签名 message 是同一个字符串，
 	// JSON.stringify 按插入顺序输出，换了顺序签名就对不上。
-	const body = Buffer.from(JSON.stringify({ u: payload.u, e: payload.e, k: payload.k }), "utf8").toString("base64url");
+	const body = Buffer.from(
+		JSON.stringify({ u: payload.u, e: payload.e, k: payload.k, t: normalizeTicketTier(payload.t) }),
+		"utf8",
+	).toString("base64url");
 	return body + "." + signPayload(body, signingSecret);
 }
 
@@ -317,7 +330,8 @@ export function verifyTicket(
 	if (!isValidPayload(parsed)) return { ok: false, code: "TICKET_INVALID", error: "下载链接内容已损坏" };
 	if (expectedKind && parsed.k !== expectedKind) return { ok: false, code: "TICKET_INVALID", error: "下载链接类型不匹配" };
 	if (parsed.e <= now) return { ok: false, code: "TICKET_EXPIRED", error: "下载链接已过期，请重新生成" };
-	return { ok: true, payload: parsed };
+	// t 缺省或非法值一律归为游客，不报错：主站与节点分别部署，旧 ticket 至少还有 30 分钟有效期。
+	return { ok: true, payload: { u: parsed.u, e: parsed.e, k: parsed.k, t: normalizeTicketTier(parsed.t) } };
 }
 
 /**
@@ -326,23 +340,45 @@ export function verifyTicket(
  */
 export function assertTicketAlgorithm() {
 	const secret = "test-secret-0123456789abcdef0123456789";
-	const vectors = [
+	// 新向量：t 已进入签名，payload 的字段顺序必须是 u、e、k、t。
+	const vectors: { payload: TicketPayload; body: string; ticket: string }[] = [
 		{
-			payload: { u: "https://github.com/o/r/releases/download/v1/a.zip", e: 1_800_000_000, k: "file" } as TicketPayload,
-			body: "eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIn0",
-			ticket: "eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIn0.1fdb9326cecbc1dae9177cd18b229837",
+			payload: { u: "https://github.com/o/r/releases/download/v1/a.zip", e: 1_800_000_000, k: "file", t: "guest" },
+			body: "eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIiwidCI6Imd1ZXN0In0",
+			ticket: "eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIiwidCI6Imd1ZXN0In0.c1f6b1ac1ab2aaac6e0a3c8e5d19f943",
 		},
 		{
-			payload: { u: "/o/r.git", e: 1_800_000_000, k: "git" } as TicketPayload,
-			body: "eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0In0",
-			ticket: "eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0In0.e3b1ec8cf96bc251c12bcf34aa369b7c",
+			payload: { u: "https://github.com/o/r/releases/download/v1/a.zip", e: 1_800_000_000, k: "file", t: "member" },
+			body: "eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIiwidCI6Im1lbWJlciJ9",
+			ticket: "eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIiwidCI6Im1lbWJlciJ9.7ef37acc7057c396f905918b914e77cb",
+		},
+		{
+			payload: { u: "/o/r.git", e: 1_800_000_000, k: "git", t: "guest" },
+			body: "eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0IiwidCI6Imd1ZXN0In0",
+			ticket: "eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0IiwidCI6Imd1ZXN0In0.954481962b3921ce992e13fcb4343fe7",
+		},
+		{
+			payload: { u: "/o/r.git", e: 1_800_000_000, k: "git", t: "member" },
+			body: "eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0IiwidCI6Im1lbWJlciJ9",
+			ticket: "eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0IiwidCI6Im1lbWJlciJ9.9644aedea787e8ec02ba5bf8a337daff",
 		},
 	];
 	for (const vector of vectors) {
-		const actualBody = Buffer.from(JSON.stringify({ u: vector.payload.u, e: vector.payload.e, k: vector.payload.k }), "utf8").toString("base64url");
+		const actualBody = Buffer.from(
+			JSON.stringify({ u: vector.payload.u, e: vector.payload.e, k: vector.payload.k, t: vector.payload.t }),
+			"utf8",
+		).toString("base64url");
 		if (actualBody !== vector.body) throw new Error("ticket 算法的 payload 与文档测试向量不一致");
 		if (createTicket(vector.payload, secret) !== vector.ticket) throw new Error("ticket 签名与文档测试向量不一致");
 	}
+
+	// 滚动发布窗口里还有大量旧 ticket（无 t）：签名必须逐字节对得上，验签后按游客处理。
+	const legacyBody = "eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIn0";
+	const legacySignature = "1fdb9326cecbc1dae9177cd18b229837";
+	if (signPayload(legacyBody, secret) !== legacySignature) throw new Error("旧版无 t 的 ticket 签名与文档测试向量不一致");
+	const legacy = verifyTicket(legacyBody + "." + legacySignature, "file", secret, 1_800_000_000 - 1);
+	if (!legacy.ok) throw new Error("旧版无 t 的 ticket 验签失败：" + legacy.error);
+	if (legacy.payload.t !== "guest") throw new Error("旧版无 t 的 ticket 未按游客处理");
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +427,8 @@ export interface DownloadTicketOptions {
 	now?: number;
 	ttlMinutes?: number;
 	secret?: string;
+	/** 速率档位：登录用户传 "member"，缺省按游客签发；具体速率由节点决定。 */
+	tier?: TicketTier;
 }
 
 /** 签发下载 ticket；返回的 downloadPath 是主站的 302 入口，文件字节不会经过主站。 */
@@ -399,7 +437,7 @@ export function buildDownloadTicket(targetUrl: string, options: DownloadTicketOp
 	const now = options.now ?? Math.floor(Date.now() / 1000);
 	const ttlMinutes = options.ttlMinutes ?? config.githubAccel.ticketTtlMinutes;
 	const expiresAt = now + Math.round(ttlMinutes * 60);
-	const ticket = createTicket({ u: url, e: expiresAt, k: "file" }, options.secret);
+	const ticket = createTicket({ u: url, e: expiresAt, k: "file", t: options.tier ?? "guest" }, options.secret);
 	return {
 		downloadPath: GITHUB_ACCEL_DL_PATH + ticket,
 		fileName: fileNameFromUrl(url),
@@ -411,6 +449,64 @@ export function buildDownloadTicket(targetUrl: string, options: DownloadTicketOp
 export function buildDownloadRedirect(ticket: string, baseUrl = config.githubAccel.baseUrl): string {
 	if (!baseUrl) throw new GithubAccelError("GitHub 加速节点未配置，请联系站点管理员", 503, "GITHUB_ACCEL_NOT_CONFIGURED");
 	return baseUrl.replace(/\/+$/u, "") + "/download/" + encodeURIComponent(ticket);
+}
+
+/** 同源预检入口，路径与下载短链一一对应：把 /dl/ 换成 /probe/ 就是它。 */
+export const GITHUB_ACCEL_PROBE_PATH = "/api/tools/github/probe/";
+
+export interface DownloadProbeResult {
+	/** true 表示可以接着下载；false 时 error 是给页面直接显示的中文原因。 */
+	ok: boolean;
+	/** 节点回给主站的状态码；0 表示这一次预检没有结论（超时），页面应当照常发起下载。 */
+	status: number;
+	error?: string;
+	code?: string;
+}
+
+export interface DownloadProbeOptions {
+	baseUrl?: string;
+	fetcher?: typeof fetch;
+	timeoutMs?: number;
+}
+
+/**
+ * 主站替浏览器预检一次节点：下载短链会 302 到节点，两点域名不同就是**跨域**，
+ * 浏览器读不到节点返回的错误正文，节点一报错用户只会看到一坨 JSON 顶掉整页。
+ * 所以由主站 HEAD 一次节点，把状态码翻成中文原因、以同源 JSON 交回页面。
+ *
+ * 超时不算失败：节点这时可能正在向 GitHub 要文件头，真下载往往还是成功，
+ * 因此返回 { ok: true, status: 0 } 让页面放行；只有连不上或节点明确 4xx/5xx 才拦。
+ */
+export async function probeDownloadTarget(ticket: string, options: DownloadProbeOptions = {}): Promise<DownloadProbeResult> {
+	const base = (options.baseUrl ?? requireAcceleratorBaseUrl()).replace(/\/+$/u, "");
+	// 允许调用方显式传空（测试与"未配置"同一条路径）：拼出来的地址只会打到主站自己身上。
+	if (!base) throw new GithubAccelError("GitHub 加速节点未配置，请联系站点管理员", 503, "GITHUB_ACCEL_NOT_CONFIGURED");
+	const fetcher = options.fetcher ?? fetch;
+	let response: Response;
+	try {
+		response = await fetcher(base + "/download/" + encodeURIComponent(ticket), {
+			method: "HEAD",
+			redirect: "follow",
+			signal: AbortSignal.timeout(options.timeoutMs ?? config.githubAccel.timeoutMs),
+		});
+	} catch (error) {
+		if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) return { ok: true, status: 0 };
+		return { ok: false, status: 502, error: "加速节点连不上（网络或 DNS 异常），请稍后重试。", code: "GITHUB_ACCEL_UNREACHABLE" };
+	}
+	// HEAD 的响应没有正文，读完头就可以放手；不读会在连接上留下半截响应。
+	await response.body?.cancel().catch(() => undefined);
+	if (response.ok) return { ok: true, status: response.status };
+	return { ok: false, status: response.status, ...describeProbeFailure(response.status) };
+}
+
+/** HEAD 拿不到节点自己的中文原因（没有响应体），这里按状态码给出等价的说法。 */
+function describeProbeFailure(status: number): { error: string; code: string } {
+	if (status === 401 || status === 403) return { error: "下载被拒绝：链接无效或已过期，请重新生成。", code: "GITHUB_ACCEL_TICKET_REJECTED" };
+	if (status === 404) return { error: "GitHub 返回 404：仓库、Release 或附件不存在，请检查地址。", code: "GITHUB_ACCEL_NOT_FOUND" };
+	if (status === 429) return { error: "请求过于频繁，已被限流，请稍后再试。", code: "GITHUB_ACCEL_RATE_LIMITED" };
+	if (status === 502 || status === 503 || status === 504) return { error: "加速节点暂时不可用（HTTP " + status + "），请稍后重试。", code: "GITHUB_ACCEL_UPSTREAM" };
+	if (status >= 500) return { error: "加速节点处理失败（HTTP " + status + "），请稍后重试。", code: "GITHUB_ACCEL_UPSTREAM" };
+	return { error: "加速节点返回 HTTP " + status + "，请稍后重试。", code: "GITHUB_ACCEL_UPSTREAM" };
 }
 
 export interface CloneInfo {
@@ -425,6 +521,8 @@ export interface CloneOptions {
 	now?: number;
 	ttlMinutes?: number;
 	secret?: string;
+	/** 速率档位：公开模式走无签名路径，节点一律按游客限速，此时该字段不起作用。 */
+	tier?: TicketTier;
 }
 
 /**
@@ -443,7 +541,7 @@ export function buildCloneInfo(owner: string, repo: string, options: CloneOption
 	} else {
 		const now = options.now ?? Math.floor(Date.now() / 1000);
 		const ttlMinutes = options.ttlMinutes ?? config.githubAccel.ticketTtlMinutes;
-		const ticket = createTicket({ u: repoPath, e: now + Math.round(ttlMinutes * 60), k: "git" }, options.secret);
+		const ticket = createTicket({ u: repoPath, e: now + Math.round(ttlMinutes * 60), k: "git", t: options.tier ?? "guest" }, options.secret);
 		cloneUrl = base + "/git/" + ticket + repoPath;
 	}
 	return {
@@ -457,11 +555,24 @@ export function buildCloneInfo(owner: string, repo: string, options: CloneOption
 // 加速节点状态与 Release 代理（都带短缓存，避免每次请求都打节点）
 // ---------------------------------------------------------------------------
 
+/** 节点 /api/health 上报的两档单连接速率（字节/秒），供前台显示"当前身份"用。 */
+export interface AccelRates {
+	guest: number;
+	member: number;
+}
+
 export interface AcceleratorStatus {
 	configured: boolean;
 	online: boolean;
 	publicAllowed: boolean;
 	version: string | null;
+	/** 旧节点不认档位、不上报速率时整个字段缺省，前端显示"未知"而不是把 0 当成不限速。 */
+	rates?: AccelRates;
+}
+
+/** /api/tools/github/config 响应里的 rates 字段：节点未上报时整段缺省，不写 0 也不写假值。 */
+export function configRatesField(status: AcceleratorStatus): { rates?: AccelRates } {
+	return status.rates ? { rates: status.rates } : {};
 }
 
 const STATUS_OK_TTL_MS = 30_000;
@@ -497,6 +608,19 @@ function numberOf(record: Record<string, unknown>, ...keys: string[]) {
 	return 0;
 }
 
+/**
+ * 从节点 /api/health 的响应体里读两档速率：0 是合法值（表示不限速），
+ * 但字段缺失、类型不对或为负时整体返回 undefined —— 宁可显示"未知"也不能编个 0 出来。
+ */
+export function readAcceleratorRates(body: unknown): AccelRates | undefined {
+	if (!isRecord(body)) return undefined;
+	const guest = body.guestBytesPerSecond;
+	const member = body.memberBytesPerSecond;
+	if (typeof guest !== "number" || !Number.isFinite(guest) || guest < 0) return undefined;
+	if (typeof member !== "number" || !Number.isFinite(member) || member < 0) return undefined;
+	return { guest, member };
+}
+
 async function probeAccelerator(): Promise<AcceleratorStatus> {
 	const base = config.githubAccel.baseUrl;
 	if (!base) return { configured: false, online: false, publicAllowed: false, version: null };
@@ -505,12 +629,15 @@ async function probeAccelerator(): Promise<AcceleratorStatus> {
 		if (!response.ok) return OFFLINE_STATUS;
 		const body: unknown = await response.json().catch(() => null);
 		const record = isRecord(body) ? body : {};
+		const rates = readAcceleratorRates(record);
 		return {
 			configured: true,
 			// 读到 200 已经证明链路通，只有节点明确写 ok:false 才算下线。
 			online: record.ok !== false,
 			publicAllowed: record.publicAllowed === true,
 			version: typeof record.version === "string" ? record.version : null,
+			// 节点还没升级时不带这两个字段，这里保持整段缺省。
+			...(rates ? { rates } : {}),
 		};
 	} catch {
 		return OFFLINE_STATUS;

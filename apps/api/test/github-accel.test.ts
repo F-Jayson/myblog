@@ -5,6 +5,7 @@
  * 任何一边改了签名细节，都必须在这些用例上失败。
  */
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import test from "node:test";
 
 import { config } from "../src/config.ts";
@@ -16,10 +17,13 @@ import {
 	buildDownloadRedirect,
 	buildDownloadTicket,
 	checkGithubAccelRate,
+	configRatesField,
 	createTicket,
 	fetchAcceleratorReleases,
 	getAcceleratorStatus,
 	parseGithubInput,
+	probeDownloadTarget,
+	readAcceleratorRates,
 	requireGithubAccelRate,
 	resetGithubAccelRateLimits,
 	verifyTicket,
@@ -28,14 +32,25 @@ import {
 } from "../src/githubAccel.ts";
 
 // 文档第 2 节的固定测试向量，与加速度节点的单测共用同一组常量值。
+// payload 的字段顺序固定为 u、e、k、t：两端签的是同一个 JSON 字符串，顺序一变就验不过。
 const VECTOR_SECRET = "test-secret-0123456789abcdef0123456789";
 const VECTOR_EXPIRES_AT = 1_800_000_000;
-const VECTOR_FILE_PAYLOAD: TicketPayload = { u: "https://github.com/o/r/releases/download/v1/a.zip", e: VECTOR_EXPIRES_AT, k: "file" };
-const VECTOR_FILE_BODY = "eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIn0";
-const VECTOR_FILE_TICKET = VECTOR_FILE_BODY + ".1fdb9326cecbc1dae9177cd18b229837";
-const VECTOR_GIT_PAYLOAD: TicketPayload = { u: "/o/r.git", e: VECTOR_EXPIRES_AT, k: "git" };
-const VECTOR_GIT_BODY = "eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0In0";
-const VECTOR_GIT_TICKET = VECTOR_GIT_BODY + ".e3b1ec8cf96bc251c12bcf34aa369b7c";
+const VECTOR_FILE_URL = "https://github.com/o/r/releases/download/v1/a.zip";
+const VECTOR_FILE_PAYLOAD: TicketPayload = { u: VECTOR_FILE_URL, e: VECTOR_EXPIRES_AT, k: "file", t: "guest" };
+const VECTOR_FILE_BODY = "eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIiwidCI6Imd1ZXN0In0";
+const VECTOR_FILE_TICKET = VECTOR_FILE_BODY + ".c1f6b1ac1ab2aaac6e0a3c8e5d19f943";
+const VECTOR_FILE_MEMBER_PAYLOAD: TicketPayload = { u: VECTOR_FILE_URL, e: VECTOR_EXPIRES_AT, k: "file", t: "member" };
+const VECTOR_FILE_MEMBER_BODY = "eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIiwidCI6Im1lbWJlciJ9";
+const VECTOR_FILE_MEMBER_TICKET = VECTOR_FILE_MEMBER_BODY + ".7ef37acc7057c396f905918b914e77cb";
+const VECTOR_GIT_PAYLOAD: TicketPayload = { u: "/o/r.git", e: VECTOR_EXPIRES_AT, k: "git", t: "guest" };
+const VECTOR_GIT_BODY = "eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0IiwidCI6Imd1ZXN0In0";
+const VECTOR_GIT_TICKET = VECTOR_GIT_BODY + ".954481962b3921ce992e13fcb4343fe7";
+const VECTOR_GIT_MEMBER_PAYLOAD: TicketPayload = { u: "/o/r.git", e: VECTOR_EXPIRES_AT, k: "git", t: "member" };
+const VECTOR_GIT_MEMBER_BODY = "eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0IiwidCI6Im1lbWJlciJ9";
+const VECTOR_GIT_MEMBER_TICKET = VECTOR_GIT_MEMBER_BODY + ".9644aedea787e8ec02ba5bf8a337daff";
+// 滚动发布窗口里还在飞的旧 ticket：payload 没有 t，签名按老顺序算，验签后必须按游客处理。
+const LEGACY_FILE_BODY = "eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIn0";
+const LEGACY_FILE_TICKET = LEGACY_FILE_BODY + ".1fdb9326cecbc1dae9177cd18b229837";
 
 type RepoResolved = Extract<GithubResolved, { kind: "repo" }>;
 type ReleaseResolved = Extract<GithubResolved, { kind: "release" }>;
@@ -208,6 +223,56 @@ test("ticket 与文档固定测试向量完全一致", () => {
 	assert.equal(createTicket(VECTOR_GIT_PAYLOAD, VECTOR_SECRET), VECTOR_GIT_TICKET);
 });
 
+test("四个分档固定向量逐字节一致（payload 段与签名段都要对）", () => {
+	const vectors: { payload: TicketPayload; body: string; ticket: string }[] = [
+		{ payload: VECTOR_FILE_PAYLOAD, body: VECTOR_FILE_BODY, ticket: VECTOR_FILE_TICKET },
+		{ payload: VECTOR_FILE_MEMBER_PAYLOAD, body: VECTOR_FILE_MEMBER_BODY, ticket: VECTOR_FILE_MEMBER_TICKET },
+		{ payload: VECTOR_GIT_PAYLOAD, body: VECTOR_GIT_BODY, ticket: VECTOR_GIT_TICKET },
+		{ payload: VECTOR_GIT_MEMBER_PAYLOAD, body: VECTOR_GIT_MEMBER_BODY, ticket: VECTOR_GIT_MEMBER_TICKET },
+	];
+	for (const vector of vectors) {
+		const ticket = createTicket(vector.payload, VECTOR_SECRET);
+		const body = ticket.split(".")[0];
+		assert.equal(body, vector.body, "payload 段必须与文档逐字节一致（字段顺序 u,e,k,t）");
+		assert.equal(ticket, vector.ticket, "签名段必须与文档逐字节一致");
+	}
+});
+
+test("未写 t 时按游客签发，字段顺序固定为 u,e,k,t", () => {
+	// createTicket 一律写 t，缺省 guest：正是这一点让新旧 ticket 的签名段可以共存。
+	const ticket = createTicket({ u: VECTOR_FILE_URL, e: VECTOR_EXPIRES_AT, k: "file" }, VECTOR_SECRET);
+	assert.equal(ticket, VECTOR_FILE_TICKET, "缺省档位必须是 guest");
+	const body = ticket.split(".")[0] as string;
+	assert.equal(body, VECTOR_FILE_BODY);
+	assert.deepEqual(
+		JSON.parse(Buffer.from(body, "base64url").toString("utf8")),
+		{ u: VECTOR_FILE_URL, e: VECTOR_EXPIRES_AT, k: "file", t: "guest" },
+	);
+});
+
+test("旧版无 t 的 ticket 仍能验签，并按游客处理", () => {
+	// 主站与节点分别部署，升级窗口里旧 ticket 至少还有 30 分钟有效期，不能一升级就 401。
+	const verified = verifyTicket(LEGACY_FILE_TICKET, "file", VECTOR_SECRET, VECTOR_EXPIRES_AT - 1);
+	assert.equal(verified.ok, true, "旧 ticket 必须继续可用");
+	if (!verified.ok) throw new Error("unreachable");
+	assert.deepEqual(verified.payload, VECTOR_FILE_PAYLOAD);
+	assert.equal(verified.payload.t, "guest");
+	// 重新签发会补上 t（签名段因此与旧 ticket 不同），兼容只保证旧 ticket 本身能验。
+	assert.notEqual(createTicket({ u: VECTOR_FILE_URL, e: VECTOR_EXPIRES_AT, k: "file" }, VECTOR_SECRET), LEGACY_FILE_TICKET);
+});
+
+test("t 缺失之外的非法 t 也归一化为 guest，且不报错", () => {
+	// 手工签一份 payload，模拟"签名合法但 t 是脏值"的情况（例如被别的实现写坏）。
+	for (const bad of ["admin", "", "MEMBER", 1, null, true]) {
+		const body = Buffer.from(JSON.stringify({ u: "/o/r.git", e: VECTOR_EXPIRES_AT, k: "git", t: bad }), "utf8").toString("base64url");
+		const signature = createHmac("sha256", VECTOR_SECRET).update(body).digest("hex").slice(0, 32);
+		const verified = verifyTicket(body + "." + signature, "git", VECTOR_SECRET, VECTOR_EXPIRES_AT - 1);
+		assert.equal(verified.ok, true, "签名对得上就不该因为 t 非法而失败：" + JSON.stringify(bad));
+		if (!verified.ok) throw new Error("unreachable");
+		assert.equal(verified.payload.t, "guest", JSON.stringify(bad) + " 应归一化为 guest");
+	}
+});
+
 test("固定向量能验签，且 payload 原样返回", () => {
 	const fileResult = verifyTicket(VECTOR_FILE_TICKET, "file", VECTOR_SECRET, VECTOR_EXPIRES_AT - 1);
 	assert.equal(fileResult.ok, true);
@@ -222,7 +287,7 @@ test("固定向量能验签，且 payload 原样返回", () => {
 
 test("ticket 签发与验签往返", () => {
 	const now = 1_700_000_000;
-	const payload: TicketPayload = { u: "https://github.com/o/r/releases/download/v1/a.zip", e: now + 60, k: "file" };
+	const payload: TicketPayload = { u: "https://github.com/o/r/releases/download/v1/a.zip", e: now + 60, k: "file", t: "guest" };
 	const ticket = createTicket(payload, VECTOR_SECRET);
 	assert.equal(ticket.split(".").length, 2, "ticket 是 payload.signature 两段");
 	const result = verifyTicket(ticket, "file", VECTOR_SECRET, now);
@@ -298,6 +363,20 @@ test("buildDownloadTicket 返回主站 302 入口与过期时间", () => {
 	assert.equal(verified.payload.e, now + 30 * 60);
 });
 
+test("buildDownloadTicket 按档位签发，缺省为游客", () => {
+	// 把 now/ttl 定成 e=1800000000，签发结果就能直接与文档向量逐字节对上。
+	const base = { now: VECTOR_EXPIRES_AT - 30 * 60, ttlMinutes: 30, secret: VECTOR_SECRET };
+	const member = buildDownloadTicket(VECTOR_FILE_URL, { ...base, tier: "member" });
+	assert.equal(member.downloadPath, GITHUB_ACCEL_DL_PATH + VECTOR_FILE_MEMBER_TICKET, "登录用户拿到的应是 member ticket");
+
+	const guest = buildDownloadTicket(VECTOR_FILE_URL, base);
+	assert.equal(guest.downloadPath, GITHUB_ACCEL_DL_PATH + VECTOR_FILE_TICKET, "没传 tier 就是游客");
+	const verified = verifyTicket(guest.downloadPath.slice(GITHUB_ACCEL_DL_PATH.length), "file", VECTOR_SECRET, VECTOR_EXPIRES_AT - 1);
+	assert.equal(verified.ok, true);
+	if (!verified.ok) throw new Error("unreachable");
+	assert.equal(verified.payload.t, "guest");
+});
+
 test("buildDownloadTicket 拒绝非白名单或带凭据的地址", () => {
 	expectGithubAccelError(() => buildDownloadTicket("https://example.com/a.zip", { secret: VECTOR_SECRET }), "HOST_NOT_ALLOWED", 400);
 	expectGithubAccelError(() => buildDownloadTicket("ftp://github.com/a.zip", { secret: VECTOR_SECRET }), "GITHUB_ACCEL_INVALID_INPUT", 400);
@@ -349,6 +428,24 @@ test("关闭公开下载时 clone 使用带 ticket 的路径", () => {
 	assert.equal(verified.payload.u, "/o/r.git");
 });
 
+test("clone 的 ticket 也按档位签发，缺省为游客", () => {
+	const base = { publicAllowed: false, baseUrl: "https://gh.example.com", now: VECTOR_EXPIRES_AT - 30 * 60, ttlMinutes: 30, secret: VECTOR_SECRET };
+	assert.equal(
+		buildCloneInfo("o", "r", { ...base, tier: "member" }).cloneUrl,
+		"https://gh.example.com/git/" + VECTOR_GIT_MEMBER_TICKET + "/o/r.git",
+	);
+	assert.equal(
+		buildCloneInfo("o", "r", base).cloneUrl,
+		"https://gh.example.com/git/" + VECTOR_GIT_TICKET + "/o/r.git",
+		"没传 tier 就是游客",
+	);
+	// 公开模式走节点的无签名路径，节点只能按游客限速，tier 在这里不起作用。
+	assert.equal(
+		buildCloneInfo("o", "r", { publicAllowed: true, baseUrl: "https://gh.example.com", tier: "member" }).cloneUrl,
+		"https://gh.example.com/git/o/r.git",
+	);
+});
+
 test("clone 会挡住不合法的 owner/repo", () => {
 	expectGithubAccelError(() => buildCloneInfo("o!", "r", { publicAllowed: true, baseUrl: "https://gh.example.com" }), "GITHUB_ACCEL_INVALID_INPUT", 400);
 	expectGithubAccelError(() => buildCloneInfo("o", "a".repeat(101), { publicAllowed: true, baseUrl: "https://gh.example.com" }), "GITHUB_ACCEL_INVALID_INPUT", 400);
@@ -370,6 +467,109 @@ test("未配置节点时 Release 代理返回 503 中文错误", { skip: config.
 		assert.equal(error.statusCode, 503);
 		assert.equal(error.code, "GITHUB_ACCEL_NOT_CONFIGURED");
 		assert.match(error.message, /未配置/u);
+		return true;
+	});
+});
+
+test("readAcceleratorRates 只接受两档合法的字节速率", () => {
+	assert.deepEqual(
+		readAcceleratorRates({ ok: true, guestBytesPerSecond: 10_485_760, memberBytesPerSecond: 104_857_600 }),
+		{ guest: 10_485_760, member: 104_857_600 },
+	);
+	// 0 是合法档位（不限速），不能当成"节点没上报"。
+	assert.deepEqual(readAcceleratorRates({ guestBytesPerSecond: 0, memberBytesPerSecond: 0 }), { guest: 0, member: 0 });
+	const unknown: unknown[] = [
+		{ ok: true },
+		{},
+		{ guestBytesPerSecond: 1 },
+		{ guestBytesPerSecond: 1, memberBytesPerSecond: Number.NaN },
+		{ guestBytesPerSecond: "1", memberBytesPerSecond: 2 },
+		{ guestBytesPerSecond: -1, memberBytesPerSecond: 2 },
+		null,
+		"ok",
+		[],
+	];
+	for (const body of unknown) {
+		assert.equal(readAcceleratorRates(body), undefined, JSON.stringify(body) + " 应视为节点未上报");
+	}
+});
+
+test("config 端点：节点未上报速率时 rates 整段缺省", () => {
+	const withoutRates = configRatesField({ configured: true, online: true, publicAllowed: false, version: "1.4.0" });
+	assert.deepEqual(withoutRates, {}, "未上报时既不能写 0 也不能写假值");
+	const withRates = configRatesField({ configured: true, online: true, publicAllowed: true, version: null, rates: { guest: 10_485_760, member: 104_857_600 } });
+	assert.deepEqual(withRates, { rates: { guest: 10_485_760, member: 104_857_600 } });
+	// 与路由里 res.json 的同一条拼装路径：只有节点上报了才会出现 rates 键。
+	assert.equal("rates" in { enabled: true, ...withoutRates }, false);
+	assert.equal("rates" in { enabled: true, ...withRates }, true);
+});
+
+// ---------------------------------------------------------------------------
+// 下载预检：主站替浏览器 HEAD 节点，把状态码翻成中文原因
+// ---------------------------------------------------------------------------
+
+/** 记录请求，返回指定状态；headers/url 留给断言。 */
+function fakeNode(status: number) {
+	const calls: { url: string; method: string }[] = [];
+	const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+		calls.push({ url: String(input), method: String(init?.method ?? "GET") });
+		return new Response(null, { status });
+	}) as typeof fetch;
+	return { calls, fetcher };
+}
+
+test("预检会用 HEAD 打节点的 /download/<ticket>，2xx 放行", async () => {
+	const node = fakeNode(200);
+	const result = await probeDownloadTarget("abc.def", { baseUrl: "http://node.test/", fetcher: node.fetcher });
+	assert.deepEqual(result, { ok: true, status: 200 });
+	assert.equal(node.calls.length, 1);
+	assert.equal(node.calls[0]?.method, "HEAD");
+	// baseUrl 末尾的斜杠不能拼成 //download。
+	assert.equal(node.calls[0]?.url, "http://node.test/download/abc.def");
+});
+
+test("预检把节点的 4xx/5xx 翻成中文原因与错误码", async () => {
+	const cases: { status: number; code: string; keyword: string }[] = [
+		{ status: 401, code: "GITHUB_ACCEL_TICKET_REJECTED", keyword: "链接无效" },
+		{ status: 403, code: "GITHUB_ACCEL_TICKET_REJECTED", keyword: "链接无效" },
+		{ status: 404, code: "GITHUB_ACCEL_NOT_FOUND", keyword: "404" },
+		{ status: 429, code: "GITHUB_ACCEL_RATE_LIMITED", keyword: "限流" },
+		{ status: 502, code: "GITHUB_ACCEL_UPSTREAM", keyword: "不可用" },
+		{ status: 500, code: "GITHUB_ACCEL_UPSTREAM", keyword: "处理失败" },
+	];
+	for (const { status, code, keyword } of cases) {
+		const result = await probeDownloadTarget("abc.def", { baseUrl: "http://node.test", fetcher: fakeNode(status).fetcher });
+		assert.equal(result.ok, false, "HTTP " + status + " 必须拦下");
+		assert.equal(result.status, status);
+		assert.equal(result.code, code);
+		assert.ok(result.error?.includes(keyword), "HTTP " + status + " 的原因应含「" + keyword + "」，实际：" + result.error);
+	}
+});
+
+test("预检超时不算失败：真下载可能还会成功，必须放行", async () => {
+	const timeout = (async () => {
+		const error = new Error("The operation was aborted due to timeout");
+		error.name = "TimeoutError";
+		throw error;
+	}) as unknown as typeof fetch;
+	assert.deepEqual(await probeDownloadTarget("abc.def", { baseUrl: "http://node.test", fetcher: timeout }), { ok: true, status: 0 });
+});
+
+test("预检连不上节点时报不可用，不让页面白跑一次下载", async () => {
+	const refused = (async () => {
+		throw new TypeError("fetch failed");
+	}) as unknown as typeof fetch;
+	const result = await probeDownloadTarget("abc.def", { baseUrl: "http://node.test", fetcher: refused });
+	assert.equal(result.ok, false);
+	assert.equal(result.status, 502);
+	assert.equal(result.code, "GITHUB_ACCEL_UNREACHABLE");
+});
+
+test("节点未配置时预检直接 503，而不是构造一个空地址", async () => {
+	await assert.rejects(probeDownloadTarget("abc.def", { baseUrl: "", fetcher: fakeNode(200).fetcher }), (error: unknown) => {
+		assert.ok(error instanceof GithubAccelError);
+		assert.equal(error.statusCode, 503);
+		assert.equal(error.code, "GITHUB_ACCEL_NOT_CONFIGURED");
 		return true;
 	});
 });

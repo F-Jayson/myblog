@@ -64,9 +64,11 @@ import {
 	buildCloneInfo,
 	buildDownloadRedirect,
 	buildDownloadTicket,
+	configRatesField,
 	fetchAcceleratorReleases,
 	getAcceleratorStatus,
 	parseGithubInput,
+	probeDownloadTarget,
 	requireAcceleratorBaseUrl,
 	requireGithubAccelRate,
 	verifyTicket,
@@ -885,6 +887,8 @@ app.get("/api/tools/github/config", requireFeature("githubAccelEnabled", githubA
 			acceleratorBase: config.githubAccel.baseUrl,
 			publicAllowed: status.publicAllowed,
 			ticketTtlMinutes: config.githubAccel.ticketTtlMinutes,
+			// 节点还没升级时不带这两个数字：整段缺省比编一个 0（= 不限速）安全。
+			...configRatesField(status),
 		});
 	} catch (error) {
 		next(error);
@@ -917,13 +921,14 @@ app.get("/api/tools/github/releases", requireFeature("githubAccelEnabled", githu
 	}
 });
 
-app.post("/api/tools/github/download", requireFeature("githubAccelEnabled", githubAccelDisabledMessage), (req: Request, res: Response, next: NextFunction) => {
+app.post("/api/tools/github/download", requireFeature("githubAccelEnabled", githubAccelDisabledMessage), loadCommentUser, (req: RequestWithCommentUser, res: Response, next: NextFunction) => {
 	try {
 		requireGithubAccelRate("issue", resolveClientIp(req));
 		// 节点地址为空时签出来的 ticket 无人能验证，直接按"未配置"返回 503。
 		requireAcceleratorBaseUrl();
 		const input = githubDownloadInput.parse(req.body);
-		res.json(buildDownloadTicket(input.url));
+		// 档位写进签名里，游客改不了；具体带宽由节点按 t 决定，主站不感知。
+		res.json(buildDownloadTicket(input.url, { tier: req.commentUser ? "member" : "guest" }));
 	} catch (error) {
 		if (!sendGithubAccelError(res, error)) next(error);
 	}
@@ -946,13 +951,33 @@ app.get("/api/tools/github/dl/:ticket", requireFeature("githubAccelEnabled", git
 	}
 });
 
-app.post("/api/tools/github/clone", requireFeature("githubAccelEnabled", githubAccelDisabledMessage), async (req: Request, res: Response, next: NextFunction) => {
+// 页面在触发下载前先问这里：浏览器到节点是跨域的，读不到节点返回的错误正文，
+// 由主站 HEAD 一次节点、把状态码翻成中文原因回来，失败时用户看到的才是一句人话。
+// 走 resolve 这一档限流（同样会打到上游），避免预检被拿来白嫖节点带宽。
+app.get("/api/tools/github/probe/:ticket", requireFeature("githubAccelEnabled", githubAccelDisabledMessage), async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		requireGithubAccelRate("resolve", resolveClientIp(req));
+		const ticket = String(req.params.ticket ?? "");
+		// 先验签：伪造的 ticket 不必再浪费节点一次上游请求。
+		const verified = verifyTicket(ticket, "file");
+		if (!verified.ok) {
+			res.status(401).json({ error: verified.error, code: verified.code });
+			return;
+		}
+		res.json(await probeDownloadTarget(ticket));
+	} catch (error) {
+		if (!sendGithubAccelError(res, error)) next(error);
+	}
+});
+
+app.post("/api/tools/github/clone", requireFeature("githubAccelEnabled", githubAccelDisabledMessage), loadCommentUser, async (req: RequestWithCommentUser, res: Response, next: NextFunction) => {
 	try {
 		requireGithubAccelRate("issue", resolveClientIp(req));
 		const input = githubCloneInput.parse(req.body);
 		// publicAllowed 决定 clone 地址是明文仓库路径还是带 ticket 的路径，必须现场问节点。
+		// 公开模式的路径没有 ticket，节点只能按游客限速。
 		const status = await getAcceleratorStatus();
-		res.json(buildCloneInfo(input.owner, input.repo, { publicAllowed: status.publicAllowed }));
+		res.json(buildCloneInfo(input.owner, input.repo, { publicAllowed: status.publicAllowed, tier: req.commentUser ? "member" : "guest" }));
 	} catch (error) {
 		if (!sendGithubAccelError(res, error)) next(error);
 	}

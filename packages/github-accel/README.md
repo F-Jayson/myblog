@@ -6,6 +6,7 @@ GitHub 下载与克隆加速节点。协议契约见仓库根目录的 `docs/git
 - 零运行时依赖：只用 `node:http` / `node:https` / `node:crypto` / `node:fs` / `node:path`。
 - 只做公开仓库：不支持 `git push`，不保存任何用户凭据。
 - 纯流式：下载与 git pack 都是"上游 → 客户端"双向 pipe，不经内存或 Nginx 缓冲。
+- 按 ticket 档位限速：游客 10 MiB/s、登录用户 100 MiB/s（单连接），档位在签名里，客户端改不了。
 
 ## 快速开始
 
@@ -14,11 +15,11 @@ cd packages/github-accel
 pnpm install          # 已在 monorepo 里装过可跳过
 pnpm type-check       # tsc 检查 src 与 test（strict）
 pnpm build            # 产出 dist/
-pnpm test             # node:test + tsx，89 个用例，不联网
+pnpm test             # node:test + tsx，120 个用例，不联网
 
 ACCEL_SECRET=test-secret-0123456789abcdef0123456789 ACCEL_CACHE_DIR= pnpm start
 curl -s http://127.0.0.1:8787/api/health
-# {"ok":true,"version":"1.0.0","publicAllowed":true}
+# {"ok":true,...,"guestBytesPerSecond":10485760,"memberBytesPerSecond":104857600}
 ```
 
 ## 环境变量
@@ -27,14 +28,16 @@ curl -s http://127.0.0.1:8787/api/health
 | --- | --- | --- |
 | `ACCEL_PORT` | `8787` | 监听端口 |
 | `ACCEL_HOST` | `0.0.0.0` | 监听地址，容器内必须是 0.0.0.0 |
-| `ACCEL_BASE_URL` | 空 | 节点的公网根地址，末尾斜杠会被去掉 |
 | `ACCEL_SECRET` | 空 | **必须与主站 `GITHUB_ACCEL_SECRET` 相同**；为空时放行签名校验（仅限内网调试） |
 | `ACCEL_ALLOW_PUBLIC` | `true` | 是否开放无 ticket 的 `/download?url=` 与公开 clone；生产建议 `false` |
 | `ACCEL_CACHE_DIR` | 空 | 磁盘缓存目录；**为空表示不缓存**，纯流式 |
 | `ACCEL_CACHE_MAX_BYTES` | `21474836480`（20 GiB） | 缓存总量上限，超出按最后访问时间淘汰 |
 | `ACCEL_CACHE_TTL_HOURS` | `168`（7 天） | 缓存条目存活时间 |
 | `ACCEL_RATE_PER_MINUTE` | `30` | 每 IP 每分钟请求数；`0` 表示不限流 |
-| `ACCEL_CONCURRENCY_PER_IP` | `3` | 每 IP 同时进行的下载/git 会话数 |
+| `ACCEL_CONCURRENCY_PER_IP` | `3` | 每 IP 同时进行的下载/git 会话数（登录用户档） |
+| `ACCEL_GUEST_CONCURRENCY_PER_IP` | `1` | 游客档每 IP 同时进行的会话数 |
+| `ACCEL_GUEST_BYTES_PER_SECOND` | `10485760`（10 MiB/s） | 游客档**单连接**速率；`0` 表示不限速 |
+| `ACCEL_MEMBER_BYTES_PER_SECOND` | `104857600`（100 MiB/s） | 登录用户档**单连接**速率；`0` 表示不限速 |
 | `ACCEL_MAX_CONCURRENCY` | `64` | 节点全局并发上限 |
 | `ACCEL_GITHUB_TOKEN` | 空 | 只读 PAT，仅用于 `api.github.com` 的 Release 列表（未配置时限额 60 次/小时/IP） |
 | `ACCEL_UPSTREAM_TIMEOUT_MS` | `30000` | 连接 GitHub 的超时；**不是**整条下载的超时 |
@@ -46,7 +49,7 @@ curl -s http://127.0.0.1:8787/api/health
 
 | 方法与路径 | 说明 |
 | --- | --- |
-| `GET /api/health` | `{ ok, version, publicAllowed }`，主站用它判断节点是否可达 |
+| `GET /api/health` | `{ ok, version, publicAllowed, guestBytesPerSecond, memberBytesPerSecond }`，主站用它判断节点是否可达并读回两档速率 |
 | `GET /api/releases/:owner/:repo` | Release 列表，10 分钟内存缓存，字段已归一化为 camelCase |
 | `GET|HEAD /download/:ticket` | 按 ticket 下载（主站签发的链接） |
 | `GET|HEAD /download?url=` | 直接代理白名单 URL，仅当 `ACCEL_ALLOW_PUBLIC=true` |
@@ -73,20 +76,28 @@ curl -s http://127.0.0.1:8787/api/health
 ## ticket 协议
 
 ```
-ticket = base64url(JSON{u,e,k}) + "." + hex(hmac_sha256(base64url部分, SECRET))[:32]
+ticket = base64url(JSON{u,e,k,t}) + "." + hex(hmac_sha256(base64url部分, SECRET))[:32]
 ```
 
 - `u`：下载目标 URL，或 git 模式下的 `/owner/repo.git`
 - `e`：过期时间（Unix 秒）
 - `k`：`"file"` 或 `"git"`
+- `t`：速率档位 `"guest"` 或 `"member"`；字段顺序必须是 `u,e,k,t`。**缺 `t` 的旧 ticket 仍然可用**，按 `guest` 处理
 
 固定测试向量（`SECRET=test-secret-0123456789abcdef0123456789`，`e=1800000000`），
-实现与测试都逐字节断言这两个值：
+实现与测试都逐字节断言：
 
 ```
-file: eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIn0.1fdb9326cecbc1dae9177cd18b229837
-git:  eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0In0.e3b1ec8cf96bc251c12bcf34aa369b7c
+file guest:  ...In0.c1f6b1ac1ab2aaac6e0a3c8e5d19f943
+file member: ...J9.7ef37acc7057c396f905918b914e77cb
+git  guest:  ...In0.954481962b3921ce992e13fcb4343fe7
+git  member: ...J9.9644aedea787e8ec02ba5bf8a337daff
+旧向量（无 t，按 guest）：
+  file: eyJ1IjoiaHR0cHM6Ly9naXRodWIuY29tL28vci9yZWxlYXNlcy9kb3dubG9hZC92MS9hLnppcCIsImUiOjE4MDAwMDAwMDAsImsiOiJmaWxlIn0.1fdb9326cecbc1dae9177cd18b229837
+  git:  eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0In0.e3b1ec8cf96bc251c12bcf34aa369b7c
 ```
+
+完整 payload 见 `test/ticket.test.ts` 的常量，或 `docs/github-accelerator.md` 第 2 节（那里有每个 payload 的全文）。
 
 签名有效只说明"ticket 来自主站"，`u` 仍然要过一遍域名白名单——两者是独立的防线。
 
@@ -95,6 +106,20 @@ git:  eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0In0.e3b1ec8cf96bc251c1
 只允许 `https` 与以下域名（`github.com`、`api.github.com`、`codeload.github.com`、
 `raw.githubusercontent.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`）。
 每一次重定向后的 `Location` 都重新校验：否则一个被攻陷的上游域名就能把节点变成任意地址的代理。
+
+## 分档限速
+
+| 档位（ticket 的 `t`） | 默认单连接速率 | 每 IP 并发 |
+| --- | --- | --- |
+| `guest` | `ACCEL_GUEST_BYTES_PER_SECOND` = 10 MiB/s | `ACCEL_GUEST_CONCURRENCY_PER_IP` = 1 |
+| `member` | `ACCEL_MEMBER_BYTES_PER_SECOND` = 100 MiB/s | `ACCEL_CONCURRENCY_PER_IP` = 3 |
+
+- `src/throttle.ts` 用 `Transform` 实现令牌桶：容量 `max(速率 × 0.1s, 64 KiB)`，开局满桶，`_transform` 里等到额度才放行，
+  等待期间不回调（否则 Node 会把它当成"没处理完"继续灌数据）；销毁时清定时器，避免句柄泄漏。
+- 桶只挂在"节点 → 客户端"一侧。上游照常满速回源，写缓存也是满速：缓存里存的永远是原件，命中时再按档位放慢。
+- 四个出流点都过桶：缓存完整响应、缓存 `Range` 切片、不可缓存的上游直传、边回传边落盘的 `tee` 之后、git pack。
+- 响应头 `x-accel-tier` / `x-accel-rate` 说明这条连接实际用的档位与字节/秒（304、416、HEAD 也带）。
+- 速率填 `0` 表示不限速；单测里用可注入时钟（`now`）断言"等够了才放行"，不靠 sleep。
 
 ## 缓存
 
@@ -110,6 +135,8 @@ git:  eyJ1IjoiL28vci5naXQiLCJlIjoxODAwMDAwMDAwLCJrIjoiZ2l0In0.e3b1ec8cf96bc251c1
 
 二选一：Docker Compose（`Dockerfile` + `docker-compose.yml`）或 systemd（`systemd/github-accel.service`）。
 两种方式都只监听本机端口，公网 443 由 Nginx 终止 TLS。
+
+逐条命令、验收清单、容量换算与运维排错见 [`docs/github-accelerator-deploy.md`](../../docs/github-accelerator-deploy.md)（本节的命令是它的浓缩版）。
 
 ```bash
 # Docker
@@ -155,6 +182,9 @@ proxy_http_version 1.1;
 | clone 卡住 | Nginx 开了 `proxy_buffering` 或 `proxy_request_buffering` |
 | 断点续传失效 | 上游没透传 `Range`，或节点解掉 `Content-Encoding` 后又声明了原长度 |
 | 429 / 503 | 触发限流；调 `ACCEL_RATE_PER_MINUTE` / 并发上限，或让主站做退避 |
+| 429 `IP_CONCURRENCY_LIMITED` 偏多 | 游客档默认每 IP 只允许 1 个并发会话；按需调 `ACCEL_GUEST_CONCURRENCY_PER_IP` |
+| 速度一直是游客档 | ticket 里没有 `member`（签发时没登录态）；看响应头 `x-accel-tier` |
+| 速度完全没变 | 节点没升级（旧版不认识 `t`）：`/api/health` 缺 `guestBytesPerSecond` 即可确认 |
 
 ## 代码地图
 
@@ -165,7 +195,8 @@ proxy_http_version 1.1;
 | `src/github.ts` | 域名白名单、GitHub 输入解析、Release 列表（含 10 分钟缓存） |
 | `src/proxy.ts` | 上游请求、手动跟随 3xx、hop-by-hop 过滤、UA 策略 |
 | `src/cache.ts` | 磁盘 LRU 缓存、Range 解析、`.part` → `.bin` 原子落盘 |
-| `src/ratelimit.ts` | 每 IP 每分钟计数 + 每 IP/全局并发（时钟可注入，便于单测） |
+| `src/ratelimit.ts` | 每 IP 每分钟计数 + 每 IP/全局并发（时钟可注入，便于单测）；并发上限按档位取不同值 |
+| `src/throttle.ts` | 令牌桶 `Transform` 与 `pipeToClient`，按档位限速 |
 | `src/server.ts` | 路由、鉴权、限流、缓存/上游编排、优雅关闭 |
 
 ## 已知边界

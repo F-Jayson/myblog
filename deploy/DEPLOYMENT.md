@@ -35,7 +35,7 @@ sudo ./deploy/manage.sh
 
 `/tools/puml` 绘图工具还需要 Java 17 或更新版本（`apt install openjdk-17-jre-headless`）和中文字体（`apt install fonts-noto-cjk`，缺字体时中文标签会掉字形），这两项不在脚本自动安装范围内。装完执行 `pnpm --filter @jayson-blog/api puml:install` 下载 `plantuml.jar`。类图、ER 图、组件图默认用 `graphviz`（`apt install graphviz`）排版，没装时会自动改用 PlantUML 自带的 Smetana 布局。
 
-GitHub 下载加速的字节流量**不经过本服务器**。本服务器只运行主站 API，负责解析链接、签发 ticket 和 302 跳转；真正下载文件的加速节点部署在另一台高带宽服务器上（见 `docs/github-accelerator.md` 第 8 节）。因此本服务器只需在 `<APP_DIR>/.env` 中增加 `GITHUB_ACCEL_BASE_URL` 与 `GITHUB_ACCEL_SECRET` 两个必填变量（另有两个可选项 `GITHUB_ACCEL_TIMEOUT_MS`、`GITHUB_ACCEL_TICKET_TTL_MINUTES`），不需要安装或运行任何节点进程。两个变量缺失时 `/tools/github` 页面仍可访问，会显示"加速节点未配置"，其余功能不受影响。
+GitHub 下载加速的字节流量**不经过本服务器**。本服务器只运行主站 API，负责解析链接、签发 ticket 和 302 跳转；真正下载文件的加速节点部署在另一台高带宽服务器上（步骤见 `docs/github-accelerator-deploy.md`，协议见 `docs/github-accelerator.md` 第 8 节）。因此本服务器只需在 `<APP_DIR>/.env` 中增加 `GITHUB_ACCEL_BASE_URL` 与 `GITHUB_ACCEL_SECRET` 两个必填变量（另有两个可选项 `GITHUB_ACCEL_TIMEOUT_MS`、`GITHUB_ACCEL_TICKET_TTL_MINUTES`），不需要安装或运行任何节点进程。两个变量缺失时 `/tools/github` 页面仍可访问，会显示"加速节点未配置"，其余功能不受影响。
 
 在线编译器使用 Docker 作为执行边界。首次部署、更新和重新配置会启动 Docker daemon，将编译器服务用户加入 `docker` 组，并预拉取 JavaScript/TypeScript、Python、Java、C/C++、C#、Go、Rust、PHP、Ruby、Kotlin、Swift 和 Bash 镜像。每次任务仍由 API 以 `--network=none`、非 root 用户、只读根文件系统、临时 `/tmp`、CPU/内存/PID 和超时限制启动一次性容器；代码和标准输入不会写入数据库。请确保服务器允许安装 Docker 并有足够磁盘空间保存这些镜像。
 

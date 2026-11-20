@@ -6,7 +6,6 @@
 export interface AccelConfig {
 	readonly port: number;
 	readonly host: string;
-	readonly baseUrl: string;
 	readonly secret: string;
 	readonly allowPublic: boolean;
 	readonly cacheDir: string;
@@ -15,6 +14,12 @@ export interface AccelConfig {
 	readonly ratePerMinute: number;
 	readonly concurrencyPerIp: number;
 	readonly maxConcurrency: number;
+	/** 游客档限速（字节/秒），0 表示不限速。 */
+	readonly guestBytesPerSecond: number;
+	/** 登录用户档限速（字节/秒），0 表示不限速。 */
+	readonly memberBytesPerSecond: number;
+	/** 游客每 IP 并发，默认 1：单连接限速 + 并发收窄，多开连接也刷不回带宽。 */
+	readonly guestConcurrencyPerIp: number;
 	readonly githubToken: string;
 	readonly upstreamTimeoutMs: number;
 }
@@ -27,6 +32,9 @@ const DEFAULTS = {
 	ratePerMinute: 30,
 	concurrencyPerIp: 3,
 	maxConcurrency: 64,
+	guestBytesPerSecond: 10_485_760, // 10 MiB/s
+	memberBytesPerSecond: 104_857_600, // 100 MiB/s
+	guestConcurrencyPerIp: 1,
 	upstreamTimeoutMs: 30_000,
 } as const;
 
@@ -63,8 +71,6 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): AccelConfig {
 	return {
 		port: readInt(env, "ACCEL_PORT", DEFAULTS.port),
 		host: readString(env, "ACCEL_HOST", DEFAULTS.host) || DEFAULTS.host,
-		// 末尾斜杠会在拼接 /download/<ticket> 时产生双斜杠，提前归一化
-		baseUrl: readString(env, "ACCEL_BASE_URL").replace(/\/+$/, ""),
 		secret: readString(env, "ACCEL_SECRET"),
 		allowPublic: readBoolean(env, "ACCEL_ALLOW_PUBLIC", true),
 		cacheDir: readString(env, "ACCEL_CACHE_DIR"),
@@ -73,6 +79,10 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): AccelConfig {
 		ratePerMinute: readInt(env, "ACCEL_RATE_PER_MINUTE", DEFAULTS.ratePerMinute),
 		concurrencyPerIp: readInt(env, "ACCEL_CONCURRENCY_PER_IP", DEFAULTS.concurrencyPerIp),
 		maxConcurrency: readInt(env, "ACCEL_MAX_CONCURRENCY", DEFAULTS.maxConcurrency),
+		// 0 是合法值（不限速），只有"未配置"才回退默认值，所以必须走 readInt 而不是 readString + ||。
+		guestBytesPerSecond: readInt(env, "ACCEL_GUEST_BYTES_PER_SECOND", DEFAULTS.guestBytesPerSecond),
+		memberBytesPerSecond: readInt(env, "ACCEL_MEMBER_BYTES_PER_SECOND", DEFAULTS.memberBytesPerSecond),
+		guestConcurrencyPerIp: readInt(env, "ACCEL_GUEST_CONCURRENCY_PER_IP", DEFAULTS.guestConcurrencyPerIp),
 		githubToken: readString(env, "ACCEL_GITHUB_TOKEN"),
 		upstreamTimeoutMs: readInt(env, "ACCEL_UPSTREAM_TIMEOUT_MS", DEFAULTS.upstreamTimeoutMs),
 	};

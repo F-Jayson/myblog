@@ -1808,3 +1808,22 @@ body { font-family: var(--site-body-font, system-ui, sans-serif); }
 	.github-accel-assets th:nth-child(3), .github-accel-assets td:nth-child(3) { display: none; }
 }
 
+/* ---------- 当前身份行（状态条下面的档位展示） ----------
+   沿用卡片风格：细边框 + 半透明底色，登录态用主题色强调，游客态压低对比。 */
+
+.github-accel-identity { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; padding: .5rem .7rem; border: 1px solid var(--line); border-radius: .7rem; background: color-mix(in srgb, var(--btn-bg) 55%, transparent); }
+.github-accel-identity-label { display: inline-flex; align-items: center; gap: .3rem; color: var(--faint-text); font-size: .74rem; font-weight: 750; white-space: nowrap; }
+.github-accel-identity-label svg { color: var(--primary); }
+.github-accel-identity-value { color: var(--deep-text); font-size: .78rem; font-weight: 750; font-variant-numeric: tabular-nums; }
+.github-accel-identity-value.is-guest { color: var(--muted-text); }
+.github-accel-identity-value.is-member { color: var(--primary); }
+.github-accel-identity-hint { flex: 1 1 12rem; min-width: 0; color: var(--faint-text); font-size: .74rem; line-height: 1.55; overflow-wrap: anywhere; }
+.github-accel-identity-login { display: inline-flex; flex: 0 0 auto; align-items: center; gap: .3rem; padding: .3rem .62rem; border: 1px solid color-mix(in srgb, var(--primary) 38%, transparent); border-radius: .5rem; background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); font-size: .74rem; font-weight: 750; cursor: pointer; transition: background .16s, border-color .16s; }
+.github-accel-identity-login:hover:not(:disabled) { border-color: color-mix(in srgb, var(--primary) 55%, transparent); background: color-mix(in srgb, var(--primary) 20%, transparent); }
+.github-accel-identity-login:disabled { opacity: .55; cursor: not-allowed; }
+
+@media (max-width: 700px) {
+	.github-accel-identity { align-items: flex-start; }
+	.github-accel-identity-hint { flex-basis: 100%; }
+}
+

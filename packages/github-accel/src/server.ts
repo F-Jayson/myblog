@@ -15,7 +15,8 @@ import { buildRangeHeaders, DiskCache, ifRangeMatches, parseRangeHeader, type Ca
 import { checkAllowedUrl, fetchReleases, fileNameFromUrl, GithubApiError } from "./github.js";
 import { buildDownloadHeaders, buildGitHeaders, filterHeaders, openUpstream, ProxyError, type UpstreamFetcher } from "./proxy.js";
 import { AccessGuard } from "./ratelimit.js";
-import { verifyTicket } from "./ticket.js";
+import { createThrottleStream, pipeToClient } from "./throttle.js";
+import { verifyTicket, type TicketTier } from "./ticket.js";
 
 export const VERSION = "1.0.0";
 
@@ -24,6 +25,21 @@ const GITHUB_BASE = "https://github.com";
 const TICKET_SHAPE = /^[A-Za-z0-9_-]+\.[0-9a-f]{32}$/u;
 
 type ResponseHeaders = Record<string, string | string[]>;
+
+/** 一次出流的档位与对应速率：档位只决定用哪个配置值，速率本身仍在节点侧配置。 */
+interface TierRate {
+	readonly tier: TicketTier;
+	readonly bytesPerSecond: number;
+}
+
+function resolveTierRate(cfg: AccelConfig, tier: TicketTier): TierRate {
+	return { tier, bytesPerSecond: tier === "member" ? cfg.memberBytesPerSecond : cfg.guestBytesPerSecond };
+}
+
+/** 档位与速率写进响应头：现场 curl -I 就能确认这条连接被算进哪一档、限到多少。 */
+function tierHeaders(rate: TierRate): Record<string, string> {
+	return { "x-accel-tier": rate.tier, "x-accel-rate": String(rate.bytesPerSecond) };
+}
 
 export interface AppDependencies {
 	readonly cache?: DiskCache;
@@ -144,8 +160,12 @@ interface Lease {
 	readonly ok: boolean;
 }
 
-function acquireLease(ctx: AppContext, req: IncomingMessage, res: ServerResponse, head: boolean): Lease {
-	const lease = ctx.guard.acquire(clientIp(req), ctx.now());
+function acquireLease(ctx: AppContext, req: IncomingMessage, res: ServerResponse, head: boolean, tier: TicketTier): Lease {
+	// 游客把每 IP 并发收窄到配置值（默认 1）：单连接限速之下再多开连接也刷不回带宽。
+	// 登录用户不传，沿用 ACCEL_CONCURRENCY_PER_IP，游客的收窄不会影响他们。
+	const lease = tier === "guest"
+		? ctx.guard.acquire(clientIp(req), ctx.now(), { concurrencyPerIp: ctx.cfg.guestConcurrencyPerIp })
+		: ctx.guard.acquire(clientIp(req), ctx.now());
 	if (!lease.ok) {
 		const status = lease.reason === "GLOBAL_CONCURRENCY_LIMITED" ? 503 : 429;
 		const messages: Record<string, string> = {
@@ -170,6 +190,8 @@ function acquireLease(ctx: AppContext, req: IncomingMessage, res: ServerResponse
 
 interface DownloadTarget {
 	readonly url: string;
+	/** 带 ticket 的下载取 ticket 里的 t；/download?url= 这类公开路径一律游客。 */
+	readonly tier: TicketTier;
 }
 
 type DownloadTargetResult = { readonly ok: true; readonly target: DownloadTarget } | { readonly ok: false; readonly status: number; readonly code: string; readonly error: string };
@@ -186,7 +208,7 @@ function resolveDownloadTarget(cfg: AccelConfig, url: URL): DownloadTargetResult
 		}
 		const check = checkAllowedUrl(raw);
 		if (!check.ok) return { ok: false, status: 400, code: check.code, error: check.error };
-		return { ok: true, target: { url: check.url } };
+		return { ok: true, target: { url: check.url, tier: "guest" } };
 	}
 
 	const rawTicket = path.slice("/download/".length);
@@ -199,7 +221,7 @@ function resolveDownloadTarget(cfg: AccelConfig, url: URL): DownloadTargetResult
 	// ticket 里的 u 也要过白名单：签名只证明"来自主站"，不证明目标域名安全。
 	const check = checkAllowedUrl(verification.payload.u);
 	if (!check.ok) return { ok: false, status: 400, code: check.code, error: check.error };
-	return { ok: true, target: { url: check.url } };
+	return { ok: true, target: { url: check.url, tier: verification.payload.t } };
 }
 
 async function handleDownload(req: IncomingMessage, res: ServerResponse, url: URL, ctx: AppContext): Promise<void> {
@@ -213,21 +235,23 @@ async function handleDownload(req: IncomingMessage, res: ServerResponse, url: UR
 		return;
 	}
 	const target = resolved.target.url;
+	const rate = resolveTierRate(ctx.cfg, resolved.target.tier);
 
-	const lease = acquireLease(ctx, req, res, head);
+	const lease = acquireLease(ctx, req, res, head, rate.tier);
 	if (!lease.ok) return;
 
 	const entry = await ctx.cache.read(target, ctx.now());
 	if (entry !== null) {
-		serveFromCache(ctx, req, res, entry, head);
+		serveFromCache(ctx, req, res, entry, head, rate);
 		return;
 	}
-	await serveFromUpstream(ctx, req, res, target, head);
+	await serveFromUpstream(ctx, req, res, target, head, rate);
 }
 
-function cacheResponseHeaders(entry: CacheEntry, extra: ResponseHeaders): ResponseHeaders {
+function cacheResponseHeaders(entry: CacheEntry, extra: ResponseHeaders, rate: TierRate): ResponseHeaders {
 	const headers: ResponseHeaders = {
 		...corsHeaders(),
+		...tierHeaders(rate),
 		"content-type": entry.meta.contentType || "application/octet-stream",
 		"content-disposition": contentDisposition(entry.meta.fileName),
 		"accept-ranges": "bytes",
@@ -238,13 +262,13 @@ function cacheResponseHeaders(entry: CacheEntry, extra: ResponseHeaders): Respon
 	return { ...headers, ...extra };
 }
 
-function serveFromCache(ctx: AppContext, req: IncomingMessage, res: ServerResponse, entry: CacheEntry, head: boolean): void {
+function serveFromCache(ctx: AppContext, req: IncomingMessage, res: ServerResponse, entry: CacheEntry, head: boolean, rate: TierRate): void {
 	const meta = entry.meta;
 	const ifNoneMatch = headerValue(req, "if-none-match");
 	if (ifNoneMatch !== undefined && meta.etag !== "") {
 		const candidates = ifNoneMatch.split(",").map((value) => value.trim());
 		if (candidates.includes(meta.etag) || candidates.includes("*")) {
-			res.writeHead(304, cacheResponseHeaders(entry, {}));
+			res.writeHead(304, cacheResponseHeaders(entry, {}, rate));
 			res.end();
 			return;
 		}
@@ -255,7 +279,7 @@ function serveFromCache(ctx: AppContext, req: IncomingMessage, res: ServerRespon
 		const modified = Date.parse(meta.lastModified);
 		// If-Modified-Since 的语义是"不比我手里的新就不用回内容"。
 		if (Number.isFinite(since) && Number.isFinite(modified) && since >= modified) {
-			res.writeHead(304, cacheResponseHeaders(entry, {}));
+			res.writeHead(304, cacheResponseHeaders(entry, {}, rate));
 			res.end();
 			return;
 		}
@@ -268,35 +292,32 @@ function serveFromCache(ctx: AppContext, req: IncomingMessage, res: ServerRespon
 		if (ifRange !== undefined && !ifRangeMatches(ifRange, meta)) range = null;
 	}
 	if (range === "unsatisfiable") {
-		res.writeHead(416, cacheResponseHeaders(entry, { "content-range": "bytes */" + meta.size, "x-cache": "HIT" }));
+		res.writeHead(416, cacheResponseHeaders(entry, { "content-range": "bytes */" + meta.size, "x-cache": "HIT" }, rate));
 		res.end();
 		return;
 	}
 
 	if (range !== null) {
 		const rangeHeaders = buildRangeHeaders(range, meta.size, meta.contentType);
-		res.writeHead(rangeHeaders.status, cacheResponseHeaders(entry, rangeHeaders.headers));
+		res.writeHead(rangeHeaders.status, cacheResponseHeaders(entry, rangeHeaders.headers, rate));
 		if (head) {
 			res.end();
 			return;
 		}
-		const stream = ctx.cache.openReadStream(entry, range);
-		stream.on("error", () => res.destroy());
-		stream.pipe(res);
+		// 命中缓存也要限速：缓存只解决回源，出节点的带宽照样要按档位卡住。
+		pipeToClient(ctx.cache.openReadStream(entry, range), res, rate.bytesPerSecond);
 		return;
 	}
 
-	res.writeHead(200, cacheResponseHeaders(entry, { "content-length": String(meta.size) }));
+	res.writeHead(200, cacheResponseHeaders(entry, { "content-length": String(meta.size) }, rate));
 	if (head) {
 		res.end();
 		return;
 	}
-	const stream = ctx.cache.openReadStream(entry);
-	stream.on("error", () => res.destroy());
-	stream.pipe(res);
+	pipeToClient(ctx.cache.openReadStream(entry), res, rate.bytesPerSecond);
 }
 
-async function serveFromUpstream(ctx: AppContext, req: IncomingMessage, res: ServerResponse, target: string, head: boolean): Promise<void> {
+async function serveFromUpstream(ctx: AppContext, req: IncomingMessage, res: ServerResponse, target: string, head: boolean, rate: TierRate): Promise<void> {
 	const headers = buildDownloadHeaders({
 		range: headerValue(req, "range"),
 		ifRange: headerValue(req, "if-range"),
@@ -325,6 +346,7 @@ async function serveFromUpstream(ctx: AppContext, req: IncomingMessage, res: Ser
 	}
 	if (responseHeaders["accept-ranges"] === undefined) responseHeaders["accept-ranges"] = "bytes";
 	responseHeaders["x-cache"] = "MISS";
+	for (const [name, value] of Object.entries(tierHeaders(rate))) responseHeaders[name] = value;
 
 	const upstreamLength = upstream.headers["content-length"];
 	const contentLength = typeof upstreamLength === "string" ? Number(upstreamLength) : Number.NaN;
@@ -347,7 +369,7 @@ async function serveFromUpstream(ctx: AppContext, req: IncomingMessage, res: Ser
 		};
 		const writer = ctx.cache.createWriter(target, meta, ctx.now());
 		res.writeHead(status, responseHeaders);
-		streamWithCache(ctx, upstream, res, writer, contentLength);
+		streamWithCache(ctx, upstream, res, writer, contentLength, rate);
 		return;
 	}
 
@@ -357,15 +379,15 @@ async function serveFromUpstream(ctx: AppContext, req: IncomingMessage, res: Ser
 		res.end();
 		return;
 	}
-	upstream.on("error", () => res.destroy());
-	upstream.pipe(res);
+	// 不可缓存的分支（Range / 长度未知 / 压缩响应）同样要限速，否则改一个请求头就绕过了档位。
+	pipeToClient(upstream, res, rate.bytesPerSecond);
 }
 
 /**
  * 一边把字节写给客户端，一边把同一份字节写进缓存。
  * 用 Transform 而不是手动 pipe：pipeline 会在客户端中断时同时拆掉上游与文件句柄。
  */
-function streamWithCache(ctx: AppContext, upstream: IncomingMessage, res: ServerResponse, writer: ReturnType<DiskCache["createWriter"]>, expectedSize: number): void {
+function streamWithCache(ctx: AppContext, upstream: IncomingMessage, res: ServerResponse, writer: ReturnType<DiskCache["createWriter"]>, expectedSize: number, rate: TierRate): void {
 	const tee = new Transform({
 		transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
 			writer.write(chunk).then(
@@ -376,7 +398,7 @@ function streamWithCache(ctx: AppContext, upstream: IncomingMessage, res: Server
 	});
 
 	// Node 的 pipeline 成功时回调参数可能是 undefined 而不是 null，两种都要当成功处理。
-	pipeline(upstream, tee, res, (error: Error | null | undefined) => {
+	const onDone = (error: Error | null | undefined): void => {
 		if (error !== null && error !== undefined) {
 			res.destroy();
 			void writer.abort();
@@ -389,7 +411,14 @@ function streamWithCache(ctx: AppContext, upstream: IncomingMessage, res: Server
 			},
 			() => void writer.abort(),
 		);
-	});
+	};
+
+	if (rate.bytesPerSecond > 0) {
+		// 节流挂在 tee 之后：缓存文件仍按上游速度落盘，被卡住的只有发往客户端的那一份。
+		pipeline(upstream, tee, createThrottleStream({ bytesPerSecond: rate.bytesPerSecond }), res, onDone);
+		return;
+	}
+	pipeline(upstream, tee, res, onDone);
 }
 
 // ---------------------------------------------------------------------------
@@ -423,6 +452,8 @@ async function handleGit(req: IncomingMessage, res: ServerResponse, url: URL, ct
 
 	let index = 0;
 	let signedU: string | null = null;
+	// 档位默认游客：无 ticket 的公开克隆（allowPublic）只可能是游客。
+	let tier: TicketTier = "guest";
 	const first = decodeSegment(segments[0] ?? "");
 	if (first === null) {
 		respondError(res, 400, "PATH_INVALID", "路径含有非法的百分号编码");
@@ -435,6 +466,7 @@ async function handleGit(req: IncomingMessage, res: ServerResponse, url: URL, ct
 			return;
 		}
 		signedU = verification.payload.u;
+		tier = verification.payload.t;
 		index = 1;
 	}
 
@@ -472,7 +504,8 @@ async function handleGit(req: IncomingMessage, res: ServerResponse, url: URL, ct
 		clientUserAgent: headerValue(req, "user-agent"),
 	});
 
-	const lease = acquireLease(ctx, req, res, false);
+	const rate = resolveTierRate(ctx.cfg, tier);
+	const lease = acquireLease(ctx, req, res, false, rate.tier);
 	if (!lease.ok) return;
 
 	const result = await openUpstream({
@@ -489,9 +522,10 @@ async function handleGit(req: IncomingMessage, res: ServerResponse, url: URL, ct
 	for (const [name, value] of Object.entries(filterHeaders(upstream.headers))) {
 		responseHeaders[name] = value;
 	}
+	for (const [name, value] of Object.entries(tierHeaders(rate))) responseHeaders[name] = value;
 	res.writeHead(upstream.statusCode ?? 502, responseHeaders);
-	upstream.on("error", () => res.destroy());
-	upstream.pipe(res);
+	// git clone/fetch 的 pack 流同样按档位卡住，否则换条协议就能跑满带宽。
+	pipeToClient(upstream, res, rate.bytesPerSecond);
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +551,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, ctx: App
 
 	if (path === "/api/health") {
 		if (!allowMethods(req, res, ["GET", "HEAD"])) return;
-		sendJson(res, 200, { ok: true, version: VERSION, publicAllowed: ctx.cfg.allowPublic }, { head: method === "HEAD" });
+		sendJson(res, 200, {
+			ok: true,
+			version: VERSION,
+			publicAllowed: ctx.cfg.allowPublic,
+			// 主站要按节点回报的速率展示档位说明，节点自己报出来比在主站再抄一份默认值可靠。
+			guestBytesPerSecond: ctx.cfg.guestBytesPerSecond,
+			memberBytesPerSecond: ctx.cfg.memberBytesPerSecond,
+		}, { head: method === "HEAD" });
 		return;
 	}
 
@@ -639,7 +680,9 @@ export async function startServer(cfg: AccelConfig = config): Promise<Server> {
 	const shown = typeof address === "object" && address !== null ? String(address.address) + ":" + String(address.port) : String(address);
 	console.log("[github-accel] 已启动：监听 " + shown + "，公开下载 " + (cfg.allowPublic ? "开启" : "关闭")
 		+ "，缓存 " + (cache.enabled ? cfg.cacheDir : "关闭") + "，限流 " + cfg.ratePerMinute + " 次/分钟/IP，并发 "
-		+ cfg.concurrencyPerIp + "/IP（全局 " + cfg.maxConcurrency + "）");
+		+ cfg.concurrencyPerIp + "/IP（全局 " + cfg.maxConcurrency + "）"
+		+ "，限速 游客 " + cfg.guestBytesPerSecond + " B/s（并发 " + cfg.guestConcurrencyPerIp + "/IP）/ 登录 "
+		+ cfg.memberBytesPerSecond + " B/s");
 	return server;
 }
 

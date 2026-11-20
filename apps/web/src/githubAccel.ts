@@ -2,6 +2,12 @@
 // 单独放在这里，是因为 api.ts 需要这些类型、页面组件需要这些格式化函数，
 // 而字段名必须和 docs/github-accelerator.md 第 4、5 节的接口契约严格一致。
 
+/** 档位速率，单位字节/秒：guest 是游客、member 是登录用户；0 表示节点不限速。 */
+export type GithubAccelRates = {
+	guest: number;
+	member: number;
+};
+
 export type GithubAccelConfig = {
 	enabled: boolean;
 	configured: boolean;
@@ -9,7 +15,17 @@ export type GithubAccelConfig = {
 	acceleratorBase: string;
 	publicAllowed: boolean;
 	ticketTtlMinutes: number;
+	// 主站从节点的 /api/health 读到的档位速率；节点未升级或主站没下发时整个字段缺省，
+	// 页面按 GITHUB_ACCEL_DEFAULT_RATES 兜底，不要在这里写死具体数字。
+	rates?: GithubAccelRates;
 };
+
+/**
+ * 节点默认档位速率（字节/秒）：游客 10 MiB/s、登录用户 100 MiB/s。
+ * 必须与 packages/github-accel/src/config.ts 里 ACCEL_GUEST_BYTES_PER_SECOND /
+ * ACCEL_MEMBER_BYTES_PER_SECOND 的默认值保持一致——主站没下发 rates 时靠这里兜底。
+ */
+export const GITHUB_ACCEL_DEFAULT_RATES: GithubAccelRates = { guest: 10485760, member: 104857600 };
 
 // 与文档第 5 节一字不差。改动必须同步 apps/api/src/githubAccel.ts 的同名类型。
 export type GithubResolved =
@@ -101,6 +117,29 @@ export function formatBytes(bytes: number): string {
 	}
 	const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
 	return `${Number(value.toFixed(digits))} ${BYTE_UNITS[unit]}`;
+}
+
+const RATE_UNITS = ["B/s", "KiB/s", "MiB/s", "GiB/s", "TiB/s"] as const;
+
+/**
+ * 速率按 1024 进制换算，单位是 MiB/s 而不是 MB/s：节点配置的原始值就是 10485760（10 * 1024 * 1024）。
+ * 整数不带小数点（10 MiB/s），非整数保留一位（1.5 MiB/s）；0 沿用节点的"不限速"约定。
+ */
+export function formatBytesPerSecond(bytes: number): string {
+	if (!Number.isFinite(bytes) || bytes < 0) return "—";
+	if (bytes === 0) return "不限速";
+	let value = bytes;
+	let unit = 0;
+	while (value >= 1024 && unit < RATE_UNITS.length - 1) {
+		value /= 1024;
+		unit += 1;
+	}
+	// 输入是整数字节，除以 1024 的倍数在二进制浮点里是精确的，Number.isInteger 判定可靠；
+	// 不整除时只留一位小数，避免 9.999999 这种毛刺出现在界面上。
+	let shown: number;
+	if (unit === 0) shown = Math.round(value);
+	else shown = Number.isInteger(value) ? value : Number(value.toFixed(1));
+	return `${shown} ${RATE_UNITS[unit]}`;
 }
 
 /**

@@ -70,6 +70,49 @@ describe("并发上限", () => {
 		assert.equal(guard.acquire("2.2.2.2", 1_700_000_000_000).ok, true);
 	});
 
+	it("单次调用可以收窄每 IP 并发（游客档传 1）", () => {
+		// 构造值是登录用户的额度，游客档靠第三参临时收窄，互不影响。
+		const guard = new AccessGuard({ perMinute: 100, concurrencyPerIp: 3, maxConcurrency: 10 });
+		const now = 1_700_000_000_000;
+		const first = guard.acquire("1.1.1.1", now, { concurrencyPerIp: 1 });
+		assert.equal(first.ok, true);
+		const blocked = guard.acquire("1.1.1.1", now, { concurrencyPerIp: 1 });
+		assert.equal(blocked.ok, false);
+		if (blocked.ok) return;
+		assert.equal(blocked.reason, "IP_CONCURRENCY_LIMITED");
+		// 同一 IP 走"不传第三参"的路径（登录用户）仍然按构造值的 3 个额度算。
+		const member = guard.acquire("1.1.1.1", now);
+		assert.equal(member.ok, true);
+		const memberSecond = guard.acquire("1.1.1.1", now);
+		assert.equal(memberSecond.ok, true);
+		if (first.ok) first.release();
+		if (member.ok) member.release();
+		if (memberSecond.ok) memberSecond.release();
+	});
+
+	it("不传 concurrencyPerIp 时沿用构造值", () => {
+		const guard = new AccessGuard({ perMinute: 100, concurrencyPerIp: 2, maxConcurrency: 10 });
+		const now = 1_700_000_000_000;
+		const a = guard.acquire("1.1.1.1", now);
+		const b = guard.acquire("1.1.1.1", now);
+		const c = guard.acquire("1.1.1.1", now);
+		assert.equal(a.ok, true);
+		assert.equal(b.ok, true);
+		assert.equal(c.ok, false);
+		if (a.ok) a.release();
+		if (b.ok) b.release();
+	});
+
+	it("concurrencyPerIp 传 0 或负数收敛到 1", () => {
+		const guard = new AccessGuard({ perMinute: 100, concurrencyPerIp: 5, maxConcurrency: 10 });
+		const now = 1_700_000_000_000;
+		const first = guard.acquire("1.1.1.1", now, { concurrencyPerIp: 0 });
+		assert.equal(first.ok, true);
+		assert.equal(guard.acquire("1.1.1.1", now, { concurrencyPerIp: -3 }).ok, false);
+		if (first.ok) first.release();
+		assert.equal(guard.acquire("1.1.1.1", now).ok, true);
+	});
+
 	it("重复 release 不会把计数减成负数", () => {
 		const guard = new AccessGuard({ perMinute: 100, concurrencyPerIp: 1, maxConcurrency: 1 });
 		const result = guard.acquire("1.1.1.1", 1_700_000_000_000);

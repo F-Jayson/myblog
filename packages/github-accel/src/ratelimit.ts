@@ -70,15 +70,23 @@ export class AccessGuard {
 	/**
 	 * 申请一个并发额度。先算计数再算并发：被限流的请求不应该占用并发槽位。
 	 * 放行时返回 release 回调，调用方必须在响应结束时调用一次。
+	 *
+	 * options.concurrencyPerIp 允许单次调用收窄/放宽每 IP 并发（游客档用），
+	 * 缺省仍用构造时的值，既有调用方不受影响。
 	 */
-	acquire(ip: string, now = Date.now()): AcquireResult {
+	acquire(ip: string, now = Date.now(), options: { concurrencyPerIp?: number } = {}): AcquireResult {
 		const rate = this.checkRate(ip, now);
 		if (!rate.allowed) {
 			return { ok: false, reason: "RATE_LIMITED", retryAfterSeconds: rate.retryAfterSeconds };
 		}
 		const key = ip || "unknown";
+		const requested = options.concurrencyPerIp;
+		// 0 或负数会让每个请求都被拒，和构造参数一样收敛到 1。
+		const limit = requested !== undefined && Number.isFinite(requested)
+			? Math.max(1, Math.floor(requested))
+			: this.concurrencyPerIp;
 		const current = this.activePerIp.get(key) ?? 0;
-		if (current >= this.concurrencyPerIp) {
+		if (current >= limit) {
 			// 每 IP 并发超限是客户端行为问题，用 429 让它退避；全局超限是节点容量问题，用 503。
 			return { ok: false, reason: "IP_CONCURRENCY_LIMITED", retryAfterSeconds: 5 };
 		}

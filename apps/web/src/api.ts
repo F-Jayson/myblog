@@ -2,7 +2,7 @@ import { fallbackPosts, fallbackPostsFor, fallbackSite } from "./data";
 import { getBrowserFingerprint, getCachedFingerprint, getOrCreateDeviceId } from "./fingerprint";
 import { absoluteMediaUrl } from "./media";
 import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, ClipboardContentType, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, GameLeaderboard, GameScoreResult, GamesHome, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, StorageMigrationRecord, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
-import type { GithubAccelConfig, GithubCloneInfo, GithubDownloadTicket, GithubRelease, GithubReleaseAsset, GithubResolved } from "./githubAccel";
+import type { GithubAccelConfig, GithubAccelRates, GithubCloneInfo, GithubDownloadTicket, GithubRelease, GithubReleaseAsset, GithubResolved } from "./githubAccel";
 
 export type PublicResourcePayload = {
 	locked?: boolean;
@@ -806,6 +806,30 @@ function pickTime(record: Record<string, unknown>, keys: string[]): string {
 	return "";
 }
 
+/**
+ * 档位速率：主站把节点 /api/health 的 guestBytesPerSecond / memberBytesPerSecond 折成
+ * rates 下发，旧版主站或节点未升级时整个字段缺省。任一档位不是有效数字就整块丢弃，
+ * 交给页面用默认档位兜底；0 是"不限速"的合法值，不能当缺省处理。
+ */
+function normalizeGithubRates(record: Record<string, unknown> | null): GithubAccelRates | undefined {
+	const rates = recordOf(record?.rates);
+	if (!rates) return undefined;
+	const guest = pickRate(rates, ["guest", "guestBytesPerSecond"]);
+	const member = pickRate(rates, ["member", "memberBytesPerSecond"]);
+	if (guest === undefined || member === undefined) return undefined;
+	return { guest, member };
+}
+
+function pickRate(record: Record<string, unknown>, keys: string[]): number | undefined {
+	for (const key of keys) {
+		const value = record[key];
+		if (value === null || value === undefined || value === "") continue;
+		const parsed = Number(value);
+		if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+	}
+	return undefined;
+}
+
 function normalizeGithubConfig(payload: unknown): GithubAccelConfig {
 	const record = recordOf(unwrapPayload(payload));
 	return {
@@ -816,6 +840,7 @@ function normalizeGithubConfig(payload: unknown): GithubAccelConfig {
 		acceleratorBase: record ? pickText(record, ["acceleratorBase", "baseUrl", "base"]) : "",
 		publicAllowed: record?.publicAllowed === true,
 		ticketTtlMinutes: (record && pickNumber(record, ["ticketTtlMinutes", "ticketTtl"])) || 30,
+		rates: normalizeGithubRates(record),
 	};
 }
 
@@ -931,6 +956,34 @@ export async function fetchGithubReleases(owner: string, repo: string): Promise<
 /** 签发票据，拿到主站短链；调用方随后用 window.location.assign 交给浏览器。 */
 export async function createGithubDownload(url: string): Promise<GithubDownloadTicket> {
 	return normalizeGithubTicket(await jsonRequest<unknown>("/api/tools/github/download", "POST", { url }));
+}
+
+// 下载短链与同源预检两条路径一一对应（见 apps/api/src/githubAccel.ts 的
+// GITHUB_ACCEL_DL_PATH / GITHUB_ACCEL_PROBE_PATH），把 /dl/ 换成 /probe/ 就是预检地址。
+const GITHUB_DL_SEGMENT = "/api/tools/github/dl/";
+const GITHUB_PROBE_SEGMENT = "/api/tools/github/probe/";
+
+/**
+ * 触发下载前先预检一次：主站替浏览器 HEAD 加速节点，把状态码翻成中文原因以同源 JSON 回来。
+ * 不能让页面自己 HEAD 下载短链 —— 短链 302 到加速节点，主站与节点域名不同，
+ * 跨域响应读不到节点的错误正文，预检等于白做（线上实测只能拿到一个 CORS 失败）。
+ * 返回空字符串表示"放行"：预检自己出错（限流、断网、主站 5xx）时一律不拦，交给真下载去试。
+ */
+export async function probeGithubDownload(downloadPath: string): Promise<string> {
+	const probePath = downloadPath.replace(GITHUB_DL_SEGMENT, GITHUB_PROBE_SEGMENT);
+	if (probePath === downloadPath) return "";
+	let payload: unknown;
+	try {
+		payload = await (await fetch(probePath, { cache: "no-store" })).json();
+	} catch {
+		return "";
+	}
+	const record = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+	// ok:true 是节点通了；ticket 本身被拒时主站直接回 { error, code }（没有 ok 字段），
+	// 两种都要把 error 交回页面，其余形状一律放行。
+	if (!record || record.ok === true) return "";
+	const message = typeof record.error === "string" ? record.error.trim() : "";
+	return message;
 }
 
 /** 生成 clone 命令与 insteadOf 全局配置。 */
