@@ -1,0 +1,22 @@
+{
+	"name": "@jayson-blog/github-accel",
+	"private": true,
+	"version": "1.0.0",
+	"type": "module",
+	"description": "GitHub 下载/克隆加速节点：HMAC 签名下载、Range 透传、git smart HTTP 代理",
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"dev": "tsx watch src/server.ts",
+		"build": "tsc -p tsconfig.json",
+		"type-check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+		"start": "node dist/server.js",
+		"test": "node --test --import tsx test/*.test.ts"
+	},
+	"devDependencies": {
+		"@types/node": "^22.15.21",
+		"typescript": "^5.8.3",
+		"tsx": "^4.19.4"
+	}
+}

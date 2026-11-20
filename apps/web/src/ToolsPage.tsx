@@ -10,6 +10,7 @@ import {
 	Fingerprint,
 	Code2,
 	Gamepad2,
+	Github,
 	Hash,
 	Highlighter,
 	Image,
@@ -26,6 +27,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import CodeHighlightPage from "./CodeHighlightPage";
+import GithubAccelPage from "./GithubAccelPage";
 import PumlPage from "./PumlPage";
 import { useAuth } from "./auth";
 import {
@@ -79,6 +81,7 @@ export const DEV_TOOLS: ToolItem[] = [
 	{ id: "html", title: "HTML 转义", description: "转义或还原 HTML 文本。", icon: FileCode2 },
 	{ id: "highlight", title: "代码高亮", description: "识别语言并高亮代码，复制到 Word 时使用浅色斑马纹。", icon: Highlighter },
 	{ id: "puml", title: "PlantUML 绘图", description: "粘贴 PlantUML 代码即时出图，可复制图片或导出 PNG / SVG。", icon: Workflow },
+	{ id: "github", title: "GitHub 加速下载", description: "粘贴 GitHub 安装包或仓库地址，由加速节点直传下载或生成 clone 命令。", icon: Github },
 ];
 
 const toolById = (id: string) => DEV_TOOLS.find((tool) => tool.id === id);
@@ -602,6 +605,7 @@ export default function ToolsPage() {
 	if (!toolById(toolId)) return <Catalog notice="没有这个小工具，请从下面重新选择。" />;
 	if (toolId === "highlight") return <><ToolSwitcher current={toolId} /><CodeHighlightPage /></>;
 	if (toolId === "puml") return <><ToolSwitcher current={toolId} /><PumlPage /></>;
+	if (toolId === "github") return <><ToolSwitcher current={toolId} /><GithubAccelPage /></>;
 	const initialColor = toolId === "picker" || toolId === "color" ? search.get("color") ?? undefined : undefined;
 	return <>
 		<ToolSwitcher current={toolId} />

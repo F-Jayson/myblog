@@ -96,6 +96,14 @@ export const config = {
 		memoryLimit: process.env.COMPILER_MEMORY_LIMIT?.trim() || "256m",
 		cpuLimit: process.env.COMPILER_CPU_LIMIT?.trim() || "1",
 	},
+	githubAccel: {
+		// 加速节点地址，留空表示未配置：前端显示"加速节点未配置"，接口回 503 而不是报错
+		baseUrl: (process.env.GITHUB_ACCEL_BASE_URL?.trim() || "").replace(/\/+$/u, ""),
+		// 与加速节点的 ACCEL_SECRET 必须是同一个值；两端都配了才能签发出可用 ticket
+		secret: (process.env.GITHUB_ACCEL_SECRET ?? "").trim(),
+		timeoutMs: numberFromEnv(process.env.GITHUB_ACCEL_TIMEOUT_MS, 8_000),
+		ticketTtlMinutes: numberFromEnv(process.env.GITHUB_ACCEL_TICKET_TTL_MINUTES, 30),
+	},
 	puml: {
 		// 整个 PlantUML 功能的开关；关闭后本地引擎与远程回退都不会被调用
 		enabled: booleanFromEnv(process.env.PUML_ENABLED, true),

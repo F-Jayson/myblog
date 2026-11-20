@@ -13,7 +13,8 @@
     "puml:install": "node scripts/fetch-puml.mjs",
     "test:knowledge": "node --test --import tsx \"test/knowledge-p*.test.ts\"",
     "test:webdav": "node --test --import tsx \"test/webdav-*.test.ts\"",
-    "test:puml": "node --test --import tsx \"test/puml.test.ts\""
+    "test:puml": "node --test --import tsx \"test/puml.test.ts\"",
+    "test:github": "node --test --import tsx \"test/github-accel.test.ts\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1159.0",

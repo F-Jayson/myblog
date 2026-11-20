@@ -10,6 +10,10 @@
     "db:migrate": "pnpm --filter @jayson-blog/api db:migrate",
     "db:seed": "pnpm --filter @jayson-blog/api db:seed",
     "puml:install": "pnpm --filter @jayson-blog/api puml:install",
-    "test:puml": "pnpm --filter @jayson-blog/api test:puml"
+    "test:puml": "pnpm --filter @jayson-blog/api test:puml",
+    "test:github": "pnpm --filter @jayson-blog/api test:github && pnpm --filter @jayson-blog/github-accel test",
+    "accel:dev": "pnpm --filter @jayson-blog/github-accel dev",
+    "accel:build": "pnpm --filter @jayson-blog/github-accel build",
+    "accel:start": "pnpm --filter @jayson-blog/github-accel start"
   }
 }

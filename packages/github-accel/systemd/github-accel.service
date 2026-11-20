@@ -1,0 +1,32 @@
+[Unit]
+Description=GitHub 下载/克隆加速节点（github-accel）
+Documentation=https://github.com/owner/repo/blob/main/docs/github-accelerator.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gitaccel
+Group=gitaccel
+WorkingDirectory=/opt/github-accel
+# 密钥只放在这个文件里（chmod 600 root:gitaccel），不要写进 unit。
+EnvironmentFile=/etc/github-accel.env
+ExecStart=/usr/bin/node /opt/github-accel/dist/server.js
+Restart=on-failure
+RestartSec=5
+
+# 每个下载与 git 会话都是长连接，默认 1024 个 fd 很容易先被打满。
+LimitNOFILE=65535
+# 缓存目录是唯一需要写入的位置，其余走只读文件系统。
+ReadWritePaths=/var/lib/github-accel/cache
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+# SIGTERM 会触发优雅关闭：等待进行中的下载收尾，10 秒后强制退出。
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

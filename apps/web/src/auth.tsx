@@ -41,6 +41,7 @@ const defaultFeatures: FeatureSettings = {
 	compilerEnabled: true,
 	gamesEnabled: true,
 	webdavEnabled: true,
+	githubAccelEnabled: true,
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);

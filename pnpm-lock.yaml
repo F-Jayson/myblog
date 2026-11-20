@@ -115,6 +115,18 @@ importers:
         specifier: ^5.8.3
         version: 5.8.3
 
+  packages/github-accel:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.21
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
+
   packages/knowledge-mcp:
     dependencies:
       '@modelcontextprotocol/sdk':

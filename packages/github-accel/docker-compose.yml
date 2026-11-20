@@ -1,0 +1,41 @@
+# 节点只监听 127.0.0.1，公网 443 由同机的 Nginx（见 nginx.conf）终止 TLS。
+# ACCEL_SECRET 必须与主站的 GITHUB_ACCEL_SECRET 完全一致，通过 .env 传入，不写进仓库。
+# 注意：YAML 不允许 tab 缩进，本文件用两个空格。
+services:
+  github-accel:
+    build: .
+    image: jayson-blog/github-accel:latest
+    container_name: github-accel
+    restart: unless-stopped
+    env_file:
+      # required: false 让没有 .env 时也能起（此时签名校验会被拒绝，只适合本地试探）。
+      - path: .env
+        required: false
+    environment:
+      ACCEL_HOST: "0.0.0.0"
+      ACCEL_PORT: "8787"
+      ACCEL_CACHE_DIR: /data/cache
+    ports:
+      # 前面的 127.0.0.1 是安全边界：节点端口不直接暴露到公网。
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - accel-cache:/data/cache
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      # 不限制的话 docker 的 json-file 日志会跟着下载日志一起涨满磁盘。
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  accel-cache:

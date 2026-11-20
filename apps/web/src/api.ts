@@ -2,6 +2,7 @@ import { fallbackPosts, fallbackPostsFor, fallbackSite } from "./data";
 import { getBrowserFingerprint, getCachedFingerprint, getOrCreateDeviceId } from "./fingerprint";
 import { absoluteMediaUrl } from "./media";
 import type { AuthorHeatmap, AuthorProfile, AuthorProfilePayload, ChangelogEntry, ClipboardContentType, CommentRecord, CommentSettings, CompilerRunRequest, CompilerRunResult, EmojiSticker, FeatureSettings, FeedbackSettings, GameLeaderboard, GameScoreResult, GamesHome, ManagedPage, ManagedPageKey, Paginated, Post, PostSummary, PublicUser, SiteData, StorageMigrationRecord, UserClipboard, UserSpaceStats, UserStorageItem } from "./types";
+import type { GithubAccelConfig, GithubCloneInfo, GithubDownloadTicket, GithubRelease, GithubReleaseAsset, GithubResolved } from "./githubAccel";
 
 export type PublicResourcePayload = {
 	locked?: boolean;
@@ -458,7 +459,7 @@ export const api = {
 		} catch { return fallback; }
 	},
 	async features(): Promise<FeatureSettings> {
-		const fallback: FeatureSettings = { commentsEnabled: true, registrationEnabled: true, loginEnabled: true, imageHostingEnabled: true, clipboardEnabled: true, userCenterEnabled: true, publicResourcesEnabled: true, compilerEnabled: true, gamesEnabled: true, webdavEnabled: true };
+		const fallback: FeatureSettings = { commentsEnabled: true, registrationEnabled: true, loginEnabled: true, imageHostingEnabled: true, clipboardEnabled: true, userCenterEnabled: true, publicResourcesEnabled: true, compilerEnabled: true, gamesEnabled: true, webdavEnabled: true, githubAccelEnabled: true };
 		try {
 			const result = await request<Partial<FeatureSettings>>("/api/features");
 			return { ...fallback, ...result };
@@ -757,6 +758,184 @@ export async function getPumlStatus(): Promise<PumlEngineStatus | null> {
 	} catch {
 		return null;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// GitHub 加速下载（docs/github-accelerator.md 第 4 节）
+// 主站只做解析、签票和 302，文件字节由加速节点直传浏览器，所以这里的请求都是
+// 轻量的 JSON 调用；真正的大流量发生在 window.location.assign 之后。
+// 主站与加速节点可能返回 camelCase 或 GitHub 原始 snake_case，统一在这里归一化，
+// 页面就只需要面向 ./githubAccel 里的类型编程。
+// ---------------------------------------------------------------------------
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function pickText(record: Record<string, unknown>, keys: string[]): string {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) return value.trim();
+	}
+	return "";
+}
+
+function pickNumber(record: Record<string, unknown>, keys: string[]): number {
+	for (const key of keys) {
+		const value = record[key];
+		if (value === null || value === undefined || value === "") continue;
+		const parsed = Number(value);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return 0;
+}
+
+/** 时间字段可能给 ISO 字符串，也可能给秒/毫秒时间戳；统一成 ISO 交给页面格式化。 */
+function pickTime(record: Record<string, unknown>, keys: string[]): string {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) {
+			const parsed = Date.parse(value);
+			if (!Number.isNaN(parsed)) return new Date(parsed).toISOString();
+			continue;
+		}
+		if (typeof value === "number" && Number.isFinite(value)) {
+			return new Date(value < 1e12 ? value * 1000 : value).toISOString();
+		}
+	}
+	return "";
+}
+
+function normalizeGithubConfig(payload: unknown): GithubAccelConfig {
+	const record = recordOf(unwrapPayload(payload));
+	return {
+		// 旧版主站不下发该字段时视为开启，与 webdavEnabled 的处理保持一致
+		enabled: record?.enabled !== false,
+		configured: record?.configured === true,
+		online: record?.online === true,
+		acceleratorBase: record ? pickText(record, ["acceleratorBase", "baseUrl", "base"]) : "",
+		publicAllowed: record?.publicAllowed === true,
+		ticketTtlMinutes: (record && pickNumber(record, ["ticketTtlMinutes", "ticketTtl"])) || 30,
+	};
+}
+
+function normalizeGithubResolved(payload: unknown): GithubResolved {
+	const outer = recordOf(payload);
+	const record = recordOf(outer?.resolved) ?? recordOf(unwrapPayload(payload));
+	if (!record) return { kind: "invalid", error: "解析服务返回了无法识别的结果。" };
+	const owner = pickText(record, ["owner"]);
+	const repo = pickText(record, ["repo"]);
+	const kind = pickText(record, ["kind"]);
+	if (kind === "invalid") return { kind: "invalid", error: pickText(record, ["error", "message"]) || "无法识别这个地址。" };
+	if (kind === "file") {
+		const url = pickText(record, ["url", "downloadUrl"]);
+		if (!owner || !repo || !url) return { kind: "invalid", error: "解析结果缺少仓库或文件地址。" };
+		const origin = pickText(record, ["origin"]);
+		const resolved: GithubResolved = {
+			kind: "file",
+			owner,
+			repo,
+			fileName: pickText(record, ["fileName", "filename", "name"]) || decodeURIComponent(url.split("/").pop() ?? "") || "下载文件",
+			url,
+			origin: origin === "archive" || origin === "raw" ? origin : "release",
+		};
+		const tag = pickText(record, ["tag"]);
+		const ref = pickText(record, ["ref"]);
+		if (tag) resolved.tag = tag;
+		if (ref) resolved.ref = ref;
+		return resolved;
+	}
+	if (!owner || !repo) return { kind: "invalid", error: "解析结果缺少仓库信息。" };
+	const repoUrl = pickText(record, ["repoUrl", "htmlUrl"]) || `https://github.com/${owner}/${repo}`;
+	if (kind === "release") {
+		const tag = pickText(record, ["tag"]);
+		if (!tag) return { kind: "invalid", error: "解析结果缺少版本标签。" };
+		return { kind: "release", owner, repo, tag, repoUrl };
+	}
+	if (kind === "repo") return { kind: "repo", owner, repo, repoUrl };
+	return { kind: "invalid", error: "解析服务返回了未知的结果类型。" };
+}
+
+function normalizeGithubAssets(value: unknown): GithubReleaseAsset[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((entry) => {
+		const record = recordOf(entry);
+		if (!record) return [];
+		const name = pickText(record, ["name", "fileName", "filename"]);
+		const url = pickText(record, ["url", "downloadUrl", "browserDownloadUrl", "browser_download_url"]);
+		if (!name || !url) return [];
+		return [{
+			name,
+			size: pickNumber(record, ["size", "byteSize", "bytes"]),
+			downloadCount: pickNumber(record, ["downloadCount", "download_count", "downloads"]),
+			url,
+		}];
+	});
+}
+
+function normalizeGithubReleases(payload: unknown): GithubRelease[] {
+	const candidate = unwrapPayload(payload);
+	const direct = Array.isArray(candidate) ? candidate : null;
+	const nested = direct ? null : recordOf(candidate);
+	const list = direct ?? (nested ? [nested.releases, nested.items, nested.list].find(Array.isArray) as unknown[] | undefined : undefined) ?? [];
+	return list.flatMap((entry) => {
+		const record = recordOf(entry);
+		if (!record) return [];
+		const tag = pickText(record, ["tag", "tagName", "tag_name"]);
+		if (!tag) return [];
+		return [{
+			tag,
+			name: pickText(record, ["name"]) || tag,
+			publishedAt: pickTime(record, ["publishedAt", "published_at", "createdAt", "created_at", "date"]),
+			prerelease: record.prerelease === true || record.isPrerelease === true || record.is_prerelease === true,
+			assets: normalizeGithubAssets(record.assets),
+		}];
+	});
+}
+
+function normalizeGithubTicket(payload: unknown): GithubDownloadTicket {
+	const record = recordOf(unwrapPayload(payload));
+	const downloadPath = record ? pickText(record, ["downloadPath", "path", "url", "downloadUrl"]) : "";
+	if (!downloadPath) throw new Error("下载接口没有返回可用的下载地址");
+	return {
+		downloadPath,
+		fileName: (record && pickText(record, ["fileName", "filename", "name"])) || "GitHub 下载",
+		expiresAt: record ? pickTime(record, ["expiresAt", "expires_at", "expiresAtMs"]) : "",
+	};
+}
+
+function normalizeGithubClone(payload: unknown): GithubCloneInfo {
+	const record = recordOf(unwrapPayload(payload));
+	const cloneUrl = record ? pickText(record, ["cloneUrl", "clone_url", "url"]) : "";
+	const command = (record && pickText(record, ["command", "cloneCommand"])) || (cloneUrl ? `git clone ${cloneUrl}` : "");
+	if (!cloneUrl || !command) throw new Error("克隆接口没有返回可用的地址");
+	return { cloneUrl, command, insteadOf: record ? pickText(record, ["insteadOf", "instead_of", "config"]) : "" };
+}
+
+/** 节点的功能开关、是否配置、是否可达；节点没配置时 configured=false，页面按"未配置"展示。 */
+export async function fetchGithubAccelConfig(): Promise<GithubAccelConfig> {
+	return normalizeGithubConfig(await request<unknown>("/api/tools/github/config"));
+}
+
+/** 解析用户粘贴的地址，返回 repo / release / file / invalid 四选一。 */
+export async function resolveGithubInput(input: string): Promise<GithubResolved> {
+	return normalizeGithubResolved(await jsonRequest<unknown>("/api/tools/github/resolve", "POST", { input }));
+}
+
+/** Release 列表由主站代理节点获取（节点侧有 60 秒缓存），这里只负责拉和归一化。 */
+export async function fetchGithubReleases(owner: string, repo: string): Promise<GithubRelease[]> {
+	const query = new URLSearchParams({ owner, repo });
+	return normalizeGithubReleases(await request<unknown>(`/api/tools/github/releases?${query.toString()}`));
+}
+
+/** 签发票据，拿到主站短链；调用方随后用 window.location.assign 交给浏览器。 */
+export async function createGithubDownload(url: string): Promise<GithubDownloadTicket> {
+	return normalizeGithubTicket(await jsonRequest<unknown>("/api/tools/github/download", "POST", { url }));
+}
+
+/** 生成 clone 命令与 insteadOf 全局配置。 */
+export async function createGithubClone(owner: string, repo: string): Promise<GithubCloneInfo> {
+	return normalizeGithubClone(await jsonRequest<unknown>("/api/tools/github/clone", "POST", { owner, repo }));
 }
 
 export { USER_TOKEN_KEY };

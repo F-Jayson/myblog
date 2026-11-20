@@ -1732,3 +1732,79 @@ body { font-family: var(--site-body-font, system-ui, sans-serif); }
 	.puml-pane-actions .user-tool-button { flex: 1 1 6rem; }
 	.puml-stage { padding: .6rem; }
 }
+
+/* ---------- GitHub 加速下载（/tools/github） ----------
+   新类统一用 github-accel- 前缀，只追加在文件末尾，避免影响已有页面。 */
+
+.github-accel-page { display: grid; gap: 1rem; }
+.github-accel-page .user-tool-error svg { margin-right: .32rem; vertical-align: -2px; }
+
+.github-accel-status { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; }
+.github-accel-badge { display: inline-flex; align-items: center; gap: .3rem; padding: .22rem .62rem; border-radius: 999px; font-size: .72rem; font-weight: 750; letter-spacing: .02em; white-space: nowrap; }
+.github-accel-badge.is-ok { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); }
+.github-accel-badge.is-warn { background: rgb(214 150 40 / .18); color: #9a6a12; }
+.github-accel-badge.is-off { background: var(--btn-bg); color: var(--faint-text); }
+.github-accel-status-text { flex: 1 1 14rem; min-width: 0; color: var(--faint-text); font-size: .76rem; line-height: 1.55; overflow-wrap: anywhere; }
+.github-accel-lead { margin: 0; color: var(--muted-text); font-size: .8rem; line-height: 1.6; }
+
+.github-accel-input { min-height: 8rem; }
+.github-accel-hint { margin: 0; color: var(--faint-text); font-size: .76rem; line-height: 1.6; }
+.github-accel-hint svg { margin-right: .3rem; vertical-align: -2px; }
+.github-accel-subtitle { margin: 0; color: var(--muted-text); font-size: .78rem; font-weight: 750; }
+
+.github-accel-support { display: grid; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+.github-accel-support code { display: block; padding: .35rem .6rem; border-radius: .45rem; background: var(--btn-bg); color: var(--muted-text); font: 500 .74rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+
+.github-accel-block { display: grid; gap: .65rem; }
+.github-accel-block-head { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
+.github-accel-block-head h3 { margin: 0; color: var(--deep-text); font-size: .92rem; }
+
+.github-accel-card { display: grid; gap: .7rem; padding: .9rem; border: 1px solid var(--line); border-radius: .8rem; background: color-mix(in srgb, var(--btn-bg) 55%, transparent); }
+.github-accel-card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+.github-accel-card-head strong { display: inline-flex; align-items: center; gap: .4rem; min-width: 0; color: var(--deep-text); font-size: .88rem; }
+.github-accel-filename { font: 700 .84rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.github-accel-origin { flex: 0 0 auto; padding: .14rem .5rem; border-radius: 999px; background: var(--btn-bg); color: var(--muted-text); font-size: .7rem; font-weight: 700; }
+
+.github-accel-facts { display: flex; flex-wrap: wrap; gap: .4rem 1.5rem; margin: 0; }
+.github-accel-facts div { display: flex; align-items: baseline; gap: .35rem; min-width: 0; }
+.github-accel-facts dt { color: var(--faint-text); font-size: .72rem; white-space: nowrap; }
+.github-accel-facts dd { margin: 0; color: var(--deep-text); font-size: .78rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+.github-accel-command { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .5rem; }
+.github-accel-command > span { color: var(--faint-text); font-size: .72rem; font-weight: 750; white-space: nowrap; }
+.github-accel-command code { min-width: 0; padding: .42rem .6rem; overflow-x: auto; border-radius: .45rem; background: var(--btn-bg); color: var(--deep-text); font: 500 .76rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; }
+
+.github-accel-release { overflow: hidden; border: 1px solid var(--line); border-radius: .75rem; }
+.github-accel-release-head { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; width: 100%; padding: .62rem .7rem; border: 0; background: none; color: var(--muted-text); font-size: .78rem; text-align: left; cursor: pointer; transition: background .16s; }
+.github-accel-release-head:hover { background: var(--btn-bg); }
+.github-accel-chevron { flex: 0 0 auto; color: var(--faint-text); transition: transform .18s ease; }
+.github-accel-chevron.is-open { transform: rotate(90deg); }
+.github-accel-tag { display: inline-flex; align-items: center; padding: .12rem .45rem; border-radius: .35rem; background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary); font: 700 .74rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.github-accel-release-name { min-width: 0; color: var(--deep-text); font-size: .8rem; font-weight: 700; overflow-wrap: anywhere; }
+.github-accel-prerelease { flex: 0 0 auto; padding: .1rem .42rem; border-radius: 999px; background: rgb(214 150 40 / .18); color: #9a6a12; font-size: .68rem; font-weight: 750; }
+.github-accel-release-time, .github-accel-release-count { color: var(--faint-text); font-size: .72rem; white-space: nowrap; }
+.github-accel-release-count { margin-left: auto; }
+
+.github-accel-asset-scroll { overflow-x: auto; border-top: 1px solid var(--line); }
+.github-accel-assets { width: 100%; border-collapse: collapse; font-size: .76rem; }
+.github-accel-assets th { padding: .45rem .6rem; color: var(--faint-text); font-size: .7rem; font-weight: 750; text-align: left; white-space: nowrap; }
+.github-accel-assets td { padding: .45rem .6rem; border-top: 1px solid var(--line); color: var(--muted-text); vertical-align: middle; }
+.github-accel-assets td:nth-child(2), .github-accel-assets td:nth-child(3) { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.github-accel-asset-name { max-width: 24rem; color: var(--deep-text); font: 500 .74rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.github-accel-asset-action { text-align: right; }
+.github-accel-asset-action .user-tool-button { padding: .35rem .6rem; font-size: .74rem; }
+
+.github-accel-limits { padding-top: .5rem; border-top: 1px solid var(--line); }
+.github-accel-limits h3 { margin: 0 0 .4rem; color: var(--deep-text); font-size: .88rem; }
+.github-accel-limits ul { display: grid; gap: .28rem; margin: 0; padding-left: 1.1rem; color: var(--faint-text); font-size: .76rem; line-height: 1.6; }
+
+:root.dark .github-accel-badge.is-warn,
+:root.dark .github-accel-prerelease { color: #efc98b; }
+
+@media (max-width: 700px) {
+	.github-accel-command { grid-template-columns: minmax(0, 1fr) auto; }
+	.github-accel-command > span { grid-column: 1 / -1; }
+	.github-accel-release-count { margin-left: 0; }
+	.github-accel-assets th:nth-child(3), .github-accel-assets td:nth-child(3) { display: none; }
+}
+

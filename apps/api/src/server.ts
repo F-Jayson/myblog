@@ -60,6 +60,18 @@ import { getProcessSnapshot, getRequestMetrics, recordRequest } from "./telemetr
 import { CompilerError, executeCompiler, formatCompilerCode, listCompilerLanguages } from "./compiler.js";
 import { PUML_MAX_SOURCE_BYTES, PumlError, getPumlStatus, renderPuml, shutdownPuml } from "./puml.js";
 import {
+	GithubAccelError,
+	buildCloneInfo,
+	buildDownloadRedirect,
+	buildDownloadTicket,
+	fetchAcceleratorReleases,
+	getAcceleratorStatus,
+	parseGithubInput,
+	requireAcceleratorBaseUrl,
+	requireGithubAccelRate,
+	verifyTicket,
+} from "./githubAccel.js";
+import {
 	knowledgeRoutes,
 	kbAgentRoutes,
 	setKbAdminGrant,
@@ -400,6 +412,7 @@ const FEATURE_KEYS = [
 	"compilerEnabled",
 	"gamesEnabled",
 	"webdavEnabled",
+	"githubAccelEnabled",
 ] as const;
 type FeatureKey = typeof FEATURE_KEYS[number];
 type FeatureSettings = Record<FeatureKey, boolean>;
@@ -414,6 +427,7 @@ const DEFAULT_FEATURE_SETTINGS: FeatureSettings = {
 	compilerEnabled: true,
 	gamesEnabled: true,
 	webdavEnabled: true,
+	githubAccelEnabled: true,
 };
 
 function normalizeFeatureSettings(value: unknown): FeatureSettings {
@@ -835,6 +849,112 @@ app.post("/api/tools/puml/render", async (req: Request, res: Response, next: Nex
 			return;
 		}
 		next(error);
+	}
+});
+
+// GitHub 下载加速：解析、ticket 签发与克隆命令生成。文件字节永远不经过主站，
+// 这里只做输入校验 + HMAC 签名 + 302，所以每条路由都用每 IP 窗口限流兜住被刷的风险。
+const githubAccelDisabledMessage = "GitHub 加速下载功能当前已关闭";
+const githubResolveInput = z.object({ input: z.string().trim().min(1).max(2000) }).strict();
+const githubDownloadInput = z.object({ url: z.string().trim().min(1).max(2000) }).strict();
+const githubCloneInput = z.object({ owner: z.string().trim().min(1).max(100), repo: z.string().trim().min(1).max(100) }).strict();
+
+// 统一成文档约定的 { error, code }：GithubAccelError 自带状态码与 code，
+// ZodError 只说明参数不合法，其余异常仍交给全局错误处理。
+function sendGithubAccelError(res: Response, error: unknown) {
+	if (error instanceof GithubAccelError) {
+		if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
+		res.status(error.statusCode).json({ error: error.message, code: error.code });
+		return true;
+	}
+	if (error instanceof z.ZodError) {
+		const field = error.issues[0]?.path.join(".") || "body";
+		res.status(400).json({ error: `请求参数不合法：${field}`, code: "GITHUB_ACCEL_INVALID_INPUT" });
+		return true;
+	}
+	return false;
+}
+
+app.get("/api/tools/github/config", requireFeature("githubAccelEnabled", githubAccelDisabledMessage), async (_req: Request, res: Response, next: NextFunction) => {
+	try {
+		const status = await getAcceleratorStatus();
+		res.json({
+			enabled: true,
+			configured: status.configured,
+			online: status.online,
+			acceleratorBase: config.githubAccel.baseUrl,
+			publicAllowed: status.publicAllowed,
+			ticketTtlMinutes: config.githubAccel.ticketTtlMinutes,
+		});
+	} catch (error) {
+		next(error);
+	}
+});
+
+app.post("/api/tools/github/resolve", requireFeature("githubAccelEnabled", githubAccelDisabledMessage), (req: Request, res: Response, next: NextFunction) => {
+	try {
+		requireGithubAccelRate("resolve", resolveClientIp(req));
+		const input = githubResolveInput.parse(req.body);
+		res.json({ resolved: parseGithubInput(input.input) });
+	} catch (error) {
+		if (!sendGithubAccelError(res, error)) next(error);
+	}
+});
+
+app.get("/api/tools/github/releases", requireFeature("githubAccelEnabled", githubAccelDisabledMessage), async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		requireGithubAccelRate("resolve", resolveClientIp(req));
+		const owner = (queryText(req.query.owner) ?? "").trim();
+		const repo = (queryText(req.query.repo) ?? "").trim();
+		if (!owner || !repo) {
+			res.status(400).json({ error: "缺少 owner 或 repo 参数", code: "GITHUB_ACCEL_INVALID_INPUT" });
+			return;
+		}
+		// Release 列表由加速节点缓存 10 分钟、主站再缓存 60 秒，避免反复打 GitHub API。
+		res.json(await fetchAcceleratorReleases(owner, repo));
+	} catch (error) {
+		if (!sendGithubAccelError(res, error)) next(error);
+	}
+});
+
+app.post("/api/tools/github/download", requireFeature("githubAccelEnabled", githubAccelDisabledMessage), (req: Request, res: Response, next: NextFunction) => {
+	try {
+		requireGithubAccelRate("issue", resolveClientIp(req));
+		// 节点地址为空时签出来的 ticket 无人能验证，直接按"未配置"返回 503。
+		requireAcceleratorBaseUrl();
+		const input = githubDownloadInput.parse(req.body);
+		res.json(buildDownloadTicket(input.url));
+	} catch (error) {
+		if (!sendGithubAccelError(res, error)) next(error);
+	}
+});
+
+// 这个地址是 <a download> 的目标，浏览器会直接跳转过去；302 到节点由节点验签并回源，
+// 主站只负责把 ticket 转交出去，因此不缓存也不读文件。
+app.get("/api/tools/github/dl/:ticket", requireFeature("githubAccelEnabled", githubAccelDisabledMessage), (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const ticket = String(req.params.ticket ?? "");
+		// 先验签再跳转：过期或伪造的 ticket 在这里就 401，不会把用户丢到节点的错误页。
+		const verified = verifyTicket(ticket, "file");
+		if (!verified.ok) {
+			res.status(401).json({ error: verified.error, code: verified.code });
+			return;
+		}
+		res.redirect(302, buildDownloadRedirect(ticket));
+	} catch (error) {
+		if (!sendGithubAccelError(res, error)) next(error);
+	}
+});
+
+app.post("/api/tools/github/clone", requireFeature("githubAccelEnabled", githubAccelDisabledMessage), async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		requireGithubAccelRate("issue", resolveClientIp(req));
+		const input = githubCloneInput.parse(req.body);
+		// publicAllowed 决定 clone 地址是明文仓库路径还是带 ticket 的路径，必须现场问节点。
+		const status = await getAcceleratorStatus();
+		res.json(buildCloneInfo(input.owner, input.repo, { publicAllowed: status.publicAllowed }));
+	} catch (error) {
+		if (!sendGithubAccelError(res, error)) next(error);
 	}
 });
 
@@ -2424,6 +2544,7 @@ const featureSettingsInput = z.object({
 	compilerEnabled: z.boolean().optional(),
 	gamesEnabled: z.boolean().optional(),
 	webdavEnabled: z.boolean().optional(),
+	githubAccelEnabled: z.boolean().optional(),
 }).strict();
 
 app.get("/api/admin/features", requireAdmin, async (_req, res, next) => {

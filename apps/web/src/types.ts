@@ -176,6 +176,8 @@ export type FeatureSettings = {
 	gamesEnabled: boolean;
 	/** WebDAV 云盘；旧版后端不下发该字段时视为开启 */
 	webdavEnabled?: boolean;
+	/** GitHub 加速下载；旧版后端不下发该字段时视为开启 */
+	githubAccelEnabled?: boolean;
 };
 
 export type GamePlayer = {
