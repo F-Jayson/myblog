@@ -214,3 +214,18 @@ export interface PublicDocumentSnapshot {
 }
 
 
+
+export type KbOpenApplicationStatus = "pending" | "approved" | "rejected";
+
+export interface KbOpenApplication {
+	id: number;
+	userId: number;
+	account: string;
+	nickname: string;
+	reason: string;
+	status: KbOpenApplicationStatus;
+	adminId: number | null;
+	adminNote: string | null;
+	createdAt: string;
+	reviewedAt: string | null;
+}

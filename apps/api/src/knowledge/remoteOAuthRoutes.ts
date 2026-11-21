@@ -223,7 +223,7 @@ remoteOAuthRoutes.post("/consent", async (req: Request, res: Response, next: Nex
 		// [209] 授权的库必须真实存在且归属当前用户，防止把别人的库写进授权范围
 		if (body.allowed_library_ids.length > 0) {
 			const [libRows] = await pool.query<RowDataPacket[]>(
-				`SELECT id FROM kb_libraries WHERE owner_user_id = ? AND id IN (${body.allowed_library_ids.map(() => "?").join(",")})`,
+				`SELECT id FROM knowledge_bases WHERE owner_user_id = ? AND id IN (${body.allowed_library_ids.map(() => "?").join(",")})`,
 				[user.id, ...body.allowed_library_ids],
 			);
 			const ownedIds = new Set(libRows.map((row) => Number(row.id)));

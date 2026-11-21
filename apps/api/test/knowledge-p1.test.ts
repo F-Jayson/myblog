@@ -24,21 +24,21 @@ describe("P1: 知识库核心契约与安全单元测试", () => {
 	// =========================================================================
 	describe("A01: 注册时间严格边界测试", () => {
 		const fixedNow = new Date("2026-11-05T12:00:00.000Z");
-		const exact30DaysMs = 30 * 24 * 60 * 60 * 1000;
+		const requiredAgeMs = KB_DEFAULTS.AGE_REQUIREMENT_MS;
 
-		it("注册时间不足 30 天：返回 false", () => {
-			// 29 天 23 小时 59 分
-			const regDate = new Date(fixedNow.getTime() - exact30DaysMs + 60 * 1000);
+		it("注册时间不足 14 天：返回 false", () => {
+			// 13 天 23 小时 59 分
+			const regDate = new Date(fixedNow.getTime() - requiredAgeMs + 60 * 1000);
 			assert.equal(isRegistrationAgeQualified(regDate, fixedNow), false);
 		});
 
-		it("注册时间恰好等于 30 天 (0ms)：必须返回 false (严格大于 30*24h)", () => {
-			const regDate = new Date(fixedNow.getTime() - exact30DaysMs);
+		it("注册时间恰好等于 14 天 (0ms)：必须返回 false (严格大于 14*24h)", () => {
+			const regDate = new Date(fixedNow.getTime() - requiredAgeMs);
 			assert.equal(isRegistrationAgeQualified(regDate, fixedNow), false);
 		});
 
-		it("注册时间严格超过 30 天 (+1ms)：返回 true", () => {
-			const regDate = new Date(fixedNow.getTime() - exact30DaysMs - 1);
+		it("注册时间严格超过 14 天 (+1ms)：返回 true", () => {
+			const regDate = new Date(fixedNow.getTime() - requiredAgeMs - 1);
 			assert.equal(isRegistrationAgeQualified(regDate, fixedNow), true);
 		});
 
@@ -64,7 +64,7 @@ describe("P1: 知识库核心契约与安全单元测试", () => {
 		it("设计典型案例：D=12, U=40, W=3 得分为 75 分，符合达标条件", () => {
 			const score = calculateActivityScore(12, 40, 3);
 			assert.equal(score, 75);
-			// 校验综合达标：score >= 70, D >= 12, S >= 8, W >= 3
+			// 校验综合达标：score >= 60, D >= 10, S >= 6, W >= 2
 			assert.equal(isActivityQualified(score, 12, 8, 3), true);
 		});
 
@@ -163,14 +163,14 @@ describe("P1: 知识库核心契约与安全单元测试", () => {
 				score: 45,
 				d: 8,
 				s: 4,
-				w: 2,
+				w: 1,
 			});
 			assert.equal(missing.length, 5);
-			assert.match(missing[0], /注册时间未达严格 30 天门槛/);
-			assert.match(missing[1], /活跃综合评分未达 70 分/);
-			assert.match(missing[2], /有效登录天数不足 12 天/);
-			assert.match(missing[3], /有效服务使用天数不足 8 天/);
-			assert.match(missing[4], /活跃时间分布段不足 3 段/);
+			assert.match(missing[0], /注册时间未达严格 14 天门槛/);
+			assert.match(missing[1], /活跃综合评分未达 60 分/);
+			assert.match(missing[2], /有效登录天数不足 10 天/);
+			assert.match(missing[3], /有效服务使用天数不足 6 天/);
+			assert.match(missing[4], /活跃时间分布段不足 2 段/);
 		});
 	});
 

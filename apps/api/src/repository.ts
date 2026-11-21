@@ -2110,6 +2110,12 @@ export async function listAdminComments(status?: string) {
 	return Promise.all(rows.map(async (row) => ({ id: Number(row.id), postId: row.postId ? Number(row.postId) : null, userId: row.userId ? Number(row.userId) : null, parentId: row.parentId ? Number(row.parentId) : null, authorName: String(row.authorName), authorEmail: row.authorEmail ? String(row.authorEmail) : null, authorAvatar: row.authorAvatar ? String(row.authorAvatar) : null, body: String(row.body), status: String(row.status), createdAt: String(row.createdAt), ip: row.ip ? String(row.ip) : null, ipLocation: await displayIpLocation(row.ipLocation, row.ip), device: row.device ? String(row.device) : null, browser: row.browser ? String(row.browser) : null, userAgent: row.userAgent ? String(row.userAgent) : null, isAdmin: Boolean(Number(row.isAdmin)), postTitle: row.postTitle ? String(row.postTitle) : null })));
 }
 
+export async function getCommentUserId(id: number): Promise<number | null> {
+	const [[row]] = await pool.query<RowDataPacket[]>("SELECT user_id FROM comments WHERE id = ? LIMIT 1", [id]);
+	const userId = Number(row?.user_id);
+	return Number.isFinite(userId) && userId > 0 ? userId : null;
+}
+
 export async function updateCommentStatus(id: number, status: "pending" | "approved" | "spam") {
 	const [result] = await pool.execute<ResultSetHeader>("UPDATE comments SET status = ? WHERE id = ?", [status, id]);
 	return result.affectedRows > 0;

@@ -2,12 +2,12 @@ export const KB_DEFAULTS = {
 	RULE_VERSION: "v1",
 
 	// 准入与活跃度门槛
-	AGE_REQUIREMENT_MS: 30 * 24 * 60 * 60 * 1000, // 严格大于 30 天 (now - created_at > 30*24h)
+	AGE_REQUIREMENT_MS: 14 * 24 * 60 * 60 * 1000, // 严格大于 14 天 (now - created_at > 14*24h)
 	ACTIVITY_WINDOW_DAYS: 30, // 统计近 30 个已结算 UTC 自然日
-	SCORE_PASS_THRESHOLD: 70, // 100 分制及格线
-	MIN_LOGIN_DAYS_D: 12, // 最少有效登录天数 D >= 12
-	MIN_SERVICE_DAYS_S: 8, // 产生至少一项有效服务的不同天数 S >= 8
-	MIN_TIME_WINDOWS_W: 3, // 4 个时间段 (1-7, 8-14, 15-21, 22-30) 中至少 3 段活跃 W >= 3
+	SCORE_PASS_THRESHOLD: 60, // 100 分制及格线
+	MIN_LOGIN_DAYS_D: 10, // 最少有效登录天数 D >= 10
+	MIN_SERVICE_DAYS_S: 6, // 产生至少一项有效服务的不同天数 S >= 6
+	MIN_TIME_WINDOWS_W: 2, // 4 个时间段 (1-7, 8-14, 15-21, 22-30) 中至少 2 段活跃 W >= 2
 	DAILY_SERVICE_MAX_SCORE: 8, // 每天所有服务合计最高 8 分
 	DAILY_SERVICE_CATEGORY_MAX_SCORE: 4, // 每类服务每天最高 4 分
 	GRACE_PERIOD_MS: 14 * 24 * 60 * 60 * 1000, // 跌落后宽限期 14 天

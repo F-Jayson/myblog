@@ -52,6 +52,7 @@ import {
 	type KbAgentRequest,
 } from "./agentRoutes.js";
 import { withIdempotency } from "./agentStore.js";
+import { createOpenApplication, getLatestOpenApplication } from "./openApplicationStore.js";
 
 export const knowledgeRoutes = Router();
 
@@ -99,6 +100,39 @@ function requireUser(req: Request, res: Response): number | null {
 	}
 	return user.id;
 }
+
+/**
+ * 查询当前用户最近一次「直接开通」申请
+ * GET /api/knowledge/open-application
+ */
+knowledgeRoutes.get("/open-application", async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const application = await getLatestOpenApplication(userId);
+		res.json({ application });
+	} catch (error) {
+		next(error);
+	}
+});
+
+/**
+ * 提交「直接开通」申请，由管理员在后台审核
+ * POST /api/knowledge/open-application
+ */
+knowledgeRoutes.post("/open-application", async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const userId = requireUser(req, res);
+		if (!userId) return;
+		const input = z.object({
+			reason: z.string().trim().min(10, "申请原因至少需要 10 个字").max(1000, "申请原因不能超过 1000 个字"),
+		}).parse(req.body);
+		const application = await createOpenApplication(userId, input.reason);
+		res.status(201).json({ application });
+	} catch (error) {
+		next(error);
+	}
+});
 
 /**
  * 获取当前登录用户的知识库准入资格与活跃进度

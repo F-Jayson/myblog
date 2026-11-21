@@ -610,9 +610,14 @@ export default function KnowledgeSettings() {
 							<Bot className="w-5 h-5 text-primary" />
 							AI 客户端连接 (MCP 授权)
 						</h2>
-						<Link to="/knowledge/authorize" className="kb-btn kb-btn-primary kb-btn-xs" style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
-							授权新客户端
-						</Link>
+						<div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+							<Link to="/knowledge/mcp-help" className="kb-btn kb-btn-ghost kb-btn-xs" style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+								接入帮助
+							</Link>
+							<Link to="/knowledge/authorize" className="kb-btn kb-btn-primary kb-btn-xs" style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+								授权新客户端
+							</Link>
+						</div>
 					</div>
 
 					<p style={{ fontSize: "0.85rem", color: "var(--muted-text)", margin: "0 0 1rem 0" }}>

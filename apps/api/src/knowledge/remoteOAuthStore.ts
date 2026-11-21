@@ -30,6 +30,22 @@ function parseStoredJsonList(value: unknown): string[] {
 	}
 }
 
+function parseStoredNumberList(value: unknown): number[] {
+	let parsed: unknown = value;
+	if (typeof value === "string") {
+		if (!value.trim()) return [];
+		try {
+			parsed = JSON.parse(value) as unknown;
+		} catch {
+			return [];
+		}
+	}
+	if (!Array.isArray(parsed)) return [];
+	return parsed
+		.map((item) => Number(item))
+		.filter((item) => Number.isInteger(item) && item > 0);
+}
+
 export interface OAuthClient {
 	clientId: string;
 	clientName: string;
@@ -265,9 +281,7 @@ export async function exchangeAuthorizationCode(params: {
 
 		// 解析 scope 与 libraryIds（历史数据可能是 JSON 字符串，解析失败按空处理）
 		const scopes: string[] = parseStoredJsonList(codeRow.scopes);
-		const allowedLibraryIds: number[] = parseStoredJsonList(codeRow.allowed_library_ids)
-			.map((item) => Number(item))
-			.filter((item) => Number.isInteger(item) && item > 0);
+		const allowedLibraryIds: number[] = parseStoredNumberList(codeRow.allowed_library_ids);
 
 		// 查客户端名称
 		const [clientRows] = await conn.query<RowDataPacket[]>(

@@ -303,7 +303,7 @@ export async function approveKbDeviceRequest(
 		// 授权的库必须真实存在且归属当前用户，防止把别人的库写进授权范围
 		if (allowedLibraryIds.length > 0) {
 			const [libRows] = await connection.execute<RowDataPacket[]>(
-				`SELECT id FROM kb_libraries WHERE owner_user_id = ? AND id IN (${allowedLibraryIds.map(() => "?").join(",")})`,
+				`SELECT id FROM knowledge_bases WHERE owner_user_id = ? AND id IN (${allowedLibraryIds.map(() => "?").join(",")})`,
 				[userId, ...allowedLibraryIds],
 			);
 			const ownedIds = new Set(libRows.map((row) => Number(row.id)));

@@ -263,7 +263,7 @@ export async function getUserEligibility(userId: number, now = new Date()): Prom
 			minLoginDaysD: KB_DEFAULTS.MIN_LOGIN_DAYS_D,
 			minServiceDaysS: KB_DEFAULTS.MIN_SERVICE_DAYS_S,
 			minTimeWindowsW: KB_DEFAULTS.MIN_TIME_WINDOWS_W,
-			minAgeDays: 30,
+			minAgeDays: Math.round(KB_DEFAULTS.AGE_REQUIREMENT_MS / (24 * 3600 * 1000)),
 		},
 		missingConditions,
 		statDateCutoff: cutoffDate,

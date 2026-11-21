@@ -8,6 +8,7 @@ import type {
 	KbEligibilityResponse,
 	KbMemberItem,
 	KbMemberRole,
+	KbOpenApplication,
 	KbQuotaUsage,
 	KbShareLinkItem,
 	KbVisibility,
@@ -465,5 +466,22 @@ export const kbApi = {
 		await kbRequest("/api/knowledge/agent/connections", {
 			method: "DELETE",
 		});
+	},
+
+	// =========================================================================
+	// 直接开通申请
+	// =========================================================================
+
+	async getOpenApplication(): Promise<KbOpenApplication | null> {
+		const res = await kbRequest<{ application: KbOpenApplication | null }>("/api/knowledge/open-application");
+		return res.application;
+	},
+
+	async submitOpenApplication(reason: string): Promise<KbOpenApplication> {
+		const res = await kbRequest<{ application: KbOpenApplication }>("/api/knowledge/open-application", {
+			method: "POST",
+			body: { reason } as unknown as BodyInit,
+		});
+		return res.application;
 	},
 };

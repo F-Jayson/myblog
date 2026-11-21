@@ -129,9 +129,10 @@ export function generateMissingConditions(params: {
 }): string[] {
 	const missing: string[] = [];
 	if (!params.isAgeQualified) {
+		const requiredAgeDays = Math.round(KB_DEFAULTS.AGE_REQUIREMENT_MS / (24 * 3600 * 1000));
 		const remainingHours = Math.max(1, Math.ceil((KB_DEFAULTS.AGE_REQUIREMENT_MS - params.ageMs) / (3600 * 1000)));
 		const remainingDays = Math.ceil(remainingHours / 24);
-		missing.push(`注册时间未达严格 30 天门槛（还差约 ${remainingDays} 天 / ${remainingHours} 小时）`);
+		missing.push(`注册时间未达严格 ${requiredAgeDays} 天门槛（还差约 ${remainingDays} 天 / ${remainingHours} 小时）`);
 	}
 	if (params.score < KB_DEFAULTS.SCORE_PASS_THRESHOLD) {
 		missing.push(`活跃综合评分未达 ${KB_DEFAULTS.SCORE_PASS_THRESHOLD} 分（当前 ${params.score} 分）`);

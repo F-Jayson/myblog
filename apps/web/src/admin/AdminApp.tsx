@@ -850,6 +850,12 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
         icon: UserCog,
       },
       {
+        href: "/admin/kb-applications",
+        label: "知识库申请",
+        hint: "审核直接开通申请",
+        icon: BookOpen,
+      },
+      {
         href: "/admin/pages",
         label: "页面管理",
         hint: "关于、友链与静态页",
@@ -990,6 +996,7 @@ function AdminShell() {
   else if (/^\/admin\/changelog\/\d+\/(edit|detail)$/u.test(location.pathname)) page = <AdminChangelogEditor editId={Number(location.pathname.split("/")[3])} />;
   else if (location.pathname === "/admin/comments") page = <AdminComments />;
   else if (location.pathname === "/admin/feedback") page = <AdminFeedback />;
+  else if (location.pathname === "/admin/kb-applications") page = <AdminKbApplications />;
   else if (location.pathname === "/admin/comment-settings") page = <AdminCommentSettings />;
   else if (location.pathname === "/admin/users") page = <AdminUsers />;
   else if (location.pathname === "/admin/storage") page = <AdminUserSpace />;
@@ -3148,6 +3155,218 @@ function safeFeedbackPageUrl(value: string) {
   } catch {
     return "";
   }
+}
+
+type AdminKbApplication = {
+  id: number;
+  userId: number;
+  account: string;
+  nickname: string;
+  reason: string;
+  status: "pending" | "approved" | "rejected";
+  adminNote: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+};
+
+const KB_APPLICATION_STATUS_LABELS: Record<AdminKbApplication["status"], string> = {
+  pending: "待审核",
+  approved: "已通过",
+  rejected: "已拒绝",
+};
+
+function AdminKbApplications() {
+  const [items, setItems] = useState<AdminKbApplication[]>([]);
+  const [status, setStatus] = useState<"" | AdminKbApplication["status"]>("pending");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [selected, setSelected] = useState<AdminKbApplication | null>(null);
+  const [note, setNote] = useState("");
+  const [updatingId, setUpdatingId] = useState<number | null>(null);
+
+  const load = () => {
+    const query = new URLSearchParams({ page: String(page), limit: "20" });
+    if (status) query.set("status", status);
+    setLoading(true);
+    setMessage("");
+    void adminRequest<{ items: AdminKbApplication[]; total: number }>("/api/admin/kb-applications?" + query.toString())
+      .then((value) => {
+        setItems(Array.isArray(value.items) ? value.items : []);
+        setTotal(Number(value.total ?? 0));
+      })
+      .catch((error) => {
+        setItems([]);
+        setTotal(0);
+        setMessage(errorText(error, "申请列表加载失败。"));
+      })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(load, [page, status]);
+
+  const openDetail = (item: AdminKbApplication) => {
+    setSelected(item);
+    setNote(item.adminNote ?? "");
+  };
+
+  const review = async (item: AdminKbApplication, next: "approved" | "rejected") => {
+    const action = next === "approved" ? "通过" : "拒绝";
+    if (!window.confirm(`确认${action}「${item.nickname || item.account}」的开通申请吗？`)) return;
+    setUpdatingId(item.id);
+    setMessage("");
+    try {
+      await adminRequest(`/api/admin/kb-applications/${item.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: next, adminNote: note.trim() || null }),
+      });
+      setSelected(null);
+      setNote("");
+      load();
+    } catch (error) {
+      setMessage(errorText(error, `申请${action}失败。`));
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const totalPages = Math.max(1, Math.ceil(total / 20));
+
+  return (
+    <div className="fa-page fa-kb-applications-page">
+      <PageHeading
+        eyebrow="SITE MAINTENANCE"
+        title="知识库申请"
+        description="审核用户提交的直接开通申请，通过后永久开通，不受活跃度下降影响。"
+        action={
+          <GhostButton onClick={load} disabled={loading}>
+            <RefreshCw size={15} className={loading ? "fa-spin" : ""} />
+            刷新列表
+          </GhostButton>
+        }
+      />
+      <div className="fa-toolbar">
+        <select
+          value={status}
+          aria-label="申请状态"
+          onChange={(event) => {
+            setPage(1);
+            setStatus(event.target.value as "" | AdminKbApplication["status"]);
+          }}
+        >
+          <option value="">全部状态</option>
+          <option value="pending">待审核</option>
+          <option value="approved">已通过</option>
+          <option value="rejected">已拒绝</option>
+        </select>
+      </div>
+      {message ? <div className="fa-error fa-page-error">{message}</div> : null}
+      <section className="fa-panel">
+        <div className="fa-panel-head">
+          <div>
+            <div className="fa-panel-title">
+              <BookOpen size={18} /><h2>开通申请</h2><span>{total} 条</span>
+            </div>
+            <p>通过后写入管理员直通资格；拒绝时建议填写原因，用户会在知识库首页看到。</p>
+          </div>
+        </div>
+        <div className="fa-table-wrap">
+          <table className="fa-table">
+            <thead>
+              <tr><th>用户</th><th>申请原因</th><th>提交时间</th><th>状态</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={5}><div className="fa-table-loading"><RefreshCw size={16} className="fa-spin" />正在加载申请</div></td></tr>
+              ) : items.length ? items.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <strong>{item.nickname || item.account}</strong>
+                    <small style={{ display: "block", color: "var(--muted-text)" }}>@{item.account}</small>
+                  </td>
+                  <td>
+                    <button type="button" className="fa-feedback-subject" onClick={() => openDetail(item)}>
+                      <strong>{item.reason.slice(0, 40)}{item.reason.length > 40 ? "…" : ""}</strong>
+                      <small>{item.reason}</small>
+                    </button>
+                  </td>
+                  <td><span className="fa-date-cell">{dateText(item.createdAt)}</span></td>
+                  <td><span className="fa-pill">{KB_APPLICATION_STATUS_LABELS[item.status]}</span></td>
+                  <td>
+                    <div className="fa-inline-actions">
+                      <button type="button" title="查看并审核" onClick={() => openDetail(item)}><Eye size={14} /></button>
+                      {item.status === "pending" ? (
+                        <>
+                          <button type="button" title="通过" disabled={updatingId === item.id} onClick={() => void review(item, "approved")}><Check size={14} /></button>
+                          <button type="button" title="拒绝" disabled={updatingId === item.id} onClick={() => void review(item, "rejected")}><Ban size={14} /></button>
+                        </>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              )) : (
+                <tr><td colSpan={5}><EmptyState>暂无符合条件的申请</EmptyState></td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="fa-pagination">
+          <span>第 {page} / {totalPages} 页</span>
+          <button type="button" disabled={page <= 1 || loading} onClick={() => setPage((current) => current - 1)}>上一页</button>
+          <button type="button" disabled={page >= totalPages || loading} onClick={() => setPage((current) => current + 1)}>下一页</button>
+        </div>
+      </section>
+      {selected ? (
+        <div className="fa-dialog-overlay" role="presentation" onClick={() => setSelected(null)}>
+          <section className="fa-dialog" role="dialog" aria-modal="true" aria-label="开通申请详情" onClick={(event) => event.stopPropagation()}>
+            <div className="fa-dialog-head">
+              <div>
+                <span className="fa-kicker">KNOWLEDGE ACCESS APPLICATION</span>
+                <h2>{selected.nickname || selected.account}</h2>
+              </div>
+              <button type="button" title="关闭" onClick={() => setSelected(null)}><X size={18} /></button>
+            </div>
+            <dl className="fa-feedback-detail-list">
+              <div><dt>账号</dt><dd>@{selected.account}</dd></div>
+              <div><dt>提交时间</dt><dd>{dateText(selected.createdAt)}</dd></div>
+              <div><dt>状态</dt><dd>{KB_APPLICATION_STATUS_LABELS[selected.status]}</dd></div>
+              {selected.reviewedAt ? <div><dt>审核时间</dt><dd>{dateText(selected.reviewedAt)}</dd></div> : null}
+            </dl>
+            <div className="fa-feedback-detail-content" style={{ whiteSpace: "pre-wrap" }}>{selected.reason}</div>
+            {selected.status === "pending" ? (
+              <>
+                <label style={{ display: "block", marginTop: "1rem", fontSize: "0.85rem", fontWeight: 600 }}>审核备注（拒绝时建议填写，用户可见）</label>
+                <textarea
+                  value={note}
+                  onChange={(event) => setNote(event.target.value)}
+                  maxLength={500}
+                  rows={3}
+                  style={{ width: "100%", marginTop: "0.4rem" }}
+                  placeholder="例如：已确认是老用户迁移，直接开通"
+                />
+                <div className="fa-dialog-footer">
+                  <button type="button" className="fa-feedback-delete" disabled={updatingId === selected.id} onClick={() => void review(selected, "rejected")}>
+                    <Ban size={14} />拒绝
+                  </button>
+                  <PrimaryButton disabled={updatingId === selected.id} onClick={() => void review(selected, "approved")}>
+                    <Check size={15} />通过并永久开通
+                  </PrimaryButton>
+                </div>
+              </>
+            ) : (
+              <>
+                {selected.adminNote ? <div className="fa-feedback-detail-content">审核备注：{selected.adminNote}</div> : null}
+                <div className="fa-dialog-footer">
+                  <GhostButton onClick={() => setSelected(null)}>关闭</GhostButton>
+                </div>
+              </>
+            )}
+          </section>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function AdminFeedback() {

@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { createReadStream } from "node:fs";
 import { mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
@@ -80,6 +80,9 @@ import {
 	UserDeletionBlockedError,
 	recordUserDailyLogin,
 	recordWhitelistActivity,
+	getTodayUtcDate,
+	listOpenApplications,
+	reviewOpenApplication,
 	oauthMetadataHandler,
 	oauthResourceMetadataHandler,
 	remoteOAuthRoutes,
@@ -166,6 +169,7 @@ import {
 	getCommentSession,
 	getCommentSettings,
 	getComments,
+	getCommentUserId,
 	getAuthorProfile,
 	getAuthorProfileActivity,
 	getManagedPage,
@@ -511,6 +515,32 @@ async function removeUserStorageFile(storageKey: string | undefined) {
 	await deleteUserSpaceFile(storageKey).catch(() => undefined);
 }
 
+/**
+ * 图床成功上传真实文件后按内容指纹计 1 分，同内容同 UTC 日只记一次。
+ * 计分失败绝不能影响上传结果，因此这里吞掉所有异常。
+ */
+async function hashFileContent(filePath: string): Promise<string> {
+	try {
+		return createHash("sha256").update(await readFile(filePath)).digest("hex");
+	} catch {
+		return "";
+	}
+}
+
+async function recordFileUploadActivity(userId: number, fingerprint: string): Promise<void> {
+	if (!fingerprint) return;
+	try {
+		await recordWhitelistActivity({
+			userId,
+			activityType: "image_upload",
+			idempotencyKey: `image_upload_${fingerprint}_${getTodayUtcDate()}`,
+			fingerprint,
+		});
+	} catch {
+		// 忽略计分失败
+	}
+}
+
 function userImageUploadRoute(kind: UserStorageKind, defaultPublic: boolean) {
 	return (req: RequestWithCommentUser, res: Response, next: NextFunction) => {
 		userStorageUpload.single("file")(req, res, async (uploadError) => {
@@ -528,6 +558,8 @@ function userImageUploadRoute(kind: UserStorageKind, defaultPublic: boolean) {
 				req.file.filename = image.filename;
 				req.file.path = image.path;
 				req.file.mimetype = image.mimeType;
+				// 内容指纹必须在落盘/上传前计算：Cloudflare 存储会删除本地临时文件
+				const fingerprint = await hashFileContent(req.file.path);
 				const targetStorage = req.commentUser.storageLocation === "cloudflare" ? "cloudflare" : "server";
 				const saved = await saveUserSpaceFile({
 					filename: req.file.filename,
@@ -537,6 +569,7 @@ function userImageUploadRoute(kind: UserStorageKind, defaultPublic: boolean) {
 				});
 				const item = await createUserStorageItem({ userId: req.commentUser.id, kind, name, url: saved.url || "", storageKey: req.file.filename, mimeType: req.file.mimetype, byteSize: req.file.size, isPublic, accessPassword: accessPassword ?? null, accessPasswordHint: accessPasswordHint ?? null, limitViews, maxViews });
 				if (!item) throw new Error("图片记录创建失败");
+				void recordFileUploadActivity(req.commentUser.id, fingerprint);
 				res.status(201).json(item);
 			} catch (error) {
 				await removeUserStorageFile(req.file.filename);
@@ -789,6 +822,22 @@ const compilerRequestInput = z.object({
 }).strict();
 const compilerRoutePaths = (name: string) => [`/api/compiler/${name}`, `/api/user/compiler/${name}`];
 
+/**
+ * 编译器成功执行（exitCode === 0）才计 2 分，同代码与输入指纹同日只记一次。
+ * 只奖励"跑通了"的行为，语法错误或超时不计分。
+ */
+function recordCompilerActivity(userId: number, input: { language: string; code: string; stdin?: string }): void {
+	const fingerprint = createHash("sha256")
+		.update(`${input.language}\n${input.code}\n${input.stdin ?? ""}`)
+		.digest("hex");
+	void recordWhitelistActivity({
+		userId,
+		activityType: "compiler_run",
+		idempotencyKey: `compiler_run_${fingerprint}_${getTodayUtcDate()}`,
+		fingerprint,
+	}).catch(() => undefined);
+}
+
 function compilerErrorResponse(error: unknown, res: Response, next: NextFunction) {
 	if (error instanceof CompilerError) {
 		res.status(error.statusCode).json({ error: error.message, code: error.code });
@@ -805,7 +854,9 @@ app.get(compilerRoutePaths("languages"), requireFeature("compilerEnabled", "在�
 app.post(compilerRoutePaths("run"), requireFeature("compilerEnabled", "在线编译功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try {
 		const input = compilerRequestInput.parse(req.body);
-		res.json(await executeCompiler({ ...input, debug: input.debug === true }));
+		const result = await executeCompiler({ ...input, debug: input.debug === true });
+		if (result.exitCode === 0) recordCompilerActivity(req.commentUser!.id, input);
+		res.json(result);
 	} catch (error) {
 		compilerErrorResponse(error, res, next);
 	}
@@ -814,7 +865,9 @@ app.post(compilerRoutePaths("run"), requireFeature("compilerEnabled", "在线编
 app.post(compilerRoutePaths("debug"), requireFeature("compilerEnabled", "在线编译功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
 	try {
 		const input = compilerRequestInput.parse(req.body);
-		res.json(await executeCompiler({ ...input, debug: true }));
+		const result = await executeCompiler({ ...input, debug: true });
+		if (result.exitCode === 0) recordCompilerActivity(req.commentUser!.id, input);
+		res.json(result);
 	} catch (error) {
 		compilerErrorResponse(error, res, next);
 	}
@@ -1311,7 +1364,7 @@ app.post("/api/user/clipboards", requireFeature("userCenterEnabled", "用户中�
 		const contentType = normalizeClipboardContentType(input.contentType);
 		const accessPassword = input.clearAccessPassword && !input.accessPassword ? null : parseAccessPassword(input.accessPassword);
 		const accessPasswordHint = parseAccessPasswordHint(input.accessPasswordHint);
-		res.status(201).json(await createUserClipboard({
+		const item = await createUserClipboard({
 			userId: req.commentUser!.id,
 			title: input.title,
 			content: input.content,
@@ -1322,7 +1375,14 @@ app.post("/api/user/clipboards", requireFeature("userCenterEnabled", "用户中�
 			accessPasswordHint: accessPasswordHint ?? null,
 			limitViews: input.limitViews,
 			maxViews: input.maxViews,
-		}));
+		});
+		if (!item) throw new Error("剪贴板创建失败");
+		void recordWhitelistActivity({
+			userId: req.commentUser!.id,
+			activityType: "clipboard_save",
+			idempotencyKey: `clipboard_save_${item.id}_${getTodayUtcDate()}`,
+		}).catch(() => undefined);
+		res.status(201).json(item);
 	} catch (error) { next(error); }
 });
 app.get("/api/user/clipboards/:id", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireFeature("clipboardEnabled", "在线剪贴板功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {
@@ -1367,6 +1427,13 @@ app.patch("/api/user/clipboards/:id", requireFeature("userCenterEnabled", "用�
 			regenerateShareToken: input.regenerateShareToken,
 		});
 		if (!item) { res.status(404).json({ error: "剪贴板不存在" }); return; }
+		if (input.content !== undefined) {
+			void recordWhitelistActivity({
+				userId: req.commentUser!.id,
+				activityType: "clipboard_save",
+				idempotencyKey: `clipboard_save_${id}_${getTodayUtcDate()}`,
+			}).catch(() => undefined);
+		}
 		res.json(item);
 	} catch (error) { next(error); }
 });
@@ -2057,6 +2124,39 @@ app.delete("/api/admin/feedback/:id", requireAdmin, async (req, res, next) => {
 		const id = Number(req.params.id);
 		if (!Number.isSafeInteger(id) || id < 1) { res.status(400).json({ error: "反馈编号无效" }); return; }
 		res.status(await deleteFeedback(id) ? 204 : 404).end();
+	} catch (error) { next(error); }
+});
+
+// =============================================================================
+// 知识库「直接开通」申请审核
+// =============================================================================
+
+app.get("/api/admin/kb-applications", requireAdmin, async (req, res, next) => {
+	try {
+		const rawStatus = typeof req.query.status === "string" ? req.query.status : "";
+		const status = ["pending", "approved", "rejected"].includes(rawStatus)
+			? rawStatus as "pending" | "approved" | "rejected"
+			: undefined;
+		const page = Math.max(1, Number(req.query.page) || 1);
+		const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+		res.json(await listOpenApplications({ status, page, limit }));
+	} catch (error) { next(error); }
+});
+
+app.patch("/api/admin/kb-applications/:id", requireAdmin, async (req, res, next) => {
+	try {
+		const input = z.object({
+			status: z.enum(["approved", "rejected"]),
+			adminNote: z.string().trim().max(500).optional().nullable(),
+		}).parse(req.body);
+		const admin = (req as RequestWithAdmin).adminUser;
+		const item = await reviewOpenApplication({
+			id: Number(req.params.id),
+			adminId: admin?.id ?? null,
+			status: input.status,
+			adminNote: input.adminNote?.trim() ? input.adminNote.trim() : null,
+		});
+		res.json(item);
 	} catch (error) { next(error); }
 });
 
@@ -2913,7 +3013,22 @@ app.delete("/api/admin/accounts/:id", requireAdmin, async (req: RequestWithAdmin
 	} catch (error) { next(error); }
 });
 app.patch("/api/admin/comments/:id", requireAdmin, async (req, res, next) => {
-	try { const status = z.enum(["pending", "approved", "spam"]).parse(req.body?.status); const ok = await updateCommentStatus(Number(req.params.id), status); res.status(ok ? 204 : 404).end(); } catch (error) { next(error); }
+	try {
+		const status = z.enum(["pending", "approved", "spam"]).parse(req.body?.status);
+		const commentId = Number(req.params.id);
+		const ok = await updateCommentStatus(commentId, status);
+		if (ok && status === "approved") {
+			const authorUserId = await getCommentUserId(commentId);
+			if (authorUserId) {
+				void recordWhitelistActivity({
+					userId: authorUserId,
+					activityType: "approved_comment",
+					idempotencyKey: `approved_comment_${commentId}`,
+				}).catch(() => undefined);
+			}
+		}
+		res.status(ok ? 204 : 404).end();
+	} catch (error) { next(error); }
 });
 app.delete("/api/admin/comments/:id", requireAdmin, async (req, res, next) => {
 	try { const ok = await deleteComment(Number(req.params.id)); res.status(ok ? 204 : 404).end(); } catch (error) { next(error); }
