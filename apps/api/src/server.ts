@@ -217,6 +217,8 @@ import {
 	revokeCommentSession,
 	registerCommentUser,
 	requestCommentEmailCode,
+	requestPasswordResetCode,
+	resetPasswordWithEmailCode,
 	verifyCommentEmailCode,
 	writeAuditLog,
 } from "./repository.js";
@@ -341,16 +343,20 @@ function requestClientIp(req: Request) {
 	return resolveClientIp(req);
 }
 
-function beginPasswordAttempt(req: Request, res: Response, account: string) {
+function beginScopedAttempt(req: Request, res: Response, scope: string, account: string) {
 	const ip = resolveClientIp(req) || "unknown";
 	const normalized = account.trim().toLowerCase() || "unknown";
-	const decision = loginGate.check("password", ip, normalized);
+	const decision = loginGate.check(scope, ip, normalized);
 	if (!decision.allowed) {
 		res.setHeader("Retry-After", String(decision.retryAfterSeconds));
 		res.status(429).json({ error: "尝试次数过多，请稍后再试" });
 		return null;
 	}
 	return { ip, account: normalized };
+}
+
+function beginPasswordAttempt(req: Request, res: Response, account: string) {
+	return beginScopedAttempt(req, res, "password", account);
 }
 function requestAuditPayload(req: Request) {
 	return req.method === "GET" || req.method === "HEAD" ? req.query : req.body;
@@ -484,7 +490,8 @@ async function loadCommentUser(req: RequestWithCommentUser, _res: Response, next
 }
 
 async function requireCommentUser(req: RequestWithCommentUser, res: Response, next: NextFunction) {
-	await loadCommentUser(req, res, () => {
+	await loadCommentUser(req, res, (error?: unknown) => {
+		if (error) { next(error); return; }
 		if (!req.commentUser) { res.status(401).json({ error: "请先登录后再进行此操作" }); return; }
 		next();
 	});
@@ -728,7 +735,7 @@ app.post("/api/user/auth/send-code", async (req, res, next) => {
 	} catch (error) { next(error); }
 });
 
-app.post("/api/auth/register", async (req: RequestWithCommentUser, res, next) => {
+const registerCommentAccount: RequestHandler = async (req: RequestWithCommentUser, res, next) => {
 	try {
 		const features = await getFeatureSettings();
 		if (!features.registrationEnabled) { res.status(403).json({ error: "用户注册功能未开启" }); return; }
@@ -746,15 +753,10 @@ app.post("/api/auth/register", async (req: RequestWithCommentUser, res, next) =>
 		if (features.loginEnabled && !login) { res.status(500).json({ error: "注册成功但登录会话创建失败" }); return; }
 		res.status(201).json({ ...(login ?? {}), user });
 	} catch (error) { next(error); }
-});
+};
 
-app.post("/api/user/auth/register", async (req, res, next) => {
-	try {
-		const response = await fetch(`http://127.0.0.1:${config.port}/api/auth/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(req.body) });
-		const payload = await response.json();
-		res.status(response.status).json(payload);
-	} catch (error) { next(error); }
-});
+app.post("/api/auth/register", registerCommentAccount);
+app.post("/api/user/auth/register", registerCommentAccount);
 
 app.post("/api/auth/login", async (req, res, next) => {
 	try {
@@ -800,6 +802,63 @@ app.post("/api/user/auth/login", async (req, res, next) => {
 		res.json(result);
 	} catch (error) { next(error); }
 });
+
+const passwordResetIdentityInput = z.object({
+	username: z.string().trim().max(190).optional(),
+	account: z.string().trim().max(190).optional(),
+	email: z.string().trim().max(190).optional(),
+});
+
+function passwordResetLogin(input: { username?: string; account?: string; email?: string }) {
+	return (input.account ?? input.username ?? input.email ?? "").trim();
+}
+
+const sendPasswordResetCode: RequestHandler = async (req, res, next) => {
+	try {
+		const features = await getFeatureSettings();
+		if (!features.loginEnabled) { res.status(403).json({ error: "用户登录功能未开启" }); return; }
+		const input = passwordResetIdentityInput.parse(req.body ?? {});
+		const account = passwordResetLogin(input);
+		if (!account) { res.status(400).json({ error: "请输入账号或邮箱" }); return; }
+		const attempt = beginScopedAttempt(req, res, "reset-send", account);
+		if (!attempt) return;
+		loginGate.fail("reset-send", attempt.ip, attempt.account);
+		res.json(await requestPasswordResetCode(account));
+	} catch (error) { next(error); }
+};
+
+const completePasswordReset: RequestHandler = async (req, res, next) => {
+	try {
+		const features = await getFeatureSettings();
+		if (!features.loginEnabled) { res.status(403).json({ error: "用户登录功能未开启" }); return; }
+		const input = passwordResetIdentityInput.extend({
+			emailCode: z.string().trim().max(16).optional(),
+			password: z.string().max(200).optional(),
+		}).parse(req.body ?? {});
+		const account = passwordResetLogin(input);
+		const emailCode = input.emailCode?.trim() ?? "";
+		const password = input.password ?? "";
+		if (!account) { res.status(400).json({ error: "请输入账号或邮箱" }); return; }
+		if (!/^\d{6}$/u.test(emailCode)) { res.status(400).json({ error: "请输入 6 位邮箱验证码" }); return; }
+		if (password.length < 8) { res.status(400).json({ error: "密码至少需要 8 个字符" }); return; }
+		const attempt = beginScopedAttempt(req, res, "reset-confirm", account);
+		if (!attempt) return;
+		const result = await resetPasswordWithEmailCode(account, emailCode, password);
+		if (!result) {
+			loginGate.fail("reset-confirm", attempt.ip, attempt.account);
+			res.status(400).json({ error: "验证码错误或已过期" });
+			return;
+		}
+		loginGate.succeed("reset-confirm", attempt.ip, attempt.account);
+		void recordUserDailyLogin(result.user.id).catch(() => undefined);
+		res.json(result);
+	} catch (error) { next(error); }
+};
+
+app.post("/api/auth/password-reset/code", sendPasswordResetCode);
+app.post("/api/user/auth/password-reset/code", sendPasswordResetCode);
+app.post("/api/auth/password-reset", completePasswordReset);
+app.post("/api/user/auth/password-reset", completePasswordReset);
 app.get("/api/auth/me", loadCommentUser, (req: RequestWithCommentUser, res) => res.json({ user: req.commentUser ?? null }));
 app.get("/api/user/auth/me", loadCommentUser, (req: RequestWithCommentUser, res) => res.json({ user: req.commentUser ?? null }));
 app.post("/api/auth/logout", loadCommentUser, async (req, res, next) => {
@@ -3423,6 +3482,11 @@ const adminDriveUpload = multer({
 });
 
 function driveOwner(admin: NonNullable<RequestWithAdmin["adminUser"]>) {
+	if (admin.id === null) {
+		const error = new Error("当前登录方式不支持网盘管理，请使用数据库管理员账号登录") as Error & { statusCode?: number };
+		error.statusCode = 403;
+		throw error;
+	}
 	return { id: admin.id, username: admin.username.slice(0, 60) };
 }
 

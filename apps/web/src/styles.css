@@ -482,7 +482,10 @@ img { display: block; max-width: 100%; }
 .auth-avatar-options > button.selected { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 24%, transparent); }
 .auth-avatar-options > button img { width: 100%; height: 100%; object-fit: cover; }
 .auth-avatar-upload { width: auto !important; min-width: 4.4rem; padding: 0 .45rem !important; border-radius: .55rem !important; gap: .22rem; font-size: .62rem; }
+.auth-assist { display: flex; justify-content: flex-end; margin-top: -.28rem; }
+.auth-assist button { padding: 0; background: transparent; color: var(--primary); font-size: .7rem; font-weight: 700; }
 .auth-error { margin: .1rem 0 0; padding: .48rem .6rem; border-radius: .45rem; background: color-mix(in srgb, #d36d6d 12%, transparent); color: #b15757; font-size: .7rem; }
+.auth-success { margin: .1rem 0 0; padding: .48rem .6rem; border-radius: .45rem; background: color-mix(in srgb, #3c9d74 14%, transparent); color: #1f7a52; font-size: .7rem; }
 .auth-submit { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-height: 2.55rem; margin-top: .15rem; border-radius: .55rem; background: var(--primary); color: #fff; font-size: .78rem; font-weight: 750; }
 .auth-submit:hover { filter: saturate(1.08) brightness(1.02); }
 .auth-submit:disabled { cursor: progress; opacity: .65; }

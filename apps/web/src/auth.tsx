@@ -6,7 +6,7 @@ import { resolveMediaUrl } from "./media";
 import type { CommentSettings, FeatureSettings, PublicUser } from "./types";
 import { StorageLocationModal } from "./StorageLocationModal";
 
-type AuthMode = "login" | "register";
+type AuthMode = "login" | "register" | "reset";
 
 type AuthContextValue = {
 	user: PublicUser | null;
@@ -17,6 +17,7 @@ type AuthContextValue = {
 	closeAuth: () => void;
 	login: (username: string, password: string) => Promise<PublicUser>;
 	register: (input: { username: string; nickname: string; password: string; email?: string; emailCode?: string; avatar?: string }) => Promise<PublicUser>;
+	resetPassword: (input: { account: string; emailCode: string; password: string }) => Promise<PublicUser>;
 	logout: () => Promise<void>;
 	refresh: () => Promise<void>;
 };
@@ -62,11 +63,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	const [storageModalDismissed, setStorageModalDismissed] = useState(false);
 
 	const refresh = async () => {
-		const [nextUser, nextSettings, nextFeatures] = await Promise.all([api.authMe(), api.commentSettings(), api.features()]);
-		setUser(nextUser);
-		setSettings(nextSettings);
-		setFeatures(nextFeatures);
-		setLoading(false);
+		try {
+			const [nextUser, nextSettings, nextFeatures] = await Promise.all([api.authMe(), api.commentSettings(), api.features()]);
+			setUser(nextUser);
+			setSettings(nextSettings);
+			setFeatures(nextFeatures);
+		} catch (error) {
+			console.error("加载会话信息失败", error);
+		} finally {
+			setLoading(false);
+		}
 	};
 	useEffect(() => { void refresh(); }, []);
 
@@ -92,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		closeAuth: () => setDialogOpen(false),
 		login: async (username, password) => { const result = await api.authLogin({ username, password }); setUser(result); setDialogOpen(false); return result; },
 		register: async (input) => { const result = await api.authRegister(input); const me = await api.authMe(); setUser(me); setDialogOpen(false); return result; },
+		resetPassword: async (input) => { const result = await api.authPasswordReset(input); setUser(result); setDialogOpen(false); return result; },
 		logout: async () => { await api.authLogout(); setUser(null); },
 		refresh,
 	}), [features, loading, settings, user]);
@@ -121,16 +128,18 @@ export function UserAvatar({ user, size = 32 }: { user: PublicUser; size?: numbe
 }
 
 function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode: AuthMode; onModeChange: (mode: AuthMode) => void; onClose: () => void }) {
-	const { settings, features, login, register } = useAuth();
+	const { settings, features, login, register, resetPassword } = useAuth();
 	const [username, setUsername] = useState("");
 	const [nickname, setNickname] = useState("");
 	const [password, setPassword] = useState("");
+	const [confirmPassword, setConfirmPassword] = useState("");
 	const [email, setEmail] = useState("");
 	const [emailCode, setEmailCode] = useState("");
 	const [avatarUrl, setAvatarUrl] = useState("");
 	const [avatarFile, setAvatarFile] = useState<File | null>(null);
 	const [avatarChoice, setAvatarChoice] = useState("");
 	const [error, setError] = useState("");
+	const [notice, setNotice] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [codeBusy, setCodeBusy] = useState(false);
 	const [codeCooldown, setCodeCooldown] = useState(0);
@@ -139,7 +148,10 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 	useEffect(() => {
 		if (!open) return;
 		setError("");
+		setNotice("");
 		setPassword("");
+		setConfirmPassword("");
+		setEmailCode("");
 		setAvatarFile(null);
 		setAvatarChoice("");
 	}, [open, mode]);
@@ -155,24 +167,28 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 		return () => window.clearInterval(timer);
 	}, [codeCooldown]);
 	if (!open) return null;
-	if (mode === "login" && !features.loginEnabled) return <div className="auth-overlay" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><section className="auth-dialog" role="dialog" aria-modal="true"><header className="auth-dialog-heading"><div><span className="auth-eyebrow"><UserRound size={14} /> 博客社区</span><h2>登录已关闭</h2></div><button type="button" className="auth-close" title="关闭" aria-label="关闭" onClick={onClose}><X size={19} /></button></header><p className="auth-lead">管理员暂未开放用户登录。</p></section></div>;
+	if ((mode === "login" || mode === "reset") && !features.loginEnabled) return <div className="auth-overlay" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><section className="auth-dialog" role="dialog" aria-modal="true"><header className="auth-dialog-heading"><div><span className="auth-eyebrow"><UserRound size={14} /> 博客社区</span><h2>登录已关闭</h2></div><button type="button" className="auth-close" title="关闭" aria-label="关闭" onClick={onClose}><X size={19} /></button></header><p className="auth-lead">管理员暂未开放用户登录。</p></section></div>;
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
 		setError("");
+		setNotice("");
 		if (username.trim().length < 3) { setError("账号至少需要 3 个字符"); return; }
 		if (password.length < 8) { setError("密码至少需要 8 个字符"); return; }
+		if (mode === "reset" && !/^\d{6}$/u.test(emailCode.trim())) { setError("请输入 6 位邮箱验证码"); return; }
+		if (mode === "reset" && password !== confirmPassword) { setError("两次输入的密码不一致"); return; }
 		if (mode === "register" && !features.registrationEnabled) { setError("管理员暂未开放用户注册"); return; }
 		if (mode === "register" && nickname.trim().length < 1) { setError("请输入昵称"); return; }
 		if (mode === "register" && settings.emailRegistrationEnabled && !/^\S+@\S+\.\S+$/u.test(email.trim())) { setError("请输入有效的邮箱地址"); return; }
 		setBusy(true);
 		try {
 			let avatar = avatarChoice || avatarUrl.trim();
-			if (avatarFile) {
+			if (mode === "register" && avatarFile) {
 				if (!features.userCenterEnabled || !features.imageHostingEnabled) throw new Error("头像上传功能当前已关闭");
 				setAvatarUploading(true);
 				avatar = await api.uploadAvatar(avatarFile);
 			}
 			if (mode === "login") await login(username.trim(), password);
+			else if (mode === "reset") await resetPassword({ account: username.trim(), emailCode: emailCode.trim(), password });
 			else await register({ username: username.trim(), nickname: nickname.trim(), password, email: email.trim() || undefined, emailCode: emailCode.trim() || undefined, avatar: avatar || undefined });
 		} catch (reason) {
 			setError(reason instanceof Error ? reason.message : "操作失败，请稍后重试");
@@ -189,7 +205,7 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 	};
 	const sendCode = async () => {
 		if (!/^\S+@\S+\.\S+$/u.test(email.trim())) { setError("请先输入有效的邮箱地址"); return; }
-		setCodeBusy(true); setError("");
+		setCodeBusy(true); setError(""); setNotice("");
 		try {
 			const result = await api.authEmailCode(email.trim());
 			if (result.debugCode) setEmailCode(result.debugCode);
@@ -198,14 +214,33 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 		} catch (reason) { setError(reason instanceof Error ? reason.message : "验证码发送失败"); }
 		finally { setCodeBusy(false); }
 	};
+	const sendResetCode = async () => {
+		if (username.trim().length < 3) { setError("请先输入账号或绑定邮箱"); return; }
+		setCodeBusy(true); setError(""); setNotice("");
+		try {
+			const result = await api.authPasswordResetCode(username.trim());
+			if (result.debugCode) setEmailCode(result.debugCode);
+			if (result.sent) {
+				setCodeCooldown(60);
+				setNotice(result.message || "如果该账号已绑定邮箱，验证码已发送，请查收。");
+			} else setError(result.error || "验证码发送失败，请检查邮箱服务配置");
+		} catch (reason) { setError(reason instanceof Error ? reason.message : "验证码发送失败"); }
+		finally { setCodeBusy(false); }
+	};
+	const title = mode === "login" ? "登录账号" : mode === "reset" ? "找回密码" : "创建账号";
+	const passwordLabel = mode === "reset" ? "新密码" : "密码";
+	const submitLabel = busy ? "处理中..." : mode === "login" ? "登录" : mode === "reset" ? "重置并登录" : "注册";
 	return <div className="auth-overlay" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
 		<section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-dialog-title">
-			<header className="auth-dialog-heading"><div><span className="auth-eyebrow"><UserRound size={14} /> 博客社区</span><h2 id="auth-dialog-title">{mode === "login" ? "登录账号" : "创建账号"}</h2></div><button type="button" className="auth-close" title="关闭" aria-label="关闭" onClick={onClose}><X size={19} /></button></header>
-			{mode === "login" ? <p className="auth-lead">登录后参与评论、回复和表情互动。</p> : <p className="auth-lead">注册一个账号，留下你的头像和昵称。</p>}
+			<header className="auth-dialog-heading"><div><span className="auth-eyebrow">{mode === "reset" ? <KeyRound size={14} /> : <UserRound size={14} />} 博客社区</span><h2 id="auth-dialog-title">{title}</h2></div><button type="button" className="auth-close" title="关闭" aria-label="关闭" onClick={onClose}><X size={19} /></button></header>
+			{mode === "login" ? <p className="auth-lead">登录后参与评论、回复和表情互动。</p> : mode === "reset" ? <p className="auth-lead">向账号绑定的邮箱发送验证码。未绑定邮箱的账号无法自助找回，请联系管理员。</p> : <p className="auth-lead">注册一个账号，留下你的头像和昵称。</p>}
 			<form className="auth-form" onSubmit={submit}>
-				<label><span>账号</span><input autoFocus value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder="请输入账号" /></label>
+				<label><span>{mode === "reset" ? "账号或邮箱" : "账号"}</span><input autoFocus value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder={mode === "reset" ? "请输入账号或绑定邮箱" : "请输入账号"} /></label>
 				{mode === "register" ? <label><span>昵称</span><input value={nickname} onChange={(event) => setNickname(event.target.value)} autoComplete="nickname" placeholder="评论区展示的昵称" /></label> : null}
-				<label><span>密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} placeholder="至少 8 个字符" /></label>
+				{mode === "reset" ? <label><span>邮箱验证码</span><div className="auth-input-with-action"><input value={emailCode} onChange={(event) => setEmailCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="请输入验证码" /><button type="button" disabled={codeBusy || codeCooldown > 0} onClick={() => void sendResetCode()}>{codeBusy ? "发送中" : codeCooldown ? `${codeCooldown}s` : "发送验证码"}</button></div></label> : null}
+				<label><span>{passwordLabel}</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} placeholder="至少 8 个字符" /></label>
+				{mode === "login" ? <div className="auth-assist"><button type="button" onClick={() => onModeChange("reset")}>忘记密码？</button></div> : null}
+				{mode === "reset" ? <label><span>确认新密码</span><input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder="再次输入新密码" /></label> : null}
 				{mode === "register" ? <>
 					<label><span>邮箱 {settings.emailRegistrationEnabled ? <em>必填</em> : <small>可选</small>}</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="接收验证码和通知" /></label>
 					{settings.emailRegistrationEnabled ? <label><span>邮箱验证码</span><div className="auth-input-with-action"><input value={emailCode} onChange={(event) => setEmailCode(event.target.value)} inputMode="numeric" placeholder="请输入验证码" /><button type="button" disabled={codeBusy || codeCooldown > 0} onClick={() => void sendCode()}>{codeBusy ? "发送中" : codeCooldown ? `${codeCooldown}s` : "发送验证码"}</button></div></label> : null}
@@ -214,10 +249,11 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 						{features.userCenterEnabled && features.imageHostingEnabled ? <><button type="button" className="auth-avatar-upload" title="上传头像" onClick={() => fileInput.current?.click()}><ImagePlus size={17} /><span>{avatarUploading ? "上传中" : avatarFile ? avatarFile.name : "上传"}</span></button><input ref={fileInput} hidden type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(event) => chooseFile(event.target.files?.[0])} /></> : <small>头像文件上传已关闭</small>}
 					</div><div className="auth-input-with-icon"><Camera size={15} /><input value={avatarUrl} onChange={(event) => { setAvatarUrl(event.target.value); setAvatarChoice(""); setAvatarFile(null); }} placeholder="或输入图床链接" /></div></div>
 				</> : null}
+				{notice ? <p className="auth-success" role="status">{notice}</p> : null}
 				{error ? <p className="auth-error" role="alert">{error}</p> : null}
-				<button className="auth-submit" type="submit" disabled={busy}>{mode === "login" ? <LogIn size={17} /> : <Check size={17} />}{busy ? "处理中..." : mode === "login" ? "登录" : "注册"}</button>
+				<button className="auth-submit" type="submit" disabled={busy}>{mode === "login" ? <LogIn size={17} /> : mode === "reset" ? <KeyRound size={17} /> : <Check size={17} />}{submitLabel}</button>
 			</form>
-			<footer className="auth-dialog-footer">{mode === "login" ? settings.commentRegistrationEnabled && features.registrationEnabled ? <><span>还没有账号？</span><button type="button" onClick={() => onModeChange("register")}>立即注册</button></> : <span>管理员暂未开放用户注册</span> : features.loginEnabled ? <><span>已有账号？</span><button type="button" onClick={() => onModeChange("login")}>返回登录</button></> : null}</footer>
+			<footer className="auth-dialog-footer">{mode === "login" ? settings.commentRegistrationEnabled && features.registrationEnabled ? <><span>还没有账号？</span><button type="button" onClick={() => onModeChange("register")}>立即注册</button></> : <span>管理员暂未开放用户注册</span> : mode === "reset" ? <><span>想起密码了？</span><button type="button" onClick={() => onModeChange("login")}>返回登录</button></> : features.loginEnabled ? <><span>已有账号？</span><button type="button" onClick={() => onModeChange("login")}>返回登录</button></> : null}</footer>
 		</section>
 	</div>;
 }

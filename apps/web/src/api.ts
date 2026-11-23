@@ -448,6 +448,15 @@ export const api = {
 	async authEmailCode(email: string) {
 		return jsonRequest<{ ok?: boolean; sent?: boolean; error?: string; debugCode?: string; expiresInSeconds?: number }>("/api/auth/email-code", "POST", { email });
 	},
+	async authPasswordResetCode(account: string) {
+		return jsonRequest<{ ok?: boolean; sent?: boolean; error?: string; debugCode?: string; message?: string; expiresInSeconds?: number }>("/api/auth/password-reset/code", "POST", { account });
+	},
+	async authPasswordReset(input: { account: string; emailCode: string; password: string }): Promise<PublicUser> {
+		const payload = await jsonRequest<{ token?: string; user?: PublicUser }>("/api/auth/password-reset", "POST", input);
+		putUserToken(payload.token);
+		if (!payload.user) throw new Error("密码已重置，请使用新密码登录");
+		return payload.user;
+	},
 	async authLogout() {
 		try { await request<void>("/api/auth/logout", { method: "POST" }); } finally { clearUserToken(); }
 	},

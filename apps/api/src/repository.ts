@@ -2,6 +2,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type mysql from "mysql2/promise";
 import nodemailer from "nodemailer";
+import { commentEmailCodeDigest, emailCodeMatches, type EmailCodeScope } from "./emailCode.js";
 import { renderVerificationCodeEmail, renderNotificationEmail } from "./mailTemplates.js";
 import { resolveAccessSecret } from "./accessPassword.js";
 import { UserDeletionBlockedError, userOwnsKnowledgeData } from "./knowledge/index.js";
@@ -160,7 +161,7 @@ const AUDIT_TEXT_LIMITS = {
 	clientName: 255,
 	clientUa: 512,
 } as const;
-const AUDIT_SENSITIVE_FIELD = /pass(word)?|secret|token|authorization|cookie|session|credential|private[-_]?key|api[-_]?key|otp|captcha|verification[-_]?code|email[-_]?code|recovery|challenge/i;
+const AUDIT_SENSITIVE_FIELD = /pass(word)?|secret|token|authorization|cookie|session|credential|private[-_]?key|api[-_]?key|otp|captcha|verification[-_]?code|email[-_]?code|recovery|challenge|grant|access|ticket|signature|content|markdown|body/i;
 
 export type AuditLogInput = {
 	createdAt?: Date | string;
@@ -828,10 +829,10 @@ export async function registerCommentUser(input: {
 	return user;
 }
 
-export async function requestCommentEmailCode(email: string, purpose = "注册验证码") {
+export async function requestCommentEmailCode(email: string, purpose = "注册验证码", scope: EmailCodeScope = "register") {
 	const normalized = email.trim().toLowerCase();
 	const code = String(Math.floor(100000 + Math.random() * 900000));
-	const hash = createHash("sha256").update(code).digest("hex");
+	const hash = commentEmailCodeDigest(code, scope);
 	await pool.execute(
 		`INSERT INTO comment_email_codes (email, code_hash, attempts, sent_at, expires_at)
 		 VALUES (?, ?, 0, NOW(), DATE_ADD(NOW(), INTERVAL ${COMMENT_EMAIL_CODE_TTL_MINUTES} MINUTE))
@@ -853,15 +854,64 @@ export async function requestCommentEmailCode(email: string, purpose = "注册�
 	return { ok: sent, sent, error: sent ? undefined : delivery.error, expiresInSeconds: COMMENT_EMAIL_CODE_TTL_MINUTES * 60, debugCode: !sent && process.env.NODE_ENV !== "production" ? code : undefined, mailConfigured: Boolean(settings.host && settings.user && settings.password && isMailbox(settings.from)) };
 }
 
-export async function verifyCommentEmailCode(email: string, code: string) {
+export async function verifyCommentEmailCode(email: string, code: string, scope: EmailCodeScope = "register") {
 	const normalized = email.trim().toLowerCase();
 	const [[row]] = await pool.query<RowDataPacket[]>("SELECT code_hash, attempts, expires_at FROM comment_email_codes WHERE email = ? LIMIT 1", [normalized]);
 	if (!row || Number(row.attempts) >= 5 || new Date(String(row.expires_at)).getTime() <= Date.now()) return false;
-	const expected = createHash("sha256").update(code.trim()).digest("hex");
-	const valid = expected.length === String(row.code_hash).length && timingSafeEqual(Buffer.from(expected), Buffer.from(String(row.code_hash)));
+	const valid = emailCodeMatches(code, String(row.code_hash), scope);
 	if (!valid) await pool.execute("UPDATE comment_email_codes SET attempts = attempts + 1 WHERE email = ?", [normalized]);
 	else await pool.execute("DELETE FROM comment_email_codes WHERE email = ?", [normalized]);
 	return valid;
+}
+
+const PASSWORD_RESET_ACK = {
+	ok: true,
+	sent: true,
+	message: "如果该账号已绑定邮箱，验证码已发送，请查收。",
+	expiresInSeconds: COMMENT_EMAIL_CODE_TTL_MINUTES * 60,
+};
+
+async function findCommentUserForRecovery(accountOrEmail: string) {
+	const login = accountOrEmail.trim().toLowerCase();
+	if (!login) return null;
+	const [[row]] = await pool.query<RowDataPacket[]>(
+		"SELECT id, account, email, is_active FROM comment_users WHERE (LOWER(account) = ? OR LOWER(email) = ?) LIMIT 1",
+		[login, login],
+	);
+	if (!row) return null;
+	return {
+		id: Number(row.id),
+		account: String(row.account),
+		email: row.email ? String(row.email).trim().toLowerCase() : "",
+		isActive: Number(row.is_active) !== 0,
+	};
+}
+
+/** 无论账号是否存在，成功时都返回同一句话，避免别人靠接口探测账号。 */
+export async function requestPasswordResetCode(accountOrEmail: string) {
+	const user = await findCommentUserForRecovery(accountOrEmail);
+	if (!user?.isActive || !user.email) return PASSWORD_RESET_ACK;
+	const delivery = await requestCommentEmailCode(user.email, "密码找回", "reset");
+	if (!delivery.sent) {
+		return {
+			ok: false,
+			sent: false,
+			error: delivery.error || "验证码发送失败，请检查邮箱服务配置",
+			debugCode: delivery.debugCode,
+			mailConfigured: delivery.mailConfigured,
+		};
+	}
+	return PASSWORD_RESET_ACK;
+}
+
+export async function resetPasswordWithEmailCode(accountOrEmail: string, code: string, password: string) {
+	const user = await findCommentUserForRecovery(accountOrEmail);
+	if (!user?.isActive || !user.email) return null;
+	const valid = await verifyCommentEmailCode(user.email, code, "reset");
+	if (!valid) return null;
+	const updated = await resetCommentUserPassword(user.id, password);
+	if (!updated) return null;
+	return authenticateCommentUser(user.account, password);
 }
 
 export async function listCommentStickers(userId?: number | null) {
