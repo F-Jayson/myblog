@@ -4,6 +4,10 @@ dist/
 *.log
 playwright-report/
 test-results/
+blob-report/
+coverage/
+.nyc_output/
+junit.xml
 screenshots/
 *.tsbuildinfo
 .blog-run/
@@ -12,11 +16,9 @@ data/ip2region/*.xdb
 
 # 环境变量：.env 与所有模式变体都不入库，示例文件除外
 .env
-.env.local
-.env.development
-.env.test
-.env.production
-.env.*.local
+# [893] 用通配覆盖 .env.staging/.env.prod/.env.uat 等任意环境后缀，
+# 只放行明确要提交的示例文件。
+.env.*
 !.env.example
 !.env.docker.example
 
