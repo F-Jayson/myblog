@@ -20,8 +20,9 @@ export class LoginThrottle {
 		const addressKey = this.addressKey(scope, ip);
 		const accountAttempts = this.prune(this.accountHits.get(accountKey) ?? [], now);
 		const addressAttempts = this.prune(this.addressHits.get(addressKey) ?? [], now);
-		this.accountHits.set(accountKey, accountAttempts);
-		this.addressHits.set(addressKey, addressAttempts);
+		this.store(this.accountHits, accountKey, accountAttempts);
+		this.store(this.addressHits, addressKey, addressAttempts);
+		if (this.accountHits.size + this.addressHits.size > 2048) this.sweep(now);
 		if (accountAttempts.length >= ACCOUNT_LIMIT) return { allowed: false, retryAfterSeconds: this.retryAfter(accountAttempts, now) };
 		if (addressAttempts.length >= ADDRESS_LIMIT) return { allowed: false, retryAfterSeconds: this.retryAfter(addressAttempts, now) };
 		return { allowed: true };
@@ -45,6 +46,21 @@ export class LoginThrottle {
 
 	private addressKey(scope: string, ip: string) {
 		return `${scope}\n${ip.trim() || "unknown"}`;
+	}
+
+	private store(map: Map<string, number[]>, key: string, hits: number[]) {
+		if (hits.length) map.set(key, hits);
+		else map.delete(key);
+	}
+
+	private sweep(now: number) {
+		for (const map of [this.accountHits, this.addressHits]) {
+			for (const [key, hits] of map) {
+				const kept = this.prune(hits, now);
+				if (kept.length) map.set(key, kept);
+				else map.delete(key);
+			}
+		}
 	}
 
 	private prune(hits: number[], now: number) {

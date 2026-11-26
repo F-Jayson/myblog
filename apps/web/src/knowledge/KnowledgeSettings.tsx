@@ -67,7 +67,10 @@ export default function KnowledgeSettings() {
 	// 单个文档恢复状态
 	const [restoringId, setRestoringId] = useState<number | null>(null);
 
+	// [452] 每次加载分配递增序号：快速切换 libraryId 时旧请求的响应必须丢弃
+	const requestIdRef = useRef(0);
 	const loadData = async () => {
+		const requestId = ++requestIdRef.current;
 		// [449] 非法路由参数必须结束加载态：否则页面永远停在“正在加载知识库设置...”
 		if (!libraryId || Number.isNaN(libraryId)) {
 			setLoading(false);
@@ -84,7 +87,7 @@ export default function KnowledgeSettings() {
 				kbApi.listMembers(libraryId).catch(() => []),
 			]);
 			// [452] 异步返回时用户可能已切到其它库：过期响应直接丢弃，避免数据串库
-			if (cancelledRef.current) return;
+			if (requestId !== requestIdRef.current) return;
 			setLibrary(lib);
 			setTitle(lib.title);
 			setDescription(lib.description || "");
@@ -94,11 +97,11 @@ export default function KnowledgeSettings() {
 			setMembers(membersRes);
 			await loadConnections();
 		} catch (err) {
-			if (cancelledRef.current) return;
+			if (requestId !== requestIdRef.current) return;
 			setError(err instanceof Error ? err.message : "加载知识库信息失败");
 		} finally {
 			// 卸载后再 setLoading 是无害的（React 18+ 不再警告），保留以结束加载态
-			setLoading(false);
+			if (requestId === requestIdRef.current) setLoading(false);
 		}
 	};
 
@@ -114,12 +117,11 @@ export default function KnowledgeSettings() {
 	}>>([]);
 	const [revokingConnId, setRevokingConnId] = useState<number | null>(null);
 
-	// [452] 标记当前 effect 已失效：快速切换 libraryId 时丢弃旧请求的响应
-	const cancelledRef = useRef(false);
 	const loadConnections = async () => {
+		const requestId = requestIdRef.current;
 		try {
 			const list = await kbApi.listAgentConnections();
-			if (cancelledRef.current) return;
+			if (requestId !== requestIdRef.current) return;
 			// [453] 只展示与当前库相关的授权连接：其它库乃至全库范围的授权不应在本页出现
 			setConnections(list.filter((conn) => conn.allowedLibraryIds.includes(libraryId)));
 		} catch (err) {
@@ -141,10 +143,10 @@ export default function KnowledgeSettings() {
 	};
 
 	useEffect(() => {
-		cancelledRef.current = false;
 		void loadData();
 		return () => {
-			cancelledRef.current = true;
+			// 使本次请求及后续旧请求失效
+			requestIdRef.current += 1;
 		};
 	}, [libraryId]);
 

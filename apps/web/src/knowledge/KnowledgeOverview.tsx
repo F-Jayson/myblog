@@ -58,7 +58,7 @@ export default function KnowledgeOverview() {
 		try {
 			const [elig, libs, application] = await Promise.all([
 				kbApi.getEligibility().catch(() => null),
-				kbApi.listLibraries().catch(() => []),
+				kbApi.listLibraries(),
 				kbApi.getOpenApplication().catch(() => null),
 			]);
 			setEligibility(elig);

@@ -244,9 +244,9 @@ export async function openUpstream(request: UpstreamRequest, options: OpenUpstre
 	let redirects = 0;
 	// 请求体只能发送一次，跟随重定向无法重放，碰到就直接失败而不是静默丢包。
 	const hasBody = request.body !== undefined;
-	// 真机上 GitHub 的边缘节点偶尔在 TLS 握手后直接 ECONNRESET；GET/HEAD 没有副作用，
-	// 重试一次能让用户少看见一次 502，而带请求体的 git POST 不能重放，只能原样上报。
-	const retryable = !hasBody;
+	// 真机上 GitHub 的边缘节点偶尔在 TLS 握手后直接 ECONNRESET；只有无请求体的 GET/HEAD
+	// 才是幂等的，POST 即使没有 body 也不能重放。
+	const retryable = !hasBody && (method === "GET" || method === "HEAD");
 
 	for (;;) {
 		const response = await fetchWithRetry(fetcher, { ...request, url, method }, retryable);
@@ -257,7 +257,14 @@ export async function openUpstream(request: UpstreamRequest, options: OpenUpstre
 			response.destroy();
 			throw new ProxyError("上游重定向超过 " + maxRedirects + " 跳，已中止", 502, "REDIRECT_TOO_MANY");
 		}
-		const nextUrl = resolveRedirectUrl(url, response.headers.location);
+		let nextUrl: string;
+		try {
+			nextUrl = resolveRedirectUrl(url, response.headers.location);
+		} catch (error) {
+			// 解析失败也必须释放上游连接，否则 socket 会一直挂到超时。
+			response.destroy();
+			throw error;
+		}
 		response.resume();
 		redirects += 1;
 		url = nextUrl;

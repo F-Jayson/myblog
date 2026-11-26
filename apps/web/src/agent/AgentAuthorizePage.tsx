@@ -43,6 +43,10 @@ export default function AgentAuthorizePage() {
 	}, []);
 
 	useEffect(() => {
+		setInfo(null);
+		setSelected([]);
+		setError("");
+		setDone("");
 		if (!code) { setLoading(false); return; }
 		let cancelled = false;
 		void (async () => {
@@ -65,13 +69,17 @@ export default function AgentAuthorizePage() {
 		if (!stored) return;
 		let cancelled = false;
 		void (async () => {
-			const response = await fetch(`${API_ORIGIN}/api/admin/me`, { headers: { authorization: `Bearer ${stored}` } });
-			if (!response.ok || cancelled) return;
-			const payload = (await response.json().catch(() => null)) as { user?: { id?: number | null; username?: string } } | null;
-			if (!payload?.user?.id || cancelled) return;
-			setToken(stored);
-			setSignedInAs(payload.user.username || sessionStorage.getItem("site-admin-username") || "管理员");
-			setUsingStoredSession(true);
+			try {
+				const response = await fetch(`${API_ORIGIN}/api/admin/me`, { headers: { authorization: `Bearer ${stored}` } });
+				if (!response.ok || cancelled) return;
+				const payload = (await response.json().catch(() => null)) as { user?: { id?: number | null; username?: string } } | null;
+				if (!payload?.user?.id || cancelled) return;
+				setToken(stored);
+				setSignedInAs(payload.user.username || sessionStorage.getItem("site-admin-username") || "管理员");
+				setUsingStoredSession(true);
+			} catch (reason) {
+				if (!cancelled) console.warn("恢复管理员会话失败", reason);
+			}
 		})();
 		return () => { cancelled = true; };
 	}, []);
@@ -100,6 +108,10 @@ export default function AgentAuthorizePage() {
 	};
 
 	const decide = async (approved: boolean) => {
+		if (!code || !token) {
+			setError("授权信息已失效，请重新打开授权链接");
+			return;
+		}
 		setBusy(true);
 		setError("");
 		try {
@@ -164,7 +176,7 @@ export default function AgentAuthorizePage() {
 					<div className="agent-decision">
 						<p>将以 {signedInAs} 的身份授权。敏感权限默认不勾选，需要时再单独允许。</p>
 						<ul className="agent-scope-list">
-							{info?.scopes.filter((scope) => !scope.sensitive).map((scope) => (
+							{info?.scopes.filter((scope) => scope.requested !== false && !scope.sensitive).map((scope) => (
 								<li key={scope.id}>
 									<label>
 										<input type="checkbox" checked={selected.includes(scope.id)} onChange={() => setSelected((current) => current.includes(scope.id) ? current.filter((item) => item !== scope.id) : [...current, scope.id])} />
@@ -175,7 +187,7 @@ export default function AgentAuthorizePage() {
 						</ul>
 						<p className="agent-scope-group">敏感权限</p>
 						<ul className="agent-scope-list">
-							{info?.scopes.filter((scope) => scope.sensitive).map((scope) => (
+							{info?.scopes.filter((scope) => scope.requested !== false && scope.sensitive).map((scope) => (
 								<li key={scope.id} className="is-sensitive">
 									<label>
 										<input type="checkbox" checked={selected.includes(scope.id)} onChange={() => setSelected((current) => current.includes(scope.id) ? current.filter((item) => item !== scope.id) : [...current, scope.id])} />

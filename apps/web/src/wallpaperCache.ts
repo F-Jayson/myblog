@@ -65,13 +65,16 @@ export function peekPrimedWallpaper() {
 }
 
 export function primeWallpaperCache() {
+	if (primed) return Promise.resolve(primed);
 	if (priming) return priming;
 	priming = readRandomWallpaper().then((item) => {
-		primed = item;
+		if (item) primed = item;
 		return item;
 	}).catch(() => {
-		primed = null;
 		return null;
+	}).finally(() => {
+		// 无论成功失败都释放 in-flight 标记：失败后下次还能重试，不会永久缓存 null。
+		priming = null;
 	});
 	return priming;
 }

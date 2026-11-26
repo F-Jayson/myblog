@@ -39,7 +39,8 @@ function instrumentQueryMethod(target: { [key: string]: unknown }, name: "query"
 	target[name] = wrapped;
 }
 
-instrumentQueryMethod(rawPool as unknown as { [key: string]: unknown }, "query");
+// mysql2 的 Promise 门面最终都会落到连接对象上执行，因此只给连接挂载计时，
+// 避免 Pool 与 Connection 两层同时包装造成同一条 SQL 被记录两次。
 rawPool.on("connection", (connection) => {
 	const rawConnection = connection as { [key: string]: unknown };
 	instrumentQueryMethod(rawConnection, "query");

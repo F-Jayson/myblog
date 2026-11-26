@@ -311,7 +311,7 @@ async function handleGet(req: Request, res: Response, owner: DriveOwner, path: s
 	}
 	const size = handle.size;
 	let start = 0;
-	let end = Math.max(0, size - 1);
+	let end = size - 1;
 	let status = 200;
 	const rangeHeader = req.header("range");
 	if (rangeHeader && !handle.stream) {
@@ -403,6 +403,7 @@ async function handleCopy(req: Request, res: Response, owner: DriveOwner, path: 
 	if (!source) throw new DriveError(404, "源文件或目录不存在");
 	if (source.type === "folder" && depth === "0") throw new DriveError(400, "暂不支持 Depth: 0 的目录复制");
 	const existing = await getDriveNode(owner, destination);
+	await assertDriveUnlocked(owner, destination, ifHeader(req));
 	await copyDriveNode(owner, path, destination, overwriteFlag(req));
 	res.status(existing ? 204 : 201).setHeader("Content-Length", "0").end();
 }

@@ -251,6 +251,8 @@
   padding: 0.6rem 0.85rem;
   border-radius: 0.65rem;
   border: 1px solid var(--line);
+  /* [254] 不支持 color-mix() 的浏览器退回实色，避免输入框透明不可读 */
+  background: var(--card-bg-solid);
   background: color-mix(in srgb, var(--card-bg-solid) 85%, transparent);
   color: var(--deep-text);
   font-size: 0.875rem;
@@ -301,6 +303,7 @@
 /* 1. Top Navigation Bar */
 .kb-workspace-topbar {
   height: 3.75rem;
+  background: var(--card-bg);
   background: color-mix(in srgb, var(--card-bg) 85%, transparent);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -569,6 +572,7 @@
 .kb-workspace-sidebar {
   width: 17.5rem;
   flex-shrink: 0;
+  background: var(--card-bg);
   background: color-mix(in srgb, var(--card-bg) 80%, transparent);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -717,6 +721,7 @@
   padding: 0.42rem 1.8rem 0.42rem 2.1rem;
   border-radius: 0.55rem;
   border: 1px solid var(--line);
+  background: var(--card-bg-solid);
   background: color-mix(in srgb, var(--card-bg-solid) 85%, transparent);
   color: var(--deep-text);
   font-size: 0.8rem;
@@ -844,6 +849,19 @@
   pointer-events: auto;
 }
 
+/* [835] 触屏没有 hover：操作按钮必须常显，否则第一次点击会被节点吃掉。
+   同时把命中区域放大到 44px 触控标准。 */
+@media (hover: none) {
+  .kb-tree-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .kb-tree-action-btn {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+}
+
 .kb-tree-action-btn {
   width: 1.5rem;
   height: 1.5rem;
@@ -912,6 +930,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
+  background: var(--card-bg-solid);
   background: color-mix(in srgb, var(--card-bg-solid) 95%, transparent);
   flex-shrink: 0;
 }
@@ -1132,6 +1151,7 @@
    ========================================================================== */
 .kb-workspace-inspector {
   width: 20rem;
+  background: var(--card-bg);
   background: color-mix(in srgb, var(--card-bg) 85%, transparent);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -1245,6 +1265,7 @@
 
 .kb-revision-card {
   position: relative;
+  background: var(--card-bg-solid);
   background: color-mix(in srgb, var(--card-bg-solid) 85%, transparent);
   border: 1px solid var(--line);
   border-radius: 0.65rem;
@@ -1296,6 +1317,7 @@
 }
 
 .kb-attachment-card {
+  background: var(--card-bg-solid);
   background: color-mix(in srgb, var(--card-bg-solid) 80%, transparent);
   border: 1px solid var(--line);
   border-radius: 0.65rem;
@@ -1425,6 +1447,7 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.8rem;
   line-height: 1.6;
+  background: var(--card-bg-solid);
   background: color-mix(in srgb, var(--card-bg-solid) 92%, transparent);
   border: 1px solid var(--line);
   border-radius: 0.75rem;
@@ -1516,4 +1539,18 @@
   .kb-editor-wrap .md-editor-preview-wrapper {
     padding: 1rem !important;
   }
+}
+
+/* [786] 键盘焦点环：上面这些行/按钮是 div 或去掉了默认 outline 的控件，
+   没有 :focus-visible 时键盘用户完全看不到焦点位置。 */
+.kb-tree-node:focus-visible,
+.kb-outline-item:focus-visible,
+.kb-dropzone:focus-visible,
+.kb-icon-btn:focus-visible,
+.kb-create-btn:focus-visible,
+.kb-segmented-item:focus-visible,
+.kb-tab-pill:focus-visible,
+.kb-doc-emoji-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }

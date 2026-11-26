@@ -306,17 +306,18 @@ export async function agentSaveChangelog(grant: AgentGrant, id: number | undefin
 	const input = parse(changelogInput, body);
 	if (input.published) assertAgentScope(grant, "content:publish", "发布更新日志需要「发布站点内容」权限");
 	else assertAgentScope(grant, "content:write", "当前授权不能编辑更新日志");
-	const slug = normalizeSlug(input.slug || input.title);
+	const requestedSlug = input.slug === undefined ? undefined : normalizeSlug(input.slug);
 	if (id) {
 		const current = await getChangelog(id);
 		if (!current) throw new AgentError(404, "not_found", "更新日志不存在");
 		const published = input.published === undefined ? current.published : input.published;
 		if (published && !grant.scopes.includes("content:publish")) throw new AgentError(403, "insufficient_scope", "发布更新日志需要「发布站点内容」权限");
-		const saved = await updateChangelog(id, { slug, title: input.title, version: input.version, date: input.date, published, content: input.content });
+		// 未显式提供 slug 时保留原有公开地址，不能按标题重算导致 URL 变化。
+		const saved = await updateChangelog(id, { slug: requestedSlug ?? current.slug, title: input.title, version: input.version, date: input.date, published, content: input.content });
 		await recordAgentAudit(grant, "changelog", String(id), input.title);
 		return notFound(saved, "更新日志不存在");
 	}
-	const saved = await createChangelog({ slug, title: input.title, version: input.version, date: input.date, published: input.published === true, content: input.content });
+	const saved = await createChangelog({ slug: normalizeSlug(input.slug || input.title), title: input.title, version: input.version, date: input.date, published: input.published === true, content: input.content });
 	await recordAgentAudit(grant, "changelog", String(saved?.id ?? ""), input.title);
 	return notFound(saved, "更新日志保存失败");
 }

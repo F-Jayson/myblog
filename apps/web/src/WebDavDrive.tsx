@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import {
 	AlertCircle,
 	ArrowUp,
@@ -492,7 +493,10 @@ function DriveDialog({
 				? `修改「${state.item?.name ?? ""}」的名称，文件内容不会改变。`
 				: "在当前文件夹中创建一个新文件夹。";
 
-	return (
+	// [45] 弹层渲染在 main.site-grid（position:relative; z-index:30）内部时，
+	// z-index:120 只在该层叠上下文里生效，会被 sticky 导航/浮动面板盖住。
+	// Portal 到 body 后才能真正覆盖整页。
+	return createPortal(
 		<div
 			className="drive-modal-overlay"
 			role="presentation"
@@ -546,7 +550,8 @@ function DriveDialog({
 					</button>
 				</div>
 			</form>
-		</div>
+		</div>,
+		document.body,
 	);
 }
 

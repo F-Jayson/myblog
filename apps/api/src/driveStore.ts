@@ -739,7 +739,9 @@ export async function copyDriveNode(owner: DriveOwner, sourcePath: string, desti
 				const newPath = destination + relative;
 				const newName = relative ? node.name : newRootName;
 				const parentPath = parentDrivePath(newPath);
-				const parentId = parentPath === "/" ? null : idByPath.get(parentPath) ?? null;
+				// 复制子树的根节点不在 idByPath 里：它必须挂到目标目录的父节点上，
+				// 否则 parent_id 为 NULL，副本会出现在根目录而不是目标目录。
+				const parentId = relative === "" ? destParent.id : idByPath.get(parentPath) ?? null;
 				if (node.type === "folder") {
 					const [result] = await connection.execute<ResultSetHeader>(
 						"INSERT INTO drive_nodes (owner_type, owner_id, parent_id, path, name, node_type, storage_key, mime_type, byte_size, etag) VALUES (?, ?, ?, ?, ?, 'folder', '', 'httpd/unix-directory', 0, ?)",

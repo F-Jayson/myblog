@@ -200,11 +200,8 @@ const approveDeviceSchema = z.object({
  */
 kbAgentRoutes.post("/device/approve", async (req: Request, res: Response, next: NextFunction) => {
 	try {
-		const user = (req as Request & { commentUser?: { id: number } }).commentUser;
-		if (!user?.id) {
-			res.status(401).json({ error: "UNAUTHORIZED", message: "请先登录普通博客账号" });
-			return;
-		}
+		const user = requireSessionOnly(req, res);
+		if (!user) return;
 
 		const parsed = approveDeviceSchema.parse(req.body);
 		const result = await approveKbDeviceRequest(
@@ -239,11 +236,8 @@ kbAgentRoutes.post("/device/deny", async (req: Request, res: Response, next: Nex
 			res.status(400).json({ error: "invalid_request", message: "缺少 userCode 参数" });
 			return;
 		}
-		const user = (req as Request & { commentUser?: { id: number } }).commentUser;
-		if (!user?.id) {
-			res.status(401).json({ error: "UNAUTHORIZED", message: "请先登录普通博客账号" });
-			return;
-		}
+		const user = requireSessionOnly(req, res);
+		if (!user) return;
 		await denyKbDeviceRequest(userCode, user.id);
 		res.json({ success: true });
 	} catch (error) {

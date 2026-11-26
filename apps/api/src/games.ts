@@ -34,6 +34,10 @@ const GAME_SPECS: Record<string, GameSpec> = {
 	"minesweeper:expert": { lowerIsBetter: true, minScore: 3_000, maxScore: 7_200_000, minDurationMs: 3_000, maxDurationMs: 7_200_000, maxScorePerMs: 0 },
 };
 
+function gameSpec(key: string): GameSpec | undefined {
+	return Object.hasOwn(GAME_SPECS, key) ? GAME_SPECS[key] : undefined;
+}
+
 const PUBLIC_GAMES = [
 	{ id: "snake", title: "贪吃蛇", lowerIsBetter: false, difficulties: SNAKE_DIFFICULTIES },
 	{ id: "minesweeper", title: "扫雷", lowerIsBetter: true, difficulties: MINE_DIFFICULTIES },
@@ -123,7 +127,7 @@ function gameKey(game: string, difficulty?: string) {
 		if (SNAKE_DIFFICULTIES.includes(difficulty as SnakeDifficulty)) return difficulty === "easy" || difficulty === "hard" ? `snake:${difficulty}` : "snake";
 		return "";
 	}
-	return GAME_SPECS[game] ? game : "";
+	return gameSpec(game) ? game : "";
 }
 
 function publicDifficulty(key: string) {
@@ -256,7 +260,8 @@ async function rankOf(key: string, lowerIsBetter: boolean, entry: LeaderEntry) {
 }
 
 async function leaderboard(key: string, player: PlayerIdentity | null) {
-	const spec = GAME_SPECS[key];
+	const spec = gameSpec(key);
+	if (!spec) throw new Error(`未知的游戏键：${key}`);
 	const direction = spec.lowerIsBetter ? "ASC" : "DESC";
 	const [rows] = await pool.query<RowDataPacket[]>(
 		`${LEADER_SQL} WHERE r.game_key = ? ORDER BY r.score ${direction}, r.duration_ms ASC, r.achieved_at ASC LIMIT 30`,
@@ -279,7 +284,7 @@ async function leaderboard(key: string, player: PlayerIdentity | null) {
 }
 
 function validateScore(key: string, score: number, durationMs: number) {
-	const spec = GAME_SPECS[key];
+	const spec = gameSpec(key);
 	if (!spec) return "未知的小游戏";
 	const ranked = spec.lowerIsBetter ? durationMs : score;
 	if (!Number.isSafeInteger(ranked) || ranked < spec.minScore || ranked > spec.maxScore) return "成绩超出可记录范围";
@@ -293,7 +298,8 @@ function validateScore(key: string, score: number, durationMs: number) {
 }
 
 async function saveScore(key: string, player: PlayerIdentity, score: number, durationMs: number) {
-	const spec = GAME_SPECS[key];
+	const spec = gameSpec(key);
+	if (!spec) throw new Error(`未知的游戏键：${key}`);
 	const before = await readOwnRecord(key, player);
 	const userId = player.kind === "user" ? player.id : null;
 	const guestId = player.kind === "guest" ? player.id : null;
@@ -354,7 +360,7 @@ gameRouter.get("/:game/leaderboard", async (req, res, next) => {
 		const game = String(req.params.game ?? "");
 		const difficulty = typeof req.query.difficulty === "string" ? req.query.difficulty : undefined;
 		const key = gameKey(game, game === "minesweeper" && !difficulty ? "beginner" : game === "snake" && !difficulty ? "normal" : difficulty);
-		if (!key || !GAME_SPECS[key]) {
+		if (!key || !gameSpec(key)) {
 			res.status(404).json({ error: "没有这个小游戏" });
 			return;
 		}
@@ -368,11 +374,7 @@ gameRouter.post("/:game/scores", async (req, res, next) => {
 	try {
 		const game = String(req.params.game ?? "");
 		const input = scoreInput.parse(req.body);
-		const key = gameKey(game, input.difficulty);
-		if (!key || !GAME_SPECS[key]) {
-			res.status(404).json({ error: "没有这个小游戏" });
-			return;
-		}
+		// 先校验难度是否属于该游戏，否则 gameKey 会先返回空串而把 400 变成 404。
 		if (game === "minesweeper" && !MINE_DIFFICULTIES.includes(input.difficulty as MineDifficulty)) {
 			res.status(400).json({ error: "请选择扫雷难度" });
 			return;
@@ -381,12 +383,17 @@ gameRouter.post("/:game/scores", async (req, res, next) => {
 			res.status(400).json({ error: "请选择贪吃蛇难度" });
 			return;
 		}
+		const key = gameKey(game, input.difficulty);
+		const spec = gameSpec(key);
+		if (!key || !spec) {
+			res.status(404).json({ error: "没有这个小游戏" });
+			return;
+		}
 		const player = await resolvePlayer(req);
 		if (!player) {
 			res.status(400).json({ error: "缺少游客身份" });
 			return;
 		}
-		const spec = GAME_SPECS[key];
 		const score = spec.lowerIsBetter ? input.durationMs : input.score;
 		const problem = validateScore(key, input.score, input.durationMs);
 		if (problem) {

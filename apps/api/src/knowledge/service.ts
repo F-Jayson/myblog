@@ -1204,6 +1204,18 @@ export async function getPublicDocumentSnapshotService(
 	return snapshot;
 }
 
+/** DATETIME columns are written and read in the server's local timezone. */
+function formatDatabaseDateTime(date: Date): string {
+	const pad = (value: number) => String(value).padStart(2, "0");
+	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function parseDatabaseDateTime(value: string): number {
+	const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/u.exec(value);
+	if (!match) return Date.parse(value);
+	return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]), Number(match[6])).getTime();
+}
+
 export async function createShareLinkService(
 	userId: number,
 	documentId: number,
@@ -1228,7 +1240,7 @@ export async function createShareLinkService(
 
 	const days = options.expiresInDays && options.expiresInDays > 0 ? options.expiresInDays : KB_DEFAULTS.DEFAULT_SHARE_LINK_EXPIRY_DAYS;
 	const expiresDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-	const expiresAt = expiresDate.toISOString().slice(0, 19).replace("T", " ");
+	const expiresAt = formatDatabaseDateTime(expiresDate);
 
 	const linkId = await createShareLinkRecord({
 		libraryId: doc.libraryId,
@@ -1289,8 +1301,8 @@ export async function getSharedDocumentSnapshotService(
 	}
 
 	if (link.expiresAt) {
-		const expTime = new Date(link.expiresAt).getTime();
-		if (Date.now() > expTime) {
+		const expTime = parseDatabaseDateTime(link.expiresAt);
+		if (Number.isFinite(expTime) && Date.now() > expTime) {
 			throw new KbNotFoundError("分享链接已过期");
 		}
 	}
@@ -1379,31 +1391,36 @@ export async function addCommentService(
 			throw new KbAccessDeniedError(access.denyReason || "没有在该文档添加内部评论的权限");
 		}
 	} else {
+		if (!lib.publicCommentsEnabled) throw new KbAccessDeniedError("该知识库未开启公开评论");
 		const publicAccess = await checkDocumentAccess({}, documentId);
 		if (!publicAccess.canRead) throw new KbAccessDeniedError("这篇文档没有公开，不能发表公开评论");
 	}
 
+	const currentRevId = data.channel === "internal" ? (doc.currentRevisionId ?? 0) : doc.publishedRevisionId!;
 	const conn = await pool.getConnection();
 	try {
+		await conn.beginTransaction();
 		await acquireKnowledgeLocks(conn, { ownerUserId: lib.ownerUserId, libraryId: lib.id, documentId });
 		await assertOwnerQuotaAvailable(conn, lib.ownerUserId, byteSize);
+		const commentId = await createCommentRecord({
+			libraryId: doc.libraryId,
+			documentId,
+			revisionId: currentRevId,
+			parentId: data.parentId,
+			authorUserId: userId,
+			body: cleanBody,
+			byteSize,
+			channel: data.channel,
+			moderationStatus: "approved",
+		}, conn);
+		await conn.commit();
+		return commentId;
+	} catch (error) {
+		await conn.rollback().catch(() => undefined);
+		throw error;
 	} finally {
 		conn.release();
 	}
-
-	const currentRevId = data.channel === "internal" ? (doc.currentRevisionId ?? 0) : doc.publishedRevisionId!;
-
-	return createCommentRecord({
-		libraryId: doc.libraryId,
-		documentId,
-		revisionId: currentRevId,
-		parentId: data.parentId,
-		authorUserId: userId,
-		body: cleanBody,
-		byteSize,
-		channel: data.channel,
-		moderationStatus: "approved",
-	});
 }
 
 export async function listCommentsService(

@@ -227,7 +227,8 @@ export class DiskCache {
 
 	createWriter(url: string, meta: Omit<CacheMeta, "size" | "storedAt">, now = Date.now()): CacheWriter {
 		const key = cacheKey(url);
-		const partPath = this.partPath(key);
+		// 同一 URL 可能被并发下载：每个 writer 用独立 .part 文件，避免两个流交叉写坏缓存。
+		const partPath = `${this.partPath(key)}.${process.pid}.${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
 		const binPath = this.binPath(key);
 		const metaPath = this.metaPath(key);
 		const metaTmpPath = this.metaTmpPath(key);
@@ -256,7 +257,18 @@ export class DiskCache {
 				bytes += chunk.length;
 				if (stream.write(chunk)) return;
 				try {
-					await once(stream, "drain");
+					// 写入失败时 'drain' 永远不会触发，必须同时等 'error'/'close' 才不挂死。
+					await new Promise<void>((resolve) => {
+						const done = () => {
+							stream.off("drain", done);
+							stream.off("error", done);
+							stream.off("close", done);
+							resolve();
+						};
+						stream.once("drain", done);
+						stream.once("error", done);
+						stream.once("close", done);
+					});
 				} catch {
 					// 失败原因已经记在 failed 里，交给 finish 统一收尾。
 				}
@@ -288,14 +300,20 @@ export class DiskCache {
 					return false;
 				}
 				const finalMeta: CacheMeta = { ...meta, size: bytes, storedAt: now };
+				let binReplaced = false;
 				try {
 					await fs.writeFile(metaTmpPath, JSON.stringify(finalMeta), "utf8");
 					await fs.rename(partPath, binPath);
+					binReplaced = true;
 					await fs.rename(metaTmpPath, metaPath);
 				} catch {
 					// rename 失败时保留 .part 没有意义，清掉避免脏数据堆积。
 					await cleanup();
-					await fs.unlink(binPath).catch(() => undefined);
+					// 只有确实替换过 bin 才删除它；否则会把之前仍有效的缓存一起删掉。
+					if (binReplaced) {
+						await fs.unlink(binPath).catch(() => undefined);
+						await fs.unlink(metaPath).catch(() => undefined);
+					}
 					return false;
 				}
 				return true;

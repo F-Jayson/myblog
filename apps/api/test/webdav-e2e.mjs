@@ -24,7 +24,7 @@ import {
 const BASE = process.env.WEBDAV_E2E_BASE ?? "http://127.0.0.1:5190";
 const ADMIN = { username: "davcheckadmin", password: "DavCheck!2026", displayName: "DAV Check Admin" };
 const USER = { account: "davcheckuser", nickname: "DAV Check User", password: "DavCheck!2026", email: "davcheck@example.com" };
-const USER_SPACE_DIR = fileURLToPath(new URL("../../uploads/user-space/", import.meta.url));
+const USER_SPACE_DIR = fileURLToPath(new URL("../../../uploads/user-space/", import.meta.url));
 
 let passed = 0;
 // Set while the feature toggle is disabled, so a failed assertion still restores
@@ -96,6 +96,19 @@ async function run() {
 
 	const adminAuth = basic(ADMIN.username, ADMIN.password);
 	const userAuth = basic(USER.account, USER.password);
+
+	// [170] 测试前提是 WebDAV 已开启；站点若关着开关，后面的 PROPFIND 会先 403，
+	// 永远走不到“功能开关”用例。先记录原值并在 finally 恢复。
+	const featureSession = await authenticateAdmin(ADMIN.username, ADMIN.password);
+	const featureHeaders = { Authorization: `Bearer ${featureSession.token}`, "Content-Type": "application/json" };
+	const originalFeatures = JSON.parse((await call("GET", "/api/admin/features", { headers: featureHeaders })).text);
+	if (originalFeatures.webdavEnabled !== true) {
+		restoreFeatures = async () => {
+			await call("PATCH", "/api/admin/features", { headers: featureHeaders, body: JSON.stringify(originalFeatures) });
+		};
+		const enabled = await call("PATCH", "/api/admin/features", { headers: featureHeaders, body: JSON.stringify({ ...originalFeatures, webdavEnabled: true }) });
+		check(enabled.status === 200 && JSON.parse(enabled.text).webdavEnabled === true, `测试前开启 WebDAV（实际 ${enabled.status}）`);
+	}
 
 	let res = await call("OPTIONS", "/dav", { auth: adminAuth });
 	check(res.status === 200 || res.status === 204, `OPTIONS /dav 返回 200/204（实际 ${res.status}）`);

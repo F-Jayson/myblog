@@ -132,7 +132,7 @@ export async function getOAuthClient(clientId: string): Promise<OAuthClient | nu
 	return {
 		clientId: row.clientId,
 		clientName: row.clientName,
-		redirectUris: typeof row.redirectUris === "string" ? JSON.parse(row.redirectUris) : row.redirectUris,
+		redirectUris: parseStoredJsonList(row.redirectUris),
 		isConfidential: Boolean(row.isConfidential),
 		createdAt: String(row.createdAt),
 	};
@@ -410,7 +410,7 @@ export async function rotateRefreshToken(params: {
 		const newRefreshToken = `kbrt_${randomBytes(32).toString("hex")}`;
 		const newRtHash = sha256(newRefreshToken);
 		const originalExpiryMs = new Date(rtRow.expires_at).getTime();
-		const refreshedExpiry = Math.max(
+		const refreshedExpiry = Math.min(
 			originalExpiryMs,
 			Date.now() + 30 * 24 * 60 * 60 * 1000,
 		);
@@ -445,9 +445,22 @@ export async function rotateRefreshToken(params: {
 /**
  * 8. 撤销 OAuth 令牌 (RFC 7009)
  */
-export async function revokeOAuthToken(token: string): Promise<boolean> {
+export async function revokeOAuthToken(token: string, clientId?: string): Promise<boolean> {
 	if (!token || !token.trim()) return false;
 	const tokenHash = sha256(token.trim());
+
+	// RFC 7009：先确认 token 属于请求方客户端，再执行吊销，避免跨客户端吊销。
+	const [ownedGrantRows] = await pool.query<RowDataPacket[]>(
+		`SELECT g.id, (
+			SELECT rt.client_id FROM kb_oauth_refresh_tokens rt WHERE rt.grant_id = g.id LIMIT 1
+		 ) AS client_id
+		 FROM kb_user_grants g WHERE g.token_hash = ? AND g.revoked_at IS NULL`,
+		[tokenHash],
+	);
+	if (ownedGrantRows.length > 0 && clientId) {
+		const ownerClientId = String(ownedGrantRows[0].client_id ?? "");
+		if (ownerClientId && ownerClientId !== clientId) return false;
+	}
 
 	// 撤销 access_token 命中的 grant 后必须级联吊销其 refresh 家族：
 	// 只撤 grant 的话 refresh_token 仍能轮换出新 grant，撤销等于没生效
@@ -474,9 +487,13 @@ export async function revokeOAuthToken(token: string): Promise<boolean> {
 
 	// 再尝试按 refresh_token 撤销
 	const [rtRows] = await pool.query<RowDataPacket[]>(
-		`SELECT family_id, grant_id FROM kb_oauth_refresh_tokens WHERE token_hash = ?`,
+		`SELECT family_id, grant_id, client_id FROM kb_oauth_refresh_tokens WHERE token_hash = ?`,
 		[tokenHash],
 	);
+
+	if (rtRows.length > 0 && clientId && String(rtRows[0].client_id ?? "") && String(rtRows[0].client_id) !== clientId) {
+		return false;
+	}
 
 	if (rtRows.length > 0) {
 		const { family_id, grant_id } = rtRows[0];

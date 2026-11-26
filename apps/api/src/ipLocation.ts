@@ -101,7 +101,7 @@ export function normalizeClientIp(value: string) {
 	if (ip.startsWith("[") && ip.includes("]")) ip = ip.slice(1, ip.indexOf("]"));
 	const zone = ip.indexOf("%");
 	if (zone >= 0) ip = ip.slice(0, zone);
-	if (ip.startsWith("::ffff:")) {
+	if (ip.toLowerCase().startsWith("::ffff:")) {
 		const mapped = ip.slice("::ffff:".length);
 		if (isIP(mapped) === 4) return mapped;
 	}
@@ -135,7 +135,7 @@ function parseRegion(raw: string) {
 		city = cleanField(parts[2]);
 		isp = cleanField(parts[3]);
 	}
-	if (region && city && (region === city || city.startsWith(region))) city = region === city ? "" : city;
+	if (region && city === region) city = "";
 	const place = country === "中国" ? [region, city] : [country, region, city];
 	const label = [...new Set(place.filter(Boolean))].join(" ");
 	return { country, region, city, isp, label };

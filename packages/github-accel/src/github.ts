@@ -72,8 +72,12 @@ export function checkAllowedUrl(input: string): UrlCheck {
 		return { ok: false, code: "URL_INVALID", error: "链接里不能包含用户名或密码" };
 	}
 	const host = url.hostname.toLowerCase();
-	if (host !== url.hostname.toLowerCase() || host.endsWith(".")) {
+	if (host.endsWith(".")) {
 		return { ok: false, code: "HOST_NOT_ALLOWED", error: "域名不合法：" + url.hostname };
+	}
+	// 只允许默认 https 端口：带自定义端口的 URL 会把流量引向非 GitHub 服务。
+	if (url.port && url.port !== "443") {
+		return { ok: false, code: "PORT_NOT_ALLOWED", error: "只允许 GitHub 的默认 https 端口（当前：" + url.port + "）" };
 	}
 	if (!ALLOWED_HOSTS.has(host)) {
 		return { ok: false, code: "HOST_NOT_ALLOWED", error: "只允许 GitHub 域名（当前：" + url.hostname + "）" };

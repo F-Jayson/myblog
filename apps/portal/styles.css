@@ -348,7 +348,7 @@ img { display: block; max-width: 100%; }
 
 @media (max-width: 767px) {
 	.top-row { width: 100%; padding: 0 .65rem; }
-	.navbar { margin: 0; padding-left: .7rem; }
+	.navbar { width: 100%; margin: 0; padding-left: .7rem; }
 	.brand span { font-size: .94rem; }
 	.hero { height: 31vh; min-height: 15rem; }
 	.hero-image { background-image: var(--hero-mobile-image); }

@@ -438,13 +438,21 @@ export default function PumlPage() {
 		const controller = new AbortController();
 		abortRef.current = controller;
 		setRendering(true);
-		const response = await renderPuml(payload, controller.signal);
-		if (controller.signal.aborted) return;
-		setRendering(false);
-		setResult(response);
-		if (response.ok) {
-			setDiagram({ svg: response.svg, ...svgSize(response.svg, response.width, response.height) });
-			setRenderedPayload(payload);
+		try {
+			const response = await renderPuml(payload, controller.signal);
+			if (controller.signal.aborted) return;
+			setResult(response);
+			if (response.ok) {
+				setDiagram({ svg: response.svg, ...svgSize(response.svg, response.width, response.height) });
+				setRenderedPayload(payload);
+			}
+		} catch (error) {
+			if (!controller.signal.aborted) {
+				setResult({ ok: false, error: { message: error instanceof Error ? error.message : "渲染失败，请稍后重试" } });
+				setDiagram(null);
+			}
+		} finally {
+			if (!controller.signal.aborted) setRendering(false);
 		}
 	}, []);
 

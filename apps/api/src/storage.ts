@@ -10,6 +10,13 @@ import { config } from "./config.js";
 const uploadsDirectory = fileURLToPath(new URL("../../../uploads/", import.meta.url));
 const userStorageUploadRoot = fileURLToPath(new URL("../../../uploads/user-space/", import.meta.url));
 
+/** A storage key is always a single path segment, never a path traversal. */
+function safeStorageFilename(filename: string): string {
+	const safe = basename(filename).replace(/[\u0000-\u001f<>:"/\\|?*]/gu, "_").trim();
+	if (!safe || safe === "." || safe === "..") throw new Error("Invalid storage filename");
+	return safe;
+}
+
 export interface StoredPublicFile {
 	url: string;
 	key: string;
@@ -101,7 +108,8 @@ export async function savePublicFile(options: {
 	folder?: string;
 }): Promise<StoredPublicFile> {
 	const folder = options.folder ?? "uploads";
-	const key = `${folder}/${options.filename}`;
+	const filename = safeStorageFilename(options.filename);
+	const key = `${folder}/${filename}`;
 	const mimeType = options.mimeType || "application/octet-stream";
 
 	// 1. Worker Storage Driver
@@ -131,7 +139,7 @@ export async function savePublicFile(options: {
 		return {
 			url: targetUrl,
 			key,
-			filename: options.filename,
+			filename,
 			size: data.length,
 			mimeType,
 		};
@@ -158,7 +166,7 @@ export async function savePublicFile(options: {
 		return {
 			url: publicUrl,
 			key,
-			filename: options.filename,
+			filename,
 			size: data.length,
 			mimeType,
 		};
@@ -168,7 +176,7 @@ export async function savePublicFile(options: {
 	let size = options.buffer?.length ?? 0;
 	if (options.buffer && !options.localPath) {
 		await mkdir(uploadsDirectory, { recursive: true });
-		const targetPath = resolve(uploadsDirectory, options.filename);
+		const targetPath = resolve(uploadsDirectory, filename);
 		await writeFile(targetPath, options.buffer, { flag: "wx" });
 		size = options.buffer.length;
 	} else if (options.localPath && !size) {
@@ -176,11 +184,11 @@ export async function savePublicFile(options: {
 		size = fileStat?.size ?? 0;
 	}
 
-	const localUrl = `/api/uploads/${encodeURIComponent(options.filename)}`;
+	const localUrl = `/api/uploads/${encodeURIComponent(filename)}`;
 	return {
 		url: localUrl,
-		key: options.filename,
-		filename: options.filename,
+		key: filename,
+		filename,
 		size,
 		mimeType,
 	};
@@ -247,7 +255,8 @@ export async function saveUserSpaceFile(options: {
 	mimeType?: string;
 	targetStorage?: "server" | "cloudflare";
 }): Promise<{ key: string; size: number; url?: string }> {
-	const key = `user-space/${options.filename}`;
+	const filename = safeStorageFilename(options.filename);
+	const key = `user-space/${filename}`;
 	const mimeType = options.mimeType || "application/octet-stream";
 	const useCloudflare = options.targetStorage === "cloudflare"
 		|| (options.targetStorage === undefined && (isWorkerConfigured() || isR2Configured()));
@@ -274,7 +283,7 @@ export async function saveUserSpaceFile(options: {
 			await unlink(options.localPath).catch(() => undefined);
 		}
 
-		return { key: options.filename, size: data.length, url: targetUrl };
+		return { key: filename, size: data.length, url: targetUrl };
 	}
 
 	if (useCloudflare && isR2Available()) {
@@ -294,13 +303,13 @@ export async function saveUserSpaceFile(options: {
 		}
 
 		const publicUrl = getR2PublicObjectUrl(key);
-		return { key: options.filename, size: data.length, url: publicUrl };
+		return { key: filename, size: data.length, url: publicUrl };
 	}
 
 	let size = options.buffer?.length ?? 0;
 	if (options.buffer && !options.localPath) {
 		await mkdir(userStorageUploadRoot, { recursive: true });
-		const targetPath = resolve(userStorageUploadRoot, options.filename);
+		const targetPath = resolve(userStorageUploadRoot, filename);
 		await writeFile(targetPath, options.buffer, { flag: "wx" });
 		size = options.buffer.length;
 	} else if (options.localPath && !size) {
@@ -308,7 +317,7 @@ export async function saveUserSpaceFile(options: {
 		size = fileStat?.size ?? 0;
 	}
 
-	return { key: options.filename, size, url: `/api/user/storage/file/${encodeURIComponent(options.filename)}` };
+	return { key: filename, size, url: `/api/user/storage/file/${encodeURIComponent(filename)}` };
 }
 
 /**

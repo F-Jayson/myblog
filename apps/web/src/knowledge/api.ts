@@ -50,7 +50,16 @@ async function kbRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const headers = authHeaders(init.headers);
 	let body = init.body;
 
-	if (body && typeof body === "object" && !(body instanceof FormData) && !(body instanceof Blob)) {
+	// 只有普通对象才按 JSON 序列化；URLSearchParams/ArrayBuffer/流等原生 BodyInit 必须原样透传。
+	const isNativeBody = typeof body === "string"
+		|| body instanceof FormData
+		|| body instanceof Blob
+		|| body instanceof URLSearchParams
+		|| body instanceof ArrayBuffer
+		|| ArrayBuffer.isView(body)
+		|| (typeof ReadableStream !== "undefined" && body instanceof ReadableStream);
+
+	if (body && typeof body === "object" && !isNativeBody) {
 		if (!headers.has("content-type")) {
 			headers.set("content-type", "application/json");
 		}

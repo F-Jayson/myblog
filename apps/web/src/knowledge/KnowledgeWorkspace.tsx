@@ -201,6 +201,8 @@ export default function KnowledgeWorkspace() {
 	const [searchQuery, setSearchQuery] = useState("");
 	const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
 	const [searching, setSearching] = useState(false);
+	// [875] 搜索失败不能写进 docError：那会把正在编辑的文档整页替换成错误页
+	const [searchError, setSearchError] = useState<string | null>(null);
 	const searchInputRef = useRef<HTMLInputElement>(null);
 
 	// 展开的文件夹集合
@@ -219,6 +221,14 @@ export default function KnowledgeWorkspace() {
 	useEffect(() => {
 		activeDocIdRef.current = activeDocId;
 	}, [activeDocId]);
+	// [872] 草稿与版本号的实时镜像：自动保存定时器触发时 setState 还没提交，
+	// 直接读 state 闭包会永远保存上一次的内容，并把旧版本号当 expectedVersion。
+	const draftRef = useRef<{ title: string; markdown: string; tags: string[] }>({ title: "", markdown: "", tags: [] });
+	const currentVersionRef = useRef(1);
+	const saveStatusRef = useRef<"saved" | "saving" | "dirty" | "error" | "conflict">("saved");
+	useEffect(() => {
+		saveStatusRef.current = saveStatus;
+	}, [saveStatus]);
 
 	// 1. 加载库信息与目录树
 	// [418] 初始引导（跳转首篇/重置展开）只应执行一次：activeDocId 变化时不再重拉库与树，
@@ -270,20 +280,30 @@ export default function KnowledgeWorkspace() {
 		setDocLoading(true);
 		setDocError(null);
 		setSaveStatus("saved");
+		saveStatusRef.current = "saved";
 		try {
 			const doc = await kbApi.getDocument(docId);
+			// [874] 快速切文档时旧请求可能后返回：只允许当前文档写回编辑器
+			if (activeDocIdRef.current !== docId) return;
+			draftRef.current = { title: doc.title, markdown: doc.markdown, tags: doc.tags ?? [] };
+			currentVersionRef.current = doc.version;
 			setCurrentDoc(doc);
 			setEditTitle(doc.title);
 			setEditMarkdown(doc.markdown);
 			setEditTags(doc.tags ?? []);
 			setCurrentVersion(doc.version);
 
-			kbApi.getRevisions(docId).then(setRevisions).catch(() => undefined);
-			kbApi.listAttachments(docId).then(setAttachments).catch(() => undefined);
+			kbApi.getRevisions(docId).then((items) => {
+				if (activeDocIdRef.current === docId) setRevisions(items);
+			}).catch(() => undefined);
+			kbApi.listAttachments(docId).then((items) => {
+				if (activeDocIdRef.current === docId) setAttachments(items);
+			}).catch(() => undefined);
 		} catch (err) {
+			if (activeDocIdRef.current !== docId) return;
 			setDocError(err instanceof Error ? err.message : "读取文档失败");
 		} finally {
-			setDocLoading(false);
+			if (activeDocIdRef.current === docId) setDocLoading(false);
 		}
 	}, []);
 
@@ -296,67 +316,81 @@ export default function KnowledgeWorkspace() {
 	}, [activeDocId, loadDocumentContent]);
 
 	// 3. 执行保存
+	// [417] 保存进行中来的修改记 pending；[872] 正文/标题/标签一律读 draftRef，
+	// 避免定时器拿到上一次渲染的旧闭包。
 	const performSave = useCallback(
-		async (isManual = false) => {
-			// [417] 正在保存时来的新修改不能被静默丢弃：记一个待存标记，保存结束后补存一次
-			if (saveStatus === "saving") {
+		async (isManual = false, options?: { expectedVersion?: number }) => {
+			if (saveStatusRef.current === "saving") {
 				pendingSaveRef.current = true;
 				return;
 			}
-			if (!activeDocId || !currentDoc) return;
+			const docId = activeDocIdRef.current;
+			if (!docId) return;
+			const draft = draftRef.current;
+			const expectedVersion = options?.expectedVersion ?? currentVersionRef.current;
 
 			setSaveStatus("saving");
+			saveStatusRef.current = "saving";
 			setSaveError(null);
 
 			try {
-				const result = await kbApi.saveDocument(activeDocId, {
-					expectedVersion: currentVersion,
-					title: editTitle,
-					markdown: editMarkdown,
-					tags: editTags,
+				const result = await kbApi.saveDocument(docId, {
+					expectedVersion,
+					title: draft.title,
+					markdown: draft.markdown,
+					tags: draft.tags,
 					isManualSave: isManual,
 				});
 
+				// [873] 保存期间切换了文档：结果只能丢弃，不能写到新文档的界面上
+				if (activeDocIdRef.current !== docId) return;
+
 				if (result.status === "saved" || result.status === "unchanged") {
+					currentVersionRef.current = result.version;
 					setCurrentVersion(result.version);
 					setSaveStatus("saved");
+					saveStatusRef.current = "saved";
 					lastSaveTimeRef.current = Date.now();
-					// [423] 保存成功后同步 currentDoc：否则发布用的是过期 revisionId，头部时间/版本号也会滞后
 					setCurrentDoc((prev) =>
-						prev && prev.id === activeDocId
+						prev && prev.id === docId
 							? {
 									...prev,
 									version: result.version,
 									currentRevisionId: result.revisionId ?? prev.currentRevisionId,
-									title: editTitle,
+									title: draft.title,
 									updatedAt: new Date().toISOString(),
 							  }
 							: prev,
 					);
-					// [417] 保存期间又有新的修改：补一次保存，避免内容停留在 dirty
 					if (pendingSaveRef.current) {
 						pendingSaveRef.current = false;
 						void performSave(false);
 					}
 
 					if (result.status === "saved") {
-						kbApi.getRevisions(activeDocId).then(setRevisions).catch(() => undefined);
+						kbApi.getRevisions(docId).then((items) => {
+							if (activeDocIdRef.current === docId) setRevisions(items);
+						}).catch(() => undefined);
 						setTreeNodes((prev) =>
-							prev.map((n) => (n.id === activeDocId ? { ...n, title: editTitle, version: result.version } : n)),
+							prev.map((n) => (n.id === docId ? { ...n, title: draft.title, version: result.version } : n)),
 						);
 					}
 				}
 			} catch (err) {
+				if (activeDocIdRef.current !== docId) return;
 				if (err instanceof KbApiError && err.status === 409) {
 					setSaveStatus("conflict");
-					const latestServerDoc = await kbApi.getDocument(activeDocId).catch(() => undefined);
+					saveStatusRef.current = "conflict";
+					const latestServerDoc = await kbApi.getDocument(docId).catch(() => undefined);
+					if (activeDocIdRef.current !== docId) return;
 					setConflictData({
 						serverDoc: latestServerDoc,
-						localContent: editMarkdown,
-						localTitle: editTitle,
+						localContent: draft.markdown,
+						localTitle: draft.title,
 					});
 				} else {
 					setSaveStatus("error");
+					saveStatusRef.current = "error";
 					setSaveError(err instanceof Error ? err.message : "保存失败");
 					if (pendingSaveRef.current) {
 						pendingSaveRef.current = false;
@@ -365,7 +399,7 @@ export default function KnowledgeWorkspace() {
 				}
 			}
 		},
-		[activeDocId, currentDoc, currentVersion, editMarkdown, editTags, editTitle, saveStatus],
+		[],
 	);
 
 	// 键盘快捷键监听 (Ctrl+S, Ctrl+K)
@@ -388,16 +422,16 @@ export default function KnowledgeWorkspace() {
 	// 4. 输入变更处理
 	const scheduleAutoSave = useCallback((delay: number) => {
 		// [417] 版本冲突未解决前暂停自动保存：旧 expectedVersion 只会反复触发 409
-		if (saveStatus === "conflict") return;
+		if (saveStatusRef.current === "conflict") return;
 		if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
-		const docId = activeDocId;
+		const docId = activeDocIdRef.current;
 		autoSaveTimerRef.current = window.setTimeout(() => {
 			autoSaveTimerRef.current = null;
 			// 文档已切换：丢弃这次待执行保存，避免旧闭包写进新文档的界面状态
 			if (activeDocIdRef.current !== docId) return;
 			void performSave(false);
 		}, delay);
-	}, [activeDocId, performSave, saveStatus]);
+	}, [performSave]);
 
 	// 卸载时清掉待触发的定时器，避免组件卸载后仍执行保存与 setState
 	useEffect(() => () => {
@@ -408,8 +442,10 @@ export default function KnowledgeWorkspace() {
 	}, []);
 
 	const handleContentChange = (nextMarkdown: string) => {
+		draftRef.current = { ...draftRef.current, markdown: nextMarkdown };
 		setEditMarkdown(nextMarkdown);
-		setSaveStatus("dirty");
+		// [877] 冲突未解决前保持 conflict，否则自动保存会拿旧版本号继续撞 409
+		setSaveStatus((prev) => (prev === "conflict" ? prev : "dirty"));
 
 		const timeSinceLastSave = Date.now() - lastSaveTimeRef.current;
 		const delay = timeSinceLastSave > 15000 ? 500 : 2000;
@@ -418,8 +454,9 @@ export default function KnowledgeWorkspace() {
 	};
 
 	const handleTitleChange = (nextTitle: string) => {
+		draftRef.current = { ...draftRef.current, title: nextTitle };
 		setEditTitle(nextTitle);
-		setSaveStatus("dirty");
+		setSaveStatus((prev) => (prev === "conflict" ? prev : "dirty"));
 
 		scheduleAutoSave(2000);
 	};
@@ -429,17 +466,19 @@ export default function KnowledgeWorkspace() {
 		const trimmed = newTagInput.trim().replace(/^#/, "");
 		if (trimmed && !editTags.includes(trimmed)) {
 			const nextTags = [...editTags, trimmed];
+			draftRef.current = { ...draftRef.current, tags: nextTags };
 			setEditTags(nextTags);
 			setNewTagInput("");
-			setSaveStatus("dirty");
+			setSaveStatus((prev) => (prev === "conflict" ? prev : "dirty"));
 			scheduleAutoSave(1500);
 		}
 	};
 
 	const handleRemoveTag = (tagToRemove: string) => {
 		const nextTags = editTags.filter((t) => t !== tagToRemove);
+		draftRef.current = { ...draftRef.current, tags: nextTags };
 		setEditTags(nextTags);
-		setSaveStatus("dirty");
+		setSaveStatus((prev) => (prev === "conflict" ? prev : "dirty"));
 		scheduleAutoSave(1500);
 	};
 
@@ -1051,6 +1090,7 @@ export default function KnowledgeWorkspace() {
 									// [420] 每次输入丢弃上一次未触发的搜索（防抖）
 									if (searchDebounceRef.current) window.clearTimeout(searchDebounceRef.current);
 									const keyword = value.trim();
+									setSearchError(null);
 									if (keyword.length > 1) {
 										setSearching(true);
 										const seq = ++searchSeqRef.current;
@@ -1063,7 +1103,7 @@ export default function KnowledgeWorkspace() {
 											} catch (err) {
 												if (seq === searchSeqRef.current) {
 													setSearchResults([]);
-													setDocError(err instanceof Error ? err.message : "搜索失败");
+													setSearchError(err instanceof Error ? err.message : "搜索失败");
 												}
 											} finally {
 												if (seq === searchSeqRef.current) setSearching(false);
@@ -1098,7 +1138,11 @@ export default function KnowledgeWorkspace() {
 								<span style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--muted-text)", padding: "0 0.25rem" }}>
 									搜索结果 ({searchResults.length}):
 								</span>
-								{searching ? (
+								{searchError ? (
+									<div style={{ textAlign: "center", padding: "1.5rem 0", fontSize: "0.8rem", color: "var(--danger, #b42318)" }}>
+										{searchError}
+									</div>
+								) : searching ? (
 									<div style={{ textAlign: "center", padding: "1.5rem 0", fontSize: "0.8rem", color: "var(--muted-text)" }}>
 										检索中...
 									</div>
@@ -1602,8 +1646,10 @@ export default function KnowledgeWorkspace() {
 								onClick={() => {
 									if (conflictData.serverDoc) {
 										const serverDoc = conflictData.serverDoc;
+										draftRef.current = { title: serverDoc.title, markdown: serverDoc.markdown, tags: serverDoc.tags ?? [] };
 										setEditTitle(serverDoc.title);
 										setEditMarkdown(serverDoc.markdown);
+										currentVersionRef.current = serverDoc.version;
 										setCurrentVersion(serverDoc.version);
 										// [426] 标签也要同步：否则本地旧标签会在下一次保存时覆盖服务端
 										setEditTags(serverDoc.tags ?? []);
@@ -1621,10 +1667,16 @@ export default function KnowledgeWorkspace() {
 								type="button"
 								onClick={() => {
 									if (conflictData.serverDoc) {
-										setCurrentVersion(conflictData.serverDoc.version);
+										const serverVersion = conflictData.serverDoc.version;
+										currentVersionRef.current = serverVersion;
+										setCurrentVersion(serverVersion);
 										setSaveStatus("dirty");
+										setConflictData(null);
+										// [876] 只改状态不会提交：必须立即用服务端新版本号保存本地草稿
+										void performSave(true, { expectedVersion: serverVersion });
+									} else {
+										setConflictData(null);
 									}
-									setConflictData(null);
 								}}
 								className="kb-btn kb-btn-primary kb-btn-sm"
 							>

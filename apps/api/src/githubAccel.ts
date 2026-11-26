@@ -547,7 +547,9 @@ export function buildCloneInfo(owner: string, repo: string, options: CloneOption
 	return {
 		cloneUrl,
 		command: "git clone " + cloneUrl,
-		insteadOf: 'git config --global url."' + base + '/git/".insteadOf "https://github.com/"',
+		// 非公开模式每个仓库的克隆地址都带独立 ticket，不能给出全局 insteadOf，
+		// 否则 git 会改用无 ticket 的地址并被节点拒绝。
+		insteadOf: options.publicAllowed ? 'git config --global url."' + base + '/git/".insteadOf "https://github.com/"' : "",
 	};
 }
 
@@ -683,7 +685,8 @@ function normalizeAssets(payload: unknown): GithubAccelAsset[] {
 	for (const item of payload) {
 		if (!isRecord(item)) continue;
 		const name = textOf(item, "name");
-		const url = textOf(item, "url", "downloadUrl", "download_url", "browserDownloadUrl", "browser_download_url");
+		// 优先使用 GitHub 的浏览器下载地址；`url` 是仍需鉴权的 API 地址。
+		const url = textOf(item, "browserDownloadUrl", "browser_download_url", "downloadUrl", "download_url", "url");
 		if (!name || !url) continue;
 		assets.push({
 			name,

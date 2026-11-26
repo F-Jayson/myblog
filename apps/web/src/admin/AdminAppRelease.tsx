@@ -24,6 +24,16 @@ import {
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN ?? "").trim().replace(/\/+$/u, "");
 const AUTH_EXPIRED_EVENT = "site-admin-auth-expired";
 
+// 下载地址可能来自后台录入，必须限制为 http(s)，避免 javascript:/data: 被当作链接执行。
+function safeDownloadUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value, window.location.origin);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export type AppScheduleAsset = {
   abi: string; // "universal" | "arm64-v8a" | "armeabi-v7a" | "x86_64" | string
   driveFileId?: number | null;
@@ -711,7 +721,7 @@ export default function AdminAppRelease() {
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                           <a
-                            href={asset.downloadUrl}
+                            href={safeDownloadUrl(asset.downloadUrl)}
                             target="_blank"
                             rel="noreferrer"
                             className="fa-button fa-button-ghost"
@@ -1106,7 +1116,7 @@ export default function AdminAppRelease() {
                                 </div>
                                 <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                                   <a
-                                    href={asset.downloadUrl}
+                                    href={safeDownloadUrl(asset.downloadUrl)}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="fa-button fa-button-ghost"

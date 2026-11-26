@@ -494,7 +494,8 @@ export default function AdminDrive() {
             <tbody>
               {loading && !items.length ? (
                 <tr><td colSpan={5}><div className="fa-table-loading"><RefreshCw size={16} className="fa-spin" />正在加载</div></td></tr>
-              ) : visible.length ? visible.map((item) => (
+              ) : visible.length ? visible.flatMap((item) => {
+                const row = (
                 <tr key={item.id}>
                   <td>
                     <div className="fa-drive-name">
@@ -519,11 +520,8 @@ export default function AdminDrive() {
                     </div>
                   </td>
                 </tr>
-              /* [401] 密码行直接由 map 的 item 决定，不再用下标回查 visible */
-              )).flatMap((row) => {
-                if (passwordFor === null) return [row];
-                const item = visible.find((entry) => passwordFor === entry.id);
-                if (!item) return [row];
+              );
+                if (passwordFor !== item.id) return [row];
                 return [row, <tr key={`password-${item.id}`}>
                   <td colSpan={5}>
                     <form className="fa-drive-password-row" onSubmit={(event) => { event.preventDefault(); void savePassword(item, false); }}>

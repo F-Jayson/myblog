@@ -632,7 +632,13 @@ function pageHeroTitle(pathname: string): string {
 	const exact = PAGE_TITLES[normalized];
 	if (exact) return exact;
 	if (normalized.startsWith("/tools/")) {
-		const toolId = decodeURIComponent(normalized.slice("/tools/".length).split("/")[0] || "");
+		const rawToolId = normalized.slice("/tools/".length).split("/")[0] || "";
+		let toolId = rawToolId;
+		try {
+			toolId = decodeURIComponent(rawToolId);
+		} catch {
+			// 畸形百分号编码不应让整页崩溃，按原文匹配即可。
+		}
 		return DEV_TOOLS.find((tool) => tool.id === toolId)?.title || "";
 	}
 	if (normalized.startsWith("/gallery/")) return "相册";

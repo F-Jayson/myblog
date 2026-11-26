@@ -44,12 +44,16 @@ function typeLabel(type: ClipboardContentType, language?: string) {
 }
 
 export function ClipboardRenderedBody({ content, contentType, language }: { content: string; contentType: ClipboardContentType; language?: string }) {
+	// [616] Hooks 必须无条件调用：原先 useMemo 藏在 contentType === "code" 分支里，
+	// 同一实例从 code 切到 markdown/text 时 hook 数量变化，React 会直接抛错。
+	const codeHtml = useMemo(
+		() => (contentType === "code" ? highlightedCode(content, language) : ""),
+		[content, contentType, language],
+	);
 	if (contentType === "markdown") {
 		return <Suspense fallback={<div className="markdown-body" aria-busy="true" />}><MarkdownContent content={content} /></Suspense>;
 	}
 	if (contentType === "code") {
-		// [328] 高亮结果按内容缓存：重渲染（如复制提示变化）时不重复做全量分词
-		const html = useMemo(() => highlightedCode(content, language), [content, language]);
 		const lines = Math.max(1, content.split("\n").length);
 		return <div className="clipboard-code-frame" onCopy={(event) => {
 			const text = document.getSelection()?.toString();
@@ -58,7 +62,7 @@ export function ClipboardRenderedBody({ content, contentType, language }: { cont
 			event.clipboardData?.setData("text/plain", text);
 		}}>
 			<div className="clipboard-code-gutter" aria-hidden="true">{Array.from({ length: lines }, (_, index) => <span key={index}>{index + 1}</span>)}</div>
-			<pre className="clipboard-code"><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
+			<pre className="clipboard-code"><code dangerouslySetInnerHTML={{ __html: codeHtml }} /></pre>
 		</div>;
 	}
 	return <pre className="clipboard-plain">{content}</pre>;

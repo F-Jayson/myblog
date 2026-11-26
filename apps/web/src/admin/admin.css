@@ -823,7 +823,7 @@
   border-color: var(--fa-line-strong);
 }
 .site-admin :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea):focus,
-.fa-login-page :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"])), .fa-login-page select:focus, .fa-login-page textarea:focus {
+.fa-login-page :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"])):focus, .fa-login-page select:focus, .fa-login-page textarea:focus {
   border-color: var(--fa-primary);
   box-shadow: var(--fa-focus-ring);
   outline: 0;

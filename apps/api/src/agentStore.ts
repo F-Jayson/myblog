@@ -260,7 +260,9 @@ export async function approveDeviceRequest(userCode: string, adminUserId: number
 	const row = rows[0];
 	if (!row) throw new AgentError(404, "not_found", "授权请求已过期或不存在，请回到智能体重新发起");
 	const allowed = normalizeScopes(String(row.requestedScopes ?? ""), []);
-	const chosen = requested === undefined ? allowed : expandScopes(parseScopeList(requested));
+	const requestedScopes = requested === undefined ? allowed : expandScopes(parseScopeList(requested));
+	// 只能授予客户端最初申请的权限，防止批准页被篡改后越权。
+	const chosen = requestedScopes.filter((scope) => allowed.includes(scope));
 	if (!chosen.length) throw new AgentError(400, "invalid_scope", "请至少选择一项权限");
 	const token = `ag_${randomBytes(32).toString("base64url")}`;
 	const clientName = String(row.clientName);

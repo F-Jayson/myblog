@@ -562,6 +562,11 @@ knowledgeRoutes.post("/documents/:id/revisions/:revisionId/restore", requireKnow
 			return;
 		}
 
+		const doc = await getKnowledgeDocument(userId, docId);
+		if (!checkKbAgentLibraryAllowed(req, doc.libraryId)) {
+			res.status(403).json({ error: "KB_LIBRARY_NOT_ALLOWED", message: "该文档所属知识库未在当前 AI 授权范围内" });
+			return;
+		}
 		const result = await restoreDocumentRevision(userId, docId, revId, expectedVersion);
 		res.json(result);
 	} catch (error) {
@@ -707,8 +712,13 @@ knowledgeRoutes.get("/attachments/:id", requireKbScope("kb:read"), async (req: R
 			return;
 		}
 
-		res.setHeader("Content-Type", att.mimeType);
-		res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(att.filename)}"`);
+		// 附件 MIME 来自上传请求，不能原样 inline 返回，否则 .html 附件会变成存储型 XSS。
+		const inlineTypes = new Set(["image/jpeg", "image/png", "image/gif", "image/webp", "image/avif", "application/pdf", "text/plain"]);
+		const mimeType = String(att.mimeType || "").toLowerCase();
+		const inline = inlineTypes.has(mimeType);
+		res.setHeader("Content-Type", inline ? mimeType : "application/octet-stream");
+		res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${encodeURIComponent(att.filename)}"`);
+		res.setHeader("X-Content-Type-Options", "nosniff");
 		res.setHeader("Cache-Control", "private, no-cache, no-store");
 
 		// 读取文件流或本地文件发送

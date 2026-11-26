@@ -50,6 +50,15 @@ async function assertClientAuthenticated(
 	return { ok: true };
 }
 
+// OAuth 端点使用 RFC 6749 的 error/error_description 形状，不能让 KbAgentError 落到全局 500。
+function handleOAuthError(res: Response, error: unknown, next: NextFunction) {
+	if (error instanceof KbAgentError) {
+		res.status(error.status).json({ error: error.code, error_description: error.message });
+		return;
+	}
+	next(error);
+}
+
 // 工具函数：获取基础 Issuer URL
 function getIssuer(req: Request): string {
 	const origin = publicRequestOrigin(req);
@@ -118,7 +127,7 @@ remoteOAuthRoutes.post("/register", async (req: Request, res: Response, next: Ne
 			...(registered.clientSecret ? { client_secret: registered.clientSecret } : {}),
 		});
 	} catch (error) {
-		next(error);
+		handleOAuthError(res, error, next);
 	}
 });
 
@@ -174,7 +183,7 @@ remoteOAuthRoutes.get("/authorize", async (req: Request, res: Response, next: Ne
 
 		res.redirect(consentUrl.toString());
 	} catch (error) {
-		next(error);
+		handleOAuthError(res, error, next);
 	}
 });
 
@@ -256,7 +265,7 @@ remoteOAuthRoutes.post("/consent", async (req: Request, res: Response, next: Nex
 			state: body.state,
 		});
 	} catch (error) {
-		next(error);
+		handleOAuthError(res, error, next);
 	}
 });
 
@@ -331,7 +340,7 @@ remoteOAuthRoutes.post("/token", async (req: Request, res: Response, next: NextF
 			});
 			return;
 		}
-		next(error);
+		handleOAuthError(res, error, next);
 	}
 });
 
@@ -346,16 +355,19 @@ remoteOAuthRoutes.post("/revoke", async (req: Request, res: Response, next: Next
 			return;
 		}
 
+		// RFC 7009：撤销请求必须标识客户端，机密客户端还要通过 client_secret 认证；
+		// client_id 可选会让攻击者用泄露的 token 绕过认证直接吊销他人授权。
 		const clientId = String(req.body.client_id ?? "").trim();
-		if (clientId) {
-			// RFC 7009：撤销请求同样要校验机密客户端身份
-			const auth = await assertClientAuthenticated(req, clientId, res);
-			if (!auth.ok) return;
+		if (!clientId) {
+			res.status(400).json({ error: "invalid_request", error_description: "缺少 client_id 参数" });
+			return;
 		}
+		const auth = await assertClientAuthenticated(req, clientId, res);
+		if (!auth.ok) return;
 
-		await revokeOAuthToken(token);
+		await revokeOAuthToken(token, clientId);
 		res.status(200).json({ ok: true, message: "Token 已成功吊销" });
 	} catch (error) {
-		next(error);
+		handleOAuthError(res, error, next);
 	}
 });

@@ -19,7 +19,10 @@
           var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
           var dark = stored === null ? prefersDark : stored === "dark";
           document.documentElement.classList.toggle("dark", dark);
-          var hue = Number(localStorage.getItem("site-hue"));
+          // [53] 未存过色相时 getItem 返回 null，Number(null) === 0 会误把首屏刷成红色；
+          // 空串同样视为未设置，交给样式表默认值。
+          var rawHue = localStorage.getItem("site-hue");
+          var hue = rawHue === null || rawHue.trim() === "" ? NaN : Number(rawHue);
           if (Number.isFinite(hue) && hue >= 0 && hue <= 360) document.documentElement.style.setProperty("--hue", String(hue));
           var meta = document.querySelector('meta[name="theme-color"]');
           if (meta) meta.setAttribute("content", dark ? "#080f0c" : "#e9f1ed");

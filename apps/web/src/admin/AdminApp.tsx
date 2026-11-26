@@ -5774,6 +5774,8 @@ function AdminAnnouncement() {
       setCurrent(value);
       setDraft(value.content ?? draft);
       load();
+    } catch {
+      // adminRequest 已通过全局事件提示失败原因，这里只避免未处理的 Promise 拒绝。
     } finally {
       setSaving(false);
     }
@@ -5800,17 +5802,21 @@ function AdminAnnouncement() {
     const path = historyDraft.id
       ? "/api/admin/announcements/history/" + historyDraft.id
       : "/api/admin/announcements/history";
-    await adminRequest(path, {
-      method: historyDraft.id ? "PUT" : "POST",
-      body: JSON.stringify({
-        content: historyDraft.content,
-        publishedAt: historyDraft.publishedAt
-          ? new Date(historyDraft.publishedAt).toISOString()
-          : undefined,
-      }),
-    });
-    setDialogOpen(false);
-    load();
+    try {
+      await adminRequest(path, {
+        method: historyDraft.id ? "PUT" : "POST",
+        body: JSON.stringify({
+          content: historyDraft.content,
+          publishedAt: historyDraft.publishedAt
+            ? new Date(historyDraft.publishedAt).toISOString()
+            : undefined,
+        }),
+      });
+      setDialogOpen(false);
+      load();
+    } catch {
+      // 错误提示由 adminRequest 统一处理
+    }
   };
   const historyAction = async (path: string, options: RequestInit = {}) => {
     await adminRequest(path, options);

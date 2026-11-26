@@ -1,5 +1,5 @@
 import { open, rename, unlink } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 
 export class ImageRejectedError extends Error {
 	readonly statusCode = 400;
@@ -53,7 +53,9 @@ export async function promoteStoredImage(filePath: string, filename: string): Pr
 		throw new ImageRejectedError();
 	}
 	const extension = imageExtensionForMime(mime);
-	const stem = filename.replace(/\.[^.]+$/u, "") || filename;
+	// filename 可能来自上传原始文件名，必须先取 basename，避免 ../ 把重命名目标带出目录。
+	const safeFilename = basename(filename).replace(/[\u0000-\u001f<>:"/\\|?*]/gu, "_");
+	const stem = safeFilename.replace(/\.[^.]+$/u, "") || "image";
 	const nextName = `${stem}${extension}`;
 	if (nextName === filename) return { path: filePath, filename, mimeType: mime };
 	const nextPath = resolve(dirname(filePath), nextName);

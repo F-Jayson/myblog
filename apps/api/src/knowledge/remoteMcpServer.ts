@@ -546,6 +546,9 @@ async function extractGrant(req: Request): Promise<{ grant: KbAgentGrant; token:
  * 建立 Server-Sent Events 流
  */
 remoteMcpRouter.get("/sse", async (req: Request, res: Response) => {
+	let sessionId: string | null = null;
+	let transport: SSEServerTransport | null = null;
+	let server: ReturnType<typeof createRemoteKnowledgeMcpServer> | null = null;
 	try {
 		const authResult = await extractGrant(req);
 		if (!authResult) {
@@ -557,10 +560,10 @@ remoteMcpRouter.get("/sse", async (req: Request, res: Response) => {
 		}
 
 		const { grant, token } = authResult;
-		const transport = new SSEServerTransport("/mcp/knowledge/messages", res);
-		const server = createRemoteKnowledgeMcpServer(grant);
+		transport = new SSEServerTransport("/mcp/knowledge/messages", res);
+		server = createRemoteKnowledgeMcpServer(grant);
 
-		const sessionId = transport.sessionId;
+		sessionId = transport.sessionId;
 		activeSessions.set(sessionId, {
 			transport,
 			server,
@@ -569,19 +572,27 @@ remoteMcpRouter.get("/sse", async (req: Request, res: Response) => {
 			createdAt: Date.now(),
 		});
 
+		const activeSessionId = sessionId;
+		const activeTransport = transport;
+		const activeServer = server;
 		req.on("close", () => {
-			activeSessions.delete(sessionId);
+			activeSessions.delete(activeSessionId);
 			// [205] 连接断开必须同步释放 server/transport，否则只删 Map 会让底层资源一直挂着
-			void server.close().catch(() => undefined);
-			void transport.close().catch(() => undefined);
+			void activeServer.close().catch(() => undefined);
+			void activeTransport.close().catch(() => undefined);
 		});
 
 		await server.connect(transport);
 	} catch (error) {
-		// 连接建立失败必须清理会话并兜底响应，避免悬挂的 SSE 与未处理异常
-		res.status(500).json({ error: "mcp_session_failed", message: "远程 MCP 会话建立失败" });
-		req.removeAllListeners("close");
-		throw error;
+		// 连接建立失败必须清理会话并兜底响应，避免悬挂的 SSE 与未处理异常。
+		// SSE 可能已经写出响应头，此时再写 JSON 会二次抛错；也绝不 rethrow，
+		// 否则 Express 默认错误处理会直接销毁客户端连接。
+		if (sessionId) activeSessions.delete(sessionId);
+		await server?.close().catch(() => undefined);
+		await transport?.close().catch(() => undefined);
+		if (!res.headersSent) res.status(500).json({ error: "mcp_session_failed", message: "远程 MCP 会话建立失败" });
+		else res.end();
+		console.error("[knowledge-mcp] SSE session failed:", error);
 	}
 });
 
@@ -624,10 +635,9 @@ remoteMcpRouter.post("/messages", async (req: Request, res: Response) => {
 
 		await session.transport.handlePostMessage(req, res, req.body);
 	} catch (error) {
-		// transport 内部异常不能变成 unhandled rejection 打挂进程
-		if (!res.headersSent) {
-			res.status(500).end("Internal MCP transport error");
-		}
-		throw error;
+		// transport 内部异常不能变成 unhandled rejection 打挂进程；响应头已发送时
+		// 再抛给 Express 默认处理器会直接销毁连接，因此只记录并结束响应。
+		if (!res.headersSent) res.status(500).end("Internal MCP transport error");
+		console.error("[knowledge-mcp] transport error:", error);
 	}
 });

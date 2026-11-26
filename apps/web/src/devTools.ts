@@ -102,7 +102,8 @@ function parseHex(input: string): Rgba | null {
 export function parseColor(input: string): Rgba | null {
 	const text = input.trim();
 	if (!text) return null;
-	const named = NAMED_COLORS[text.toLowerCase()];
+	const key = text.toLowerCase();
+	const named = Object.hasOwn(NAMED_COLORS, key) ? NAMED_COLORS[key] : undefined;
 	if (named) return parseHex(named);
 	if (text.startsWith("#") || /^[0-9a-f]{3,8}$/i.test(text)) return parseHex(text);
 	const match = /^(rgb|rgba|hsl|hsla|hsv|hsva)\((.+)\)$/i.exec(text);
@@ -470,13 +471,22 @@ export function escapeHtml(value: string) {
 	return value.replace(/[&<>"']/g, (char) => HTML_ESCAPE[char] ?? char);
 }
 
+const HTML_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" };
+
 export function unescapeHtml(value: string) {
-	return value
-		.replace(/&#(\d+);/g, (_, digits: string) => String.fromCodePoint(Number(digits)))
-		.replace(/&#x([0-9a-f]+);/gi, (_, digits: string) => String.fromCodePoint(Number.parseInt(digits, 16)))
-		.replace(/&quot;/g, "\"")
-		.replace(/&#39;|&apos;/g, "'")
-		.replace(/&lt;/g, "<")
-		.replace(/&gt;/g, ">")
-		.replace(/&amp;/g, "&");
+	// 单次扫描解码：避免 `&amp;lt;` 先变成 `&lt;` 再被二次解码成 `<`（可绕过转义）。
+	return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, body: string) => {
+		if (body.startsWith("#")) {
+			const code = body[1]?.toLowerCase() === "x"
+				? Number.parseInt(body.slice(2), 16)
+				: Number.parseInt(body.slice(1), 10);
+			if (!Number.isFinite(code) || code < 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return entity;
+			try {
+				return String.fromCodePoint(code);
+			} catch {
+				return entity;
+			}
+		}
+		return HTML_ENTITIES[body.toLowerCase()] ?? entity;
+	});
 }

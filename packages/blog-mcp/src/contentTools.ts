@@ -370,7 +370,8 @@ export const contentTools: Tool[] = [
 			gamesEnabled: { type: "boolean" },
 		}),
 		call: async (args) => {
-			const body = Object.fromEntries(Object.entries(args).filter(([, value]) => typeof value === "boolean"));
+			const allowed = ["commentsEnabled", "registrationEnabled", "loginEnabled", "imageHostingEnabled", "clipboardEnabled", "userCenterEnabled", "publicResourcesEnabled", "compilerEnabled", "gamesEnabled"];
+			const body = Object.fromEntries(allowed.filter((key) => typeof args[key] === "boolean").map((key) => [key, args[key]]));
 			if (!Object.keys(body).length) return text("请提供要修改的开关。", true);
 			return show(await blogJson("/api/agent/features", { method: "PATCH", body }));
 		},
@@ -389,7 +390,8 @@ export const contentTools: Tool[] = [
 			notifyPendingComment: { type: "boolean" },
 		}),
 		call: async (args) => {
-			const body = Object.fromEntries(Object.entries(args).filter(([, value]) => typeof value === "boolean"));
+			const allowed = ["commentsEnabled", "commentRegistrationEnabled", "commentModerationEnabled", "allowAnonymous", "emailRegistrationEnabled", "notifyNewUser", "notifyNewComment", "notifyPendingComment"];
+			const body = Object.fromEntries(allowed.filter((key) => typeof args[key] === "boolean").map((key) => [key, args[key]]));
 			if (!Object.keys(body).length) return text("请提供要修改的评论设置。", true);
 			return show(await blogJson("/api/agent/comment-settings", { method: "PATCH", body }));
 		},

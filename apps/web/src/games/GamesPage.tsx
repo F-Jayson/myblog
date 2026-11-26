@@ -418,7 +418,7 @@ function MineGame({ setup, ranked, onReport, onRestart, message, messageError, b
 					const shade = (index % state.cols + Math.floor(index / state.cols)) % 2 === 0 ? "is-a" : "is-b";
 					const className = ["mine-cell", shade, cell.open ? "is-open" : "", cell.mine && cell.open ? "is-mine" : "", cell.flag ? "is-flag" : "", cell.question && !cell.open ? "is-question" : "", cell.open && cell.near ? `n${cell.near}` : ""].filter(Boolean).join(" ");
 					const mark = cell.flag ? <Flag size={14} aria-label="旗子" /> : cell.question && !cell.open ? <CircleHelp size={14} aria-label="问号" /> : cell.open && cell.mine ? <Bomb size={14} aria-label="地雷" /> : cell.open && cell.near ? String(cell.near) : "";
-					return <button key={index} type="button" className={className} disabled={ended && !cell.open && !cell.flag && !cell.question} onClick={() => reveal(index, flagMode)} onContextMenu={(event) => { event.preventDefault(); if (!ended) reveal(index, true); }}>{mark}</button>;
+					return <button key={index} type="button" className={className} disabled={ended} onClick={() => reveal(index, flagMode)} onContextMenu={(event) => { event.preventDefault(); if (!ended) reveal(index, true); }}>{mark}</button>;
 				})}
 			</div>
 		</div>

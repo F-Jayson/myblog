@@ -102,6 +102,8 @@ async function acquireJobSlot() {
 			throw new CompilerError("在线编译任务繁忙，请稍后重试", 429, "COMPILER_BUSY");
 		}
 		await new Promise<void>((resolveWaiter) => jobWaiters.push(resolveWaiter));
+		// 槽位已由 releaseJobSlot 直接转交给等待者，计数没有减少，这里不能再加。
+		return;
 	}
 	activeJobs += 1;
 }

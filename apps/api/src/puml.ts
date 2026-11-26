@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { createServer } from "node:net";
@@ -222,16 +222,32 @@ class LocalPumlEngine {
 		const jar = jarInfo();
 		if (!java || !jar.exists) return;
 		this.versionProbing = true;
+		let output = "";
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			this.versionProbing = false;
+		};
 		try {
 			// Runs once per process: 1.2025.10 prints "PlantUML version 1.2025.10 (...)".
-			const result = spawnSync(java, ["-jar", jar.path, "-version"], { encoding: "utf8", timeout: 15_000, windowsHide: true });
-			const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-			const match = text.match(/PlantUML version\s+([\w.]+)/u);
-			this.versionValue = match ? match[1] ?? null : null;
+			// Keep this asynchronous: status requests must never block the event loop
+			// for up to the probe timeout while the JVM starts.
+			const child = spawn(java, ["-jar", jar.path, "-version"], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+			const timer = setTimeout(() => child.kill(), 15_000);
+			timer.unref?.();
+			child.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+			child.stderr?.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+			child.once("error", () => { clearTimeout(timer); this.versionValue = null; finish(); });
+			child.once("close", () => {
+				clearTimeout(timer);
+				const match = output.match(/PlantUML version\s+([\w.]+)/u);
+				this.versionValue = match ? match[1] ?? null : null;
+				finish();
+			});
 		} catch {
 			this.versionValue = null;
-		} finally {
-			this.versionProbing = false;
+			finish();
 		}
 	}
 
@@ -357,7 +373,12 @@ class LocalPumlEngine {
 			const url = `http://127.0.0.1:${this.port}/plantuml/svg/${encodePumlSource(source)}`;
 			const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
 			const body = await response.text();
-			if (response.status !== 200 || !body.includes("<svg")) throw new PumlRenderFailure(body, response.status);
+			// PlantUML still returns HTTP 200 and an SVG for diagrams with syntax
+			// errors; it reports the failure through these headers instead.
+			const diagramError = response.headers.get("x-plantuml-diagram-error");
+			if (response.status !== 200 || diagramError || !body.includes("<svg")) {
+				throw new PumlRenderFailure(diagramError || body, response.status);
+			}
 			return body;
 		} finally {
 			this.active -= 1;
@@ -515,7 +536,9 @@ export async function renderPuml(source: string, options: { ip?: string } = {}):
 	if (!config.puml.enabled) throw new PumlError("PlantUML 渲染功能已关闭", 503, "PUML_DISABLED");
 	checkRate(options.ip ?? "unknown");
 
-	const text = source.replace(/\r\n/gu, "\n").trim();
+	// 统一所有换行形式：只处理 CRLF 时，孤立的 \r 会让 assertSafeSource
+	// 把 "foo\r!include ..." 当成同一行，从而绕过指令黑名单。
+	const text = source.replace(/\r\n?/gu, "\n").trim();
 	if (!text) throw new PumlError("请输入 PlantUML 代码", 400, "PUML_EMPTY");
 	assertSafeSource(text);
 

@@ -93,14 +93,17 @@ export function stripMarkdownImages(source: string) {
 
 export function extractMarkdownImages(source: string): DynamicImage[] {
 	const images: DynamicImage[] = [];
-	for (const tag of source.match(resetRegex(HTML_IMAGE)) ?? []) {
-		const src = attributeValue(tag, "src");
-		if (!src) continue;
-		pushImage(images, src, attributeValue(tag, "alt"), Number(attributeValue(tag, "width")), Number(attributeValue(tag, "height")));
-	}
-	for (const match of source.matchAll(resetRegex(MARKDOWN_IMAGE))) {
-		pushImage(images, match[2] ?? "", match[1] ?? "", Number(match[5] || ""), Number(match[6] || ""));
-	}
+	transformOutsideCode(source, (chunk) => {
+		for (const tag of chunk.match(resetRegex(HTML_IMAGE)) ?? []) {
+			const src = attributeValue(tag, "src");
+			if (!src) continue;
+			pushImage(images, src, attributeValue(tag, "alt"), Number(attributeValue(tag, "width")), Number(attributeValue(tag, "height")));
+		}
+		for (const match of chunk.matchAll(resetRegex(MARKDOWN_IMAGE))) {
+			pushImage(images, match[2] ?? "", match[1] ?? "", Number(match[5] || ""), Number(match[6] || ""));
+		}
+		return chunk;
+	});
 	return images;
 }
 

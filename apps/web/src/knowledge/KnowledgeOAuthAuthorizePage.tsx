@@ -67,17 +67,23 @@ export default function KnowledgeOAuthAuthorizePage() {
 
 	// 加载用户的知识库列表
 	useEffect(() => {
-		if (user) {
-			kbApi
-				.listLibraries()
-				.then((libs) => {
-					setLibraries(libs);
-					// [407] 默认不勾选任何库：最小权限原则，未勾选的知识库不会被访问
-				})
-				.catch((err) => {
-					console.error("加载知识库列表失败:", err);
-				});
+		let cancelled = false;
+		if (!user) {
+			setLibraries([]);
+			setSelectedLibIds([]);
+			return;
 		}
+		kbApi
+			.listLibraries()
+			.then((libs) => {
+				if (cancelled) return;
+				setLibraries(libs);
+				// [407] 默认不勾选任何库：最小权限原则，未勾选的知识库不会被访问
+			})
+			.catch((err) => {
+				if (!cancelled) console.error("加载知识库列表失败:", err);
+			});
+		return () => { cancelled = true; };
 	}, [user]);
 
 	const toggleScope = (scopeId: string) => {

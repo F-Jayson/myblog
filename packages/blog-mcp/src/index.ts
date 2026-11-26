@@ -331,6 +331,8 @@ process.stdout.on("error", () => { process.exit(0); });
 
 const pendingFrames: string[] = [];
 let waitingDrain = false;
+// MCP stdio 默认使用逐行 JSON；保留 Content-Length 兼容旧的帧格式。
+let inputFraming: "content-length" | "newline" = "newline";
 
 function drainFrames() {
 	while (pendingFrames.length > 0) {
@@ -345,7 +347,7 @@ process.stdout.on("drain", () => { waitingDrain = false; drainFrames(); });
 
 function send(message: unknown) {
 	const json = JSON.stringify(message);
-	pendingFrames.push(`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`);
+	pendingFrames.push(inputFraming === "newline" ? `${json}\n` : `Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`);
 	if (!waitingDrain) drainFrames();
 }
 
@@ -390,9 +392,35 @@ const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 let messageChain: Promise<void> = Promise.resolve();
 
 let buffer = Buffer.alloc(0);
+
+function enqueueMessage(body: string) {
+	messageChain = messageChain.then(() => handleMessage(body)).catch(() => undefined);
+}
+
 process.stdin.on("data", (chunk: Buffer) => {
 	buffer = Buffer.concat([buffer, chunk]);
+	if (buffer.length === 0) return;
+
+	// MCP stdio 默认是逐行 JSON；同时兼容旧的 Content-Length 帧格式。
+	const prefix = buffer.subarray(0, 15).toString("utf8").toLowerCase();
+	if (prefix.length < 15 && "content-length:".startsWith(prefix) && !buffer.includes("\n")) return;
+	if (prefix.startsWith("content-length:")) inputFraming = "content-length";
+
 	while (buffer.length) {
+		if (inputFraming === "newline") {
+			const newline = buffer.indexOf("\n");
+			if (newline < 0) {
+				if (buffer.length > MAX_FRAME_BYTES) {
+					console.error("[blog-mcp] 请求超过上限，已丢弃缓冲区");
+					buffer = Buffer.alloc(0);
+				}
+				return;
+			}
+			const line = buffer.subarray(0, newline).toString("utf8").trim();
+			buffer = buffer.subarray(newline + 1);
+			if (line) enqueueMessage(line);
+			continue;
+		}
 		const headerEnd = buffer.indexOf("\r\n\r\n");
 		if (headerEnd < 0) {
 			if (buffer.length > MAX_FRAME_BYTES) {
@@ -419,7 +447,7 @@ process.stdin.on("data", (chunk: Buffer) => {
 		if (buffer.length < start + length) return;
 		const body = buffer.subarray(start, start + length).toString("utf8");
 		buffer = buffer.subarray(start + length);
-		messageChain = messageChain.then(() => handleMessage(body)).catch(() => undefined);
+		enqueueMessage(body);
 	}
 });
 process.stdin.resume();

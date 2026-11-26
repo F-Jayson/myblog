@@ -46,8 +46,14 @@ function isObservabilityProbe(statement: string) {
 function isWriteStatement(statement: string) {
 	// [219] 先剥离前导注释：/* ... */ INSERT 这类语句之前不会被识别，导致
 	// lastDatabaseWriteAt 长期失真；CTE（WITH ... UPDATE/INSERT）同样算写入
-	const stripped = statement.replace(/^(?:\s+|--[^\n]*\n|\/\*[\s\S]*?\*\/)+/u, "");
-	return /\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT|REVOKE)\b/iu.test(stripped) || /^WITH\b/iu.test(stripped);
+	const stripped = statement
+		.replace(/^(?:\s+|--[^\n]*\n|\/\*[\s\S]*?\*\/)+/u, "")
+		.replace(/\bFOR\s+(?:NO\s+)?KEY\s+SHARE\b/giu, "")
+		.replace(/\bFOR\s+UPDATE\b/giu, "");
+	if (/^(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT|REVOKE)\b/iu.test(stripped)) return true;
+	// A CTE is only a write when it actually contains a data-modifying statement;
+	// plain `WITH ... SELECT` queries (including locking reads) are not writes.
+	return /^WITH\b/iu.test(stripped) && /\b(?:INSERT|UPDATE|DELETE|REPLACE)\b/iu.test(stripped);
 }
 
 export function recordRequest(metric: Omit<RequestMetric, "at">) {

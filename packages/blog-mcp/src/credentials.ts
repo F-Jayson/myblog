@@ -39,6 +39,8 @@ async function readStore(): Promise<Store> {
 		if (!parsed || typeof parsed !== "object" || !parsed.sites || typeof parsed.sites !== "object") return emptyStore();
 		return { version: 1, sites: parsed.sites };
 	} catch (error) {
+		// 文件损坏的提示已经包含具体路径与处理方式，不能被下面的通用错误覆盖。
+		if (error instanceof Error && error.message.startsWith("授权文件已损坏")) throw error;
 		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return emptyStore();
 		throw new Error("本机授权文件无法读取，请检查 ~/.jayson-blog/credentials.json");
 	}

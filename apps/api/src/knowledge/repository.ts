@@ -1109,7 +1109,7 @@ export async function searchUserAccessibleDocuments(
 	if (!cleanQ) return [];
 
 	let libFilter = "";
-	const queryParams: unknown[] = [userId, userId, userId, userId];
+	const queryParams: unknown[] = [userId, userId, userId];
 
 	if (libraryId) {
 		libFilter = "AND k.id = ?";
