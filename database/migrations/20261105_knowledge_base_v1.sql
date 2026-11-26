@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS kb_document_access (
   INDEX idx_kb_doc_access_user (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 7. 不可变修订历史表 (含 MySQL ngram 全文检索支持)
+-- 7. 不可变修订历史表。全文索引用默认分词器，生产库没有 ngram。
 CREATE TABLE IF NOT EXISTS kb_revisions (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   document_id BIGINT UNSIGNED NOT NULL,
@@ -136,8 +136,8 @@ CREATE TABLE IF NOT EXISTS kb_revisions (
   CONSTRAINT fk_kb_revisions_doc FOREIGN KEY (document_id) REFERENCES kb_documents(id) ON DELETE CASCADE,
   UNIQUE KEY uniq_doc_version (document_id, version),
   INDEX idx_revisions_created (document_id, created_at),
-  -- 中文正文需要 ngram 分词器，默认分词器不会切分 CJK
-  FULLTEXT KEY ft_revision_search (title, markdown) WITH PARSER ngram
+  -- 默认分词器。生产库没有 ngram，不能写 WITH PARSER ngram。
+  FULLTEXT KEY ft_revision_search (title, markdown)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 8. 附件元数据与版本关联表
