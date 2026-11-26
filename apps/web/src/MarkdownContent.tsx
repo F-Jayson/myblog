@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import { marked, Renderer } from "marked";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, type MouseEvent } from "react";
+import { clipboardLanguage, tokenizeCode, type TokenKind } from "./codeHighlight";
 import { rewriteMarkdownImageSizes } from "./markdown";
 import { resolveMediaUrl } from "./media";
 
@@ -14,7 +15,96 @@ export function isTocDepth(depth: number) {
 	return depth >= 2 && depth <= 4;
 }
 
+const LANGUAGE_ALIASES: Record<string, string> = {
+	js: "javascript",
+	jsx: "javascript",
+	mjs: "javascript",
+	cjs: "javascript",
+	ts: "typescript",
+	tsx: "typescript",
+	py: "python",
+	sh: "bash",
+	shell: "bash",
+	zsh: "bash",
+	bash: "bash",
+	ps: "bash",
+	ps1: "bash",
+	pwsh: "bash",
+	powershell: "bash",
+	console: "bash",
+	terminal: "bash",
+	yml: "yaml",
+	md: "markdown",
+	text: "plaintext",
+	txt: "plaintext",
+	plain: "plaintext",
+	cs: "csharp",
+	"c#": "csharp",
+	"c++": "cpp",
+	cc: "cpp",
+	hpp: "cpp",
+	htm: "html",
+	rb: "ruby",
+	kt: "kotlin",
+	rs: "rust",
+	golang: "go",
+	jsonc: "json",
+};
+
+function escapeHtml(value: string) {
+	return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/"/gu, "&quot;");
+}
+
+function tokenClass(kind: TokenKind, text: string, colorShellTest: boolean) {
+	if (colorShellTest && kind === "plain" && text === "test") return "md-tok-builtin";
+	return `md-tok-${kind}`;
+}
+
+function renderMacCodeBlock(text: string, lang: string | undefined) {
+	const rawLabel = (lang ?? "").trim().split(/[\s,{]+/u)[0]?.toLowerCase() ?? "";
+	const safeLabel = /^[a-z0-9#+.-]{1,32}$/u.test(rawLabel) ? rawLabel : "";
+	const highlightKey = clipboardLanguage(LANGUAGE_ALIASES[safeLabel] ?? safeLabel).key;
+	const source = text.replace(/\n$/u, "");
+	const colorShellTest = safeLabel === "powershell" || safeLabel === "ps1" || safeLabel === "pwsh";
+	const lines = tokenizeCode(source, highlightKey).map((tokens, index) => {
+		const body = tokens.map((token) => `<span class="${tokenClass(token.kind, token.text, colorShellTest)}">${escapeHtml(token.text)}</span>`).join("");
+		return `<span class="md-line"><span class="md-gutter" aria-hidden="true">${index + 1}</span><span class="md-line-code">${body}</span></span>`;
+	}).join("");
+	const label = safeLabel ? `<span class="md-codeblock-lang">${escapeHtml(safeLabel)}</span>` : "";
+	return `<div class="md-codeblock"><div class="md-codeblock-bar"><span class="md-codeblock-dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="md-codeblock-meta">${label}<button type="button" class="md-codeblock-copy"><span class="md-codeblock-copy-label">复制代码</span><span class="md-codeblock-copy-mark" aria-hidden="true">✓</span></button></span></div><pre><code>${lines}</code></pre></div>\n`;
+}
+
+function copyWithTextarea(text: string) {
+	const area = document.createElement("textarea");
+	area.value = text;
+	area.setAttribute("readonly", "");
+	area.style.position = "fixed";
+	area.style.left = "-9999px";
+	document.body.append(area);
+	area.focus();
+	area.select();
+	const copied = document.execCommand("copy");
+	area.remove();
+	if (!copied) throw new Error("copy failed");
+}
+
+async function copyWithFallback(text: string) {
+	try {
+		if (navigator.clipboard?.writeText) {
+			await navigator.clipboard.writeText(text);
+			return;
+		}
+	} catch {
+		// 页面未聚焦或权限被拒绝时，改用选区复制
+	}
+	copyWithTextarea(text);
+}
+
 export default function MarkdownContent({ content }: MarkdownContentProps) {
+	const copyTimers = useRef(new Map<HTMLButtonElement, number>());
+	useEffect(() => () => {
+		for (const timer of copyTimers.current.values()) window.clearTimeout(timer);
+	}, []);
 	const html = useMemo(() => {
 		// [394] marked/DOMPurify 对畸形输入可能抛错：整个渲染包进 try/catch，降级而不是整页白屏
 		try {
@@ -25,6 +115,9 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
 			if (!isTocDepth(depth)) return `<h${depth}>${inline}</h${depth}>`;
 			const id = `toc-${headingIndex++}`;
 			return `<h${depth} id="${id}">${inline}</h${depth}>`;
+		};
+		renderer.code = function ({ text, lang }) {
+			return renderMacCodeBlock(text, lang);
 		};
 		const rendered = marked.parse(rewriteMarkdownImageSizes(content), {
 			async: false,
@@ -49,5 +142,29 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
 		return `<p>${fallback.replace(/\n/gu, "<br />")}</p>`;
 	}
 	}, [content]);
-	return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />;
+	const onClick = (event: MouseEvent<HTMLDivElement>) => {
+		const button = (event.target as HTMLElement).closest<HTMLButtonElement>(".md-codeblock-copy");
+		if (!button || !event.currentTarget.contains(button)) return;
+		const block = button.closest(".md-codeblock");
+		if (!block) return;
+		const text = [...block.querySelectorAll<HTMLElement>(".md-line-code")].map((node) => node.textContent ?? "").join("\n");
+		const label = button.querySelector(".md-codeblock-copy-label");
+		const previous = copyTimers.current.get(button);
+		if (previous) window.clearTimeout(previous);
+		const reset = () => {
+			if (label) label.textContent = "复制代码";
+			button.classList.remove("is-copied");
+			copyTimers.current.delete(button);
+		};
+		void copyWithFallback(text).then(() => {
+			if (label) label.textContent = "已复制";
+			button.classList.add("is-copied");
+			copyTimers.current.set(button, window.setTimeout(reset, 1600));
+		}).catch(() => {
+			if (label) label.textContent = "复制失败";
+			button.classList.remove("is-copied");
+			copyTimers.current.set(button, window.setTimeout(reset, 1600));
+		});
+	};
+	return <div className="markdown-body" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
 }
