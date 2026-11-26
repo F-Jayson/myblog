@@ -445,11 +445,14 @@ export const api = {
 		if (!payload.user) throw new Error("注册响应缺少用户信息");
 		return payload.user;
 	},
-	async authEmailCode(email: string) {
-		return jsonRequest<{ ok?: boolean; sent?: boolean; error?: string; debugCode?: string; expiresInSeconds?: number }>("/api/auth/email-code", "POST", { email });
+	async authCaptcha() {
+		return request<{ id: string; image: string; expiresInSeconds: number }>("/api/auth/captcha");
 	},
-	async authPasswordResetCode(account: string) {
-		return jsonRequest<{ ok?: boolean; sent?: boolean; error?: string; debugCode?: string; message?: string; expiresInSeconds?: number }>("/api/auth/password-reset/code", "POST", { account });
+	async authEmailCode(email: string, captcha: { captchaId: string; captchaCode: string }) {
+		return jsonRequest<{ ok?: boolean; sent?: boolean; error?: string; debugCode?: string; expiresInSeconds?: number }>("/api/auth/email-code", "POST", { email, ...captcha });
+	},
+	async authPasswordResetCode(account: string, captcha: { captchaId: string; captchaCode: string }) {
+		return jsonRequest<{ ok?: boolean; sent?: boolean; error?: string; debugCode?: string; message?: string; expiresInSeconds?: number }>("/api/auth/password-reset/code", "POST", { account, ...captcha });
 	},
 	async authPasswordReset(input: { account: string; emailCode: string; password: string }): Promise<PublicUser> {
 		const payload = await jsonRequest<{ token?: string; user?: PublicUser }>("/api/auth/password-reset", "POST", input);
@@ -624,7 +627,7 @@ export const api = {
 	},
 	async userProfile(): Promise<PublicUser> { return request<PublicUser>("/api/user/profile"); },
 	async updateUserProfile(input: Record<string, unknown>) { return request<PublicUser>("/api/user/profile", { method: "PATCH", body: JSON.stringify(input), headers: { "content-type": "application/json" } }); },
-	async userProfileEmailCode(email: string) { return jsonRequest<{ sent?: boolean; error?: string; debugCode?: string }>("/api/user/profile/email-code", "POST", { email }); },
+	async userProfileEmailCode(email: string, captcha: { captchaId: string; captchaCode: string }) { return jsonRequest<{ sent?: boolean; error?: string; debugCode?: string }>("/api/user/profile/email-code", "POST", { email, ...captcha }); },
 	publicResourceUrl(token: string) { return absoluteMediaUrl(`/api/public/resources/${encodeURIComponent(token)}`); },
 	async archive() {
 		return cachedRequest<Array<{ year: number; id: number; slug: string; title: string; publishedAt: string; category: string | null }>>("archive", "/api/archive").catch(() => fallbackPosts.map((post) => ({

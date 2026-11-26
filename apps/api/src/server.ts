@@ -92,6 +92,7 @@ import { gameRouter } from "./games.js";
 import { locateIp, warmIpLocation } from "./ipLocation.js";
 import { publicRequestOrigin, resolveClientIp } from "./clientIp.js";
 import { ImageRejectedError, promoteStoredImage, sniffImageMime } from "./imageSignature.js";
+import { emailCaptcha } from "./captcha.js";
 import { loginGate } from "./loginThrottle.js";
 import { KbError } from "./knowledge/errors.js";
 import {
@@ -357,6 +358,17 @@ function beginScopedAttempt(req: Request, res: Response, scope: string, account:
 
 function beginPasswordAttempt(req: Request, res: Response, account: string) {
 	return beginScopedAttempt(req, res, "password", account);
+}
+
+function acceptEmailCaptcha(req: Request, res: Response) {
+	const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+	const captchaId = typeof body.captchaId === "string" ? body.captchaId : "";
+	const captchaCode = typeof body.captchaCode === "string" ? body.captchaCode : "";
+	const decision = emailCaptcha.verify(resolveClientIp(req) || "unknown", captchaId, captchaCode);
+	if (decision.ok) return true;
+	if (decision.retryAfterSeconds) res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+	res.status(decision.status).json({ error: decision.error, retryAfterSeconds: decision.retryAfterSeconds, remainingAttempts: decision.remainingAttempts });
+	return false;
 }
 function requestAuditPayload(req: Request) {
 	return req.method === "GET" || req.method === "HEAD" ? req.query : req.body;
@@ -694,46 +706,32 @@ app.get("/api/comment-settings", async (_req, res, next) => {
 	try { res.json(await getCommentSettings()); } catch (error) { next(error); }
 });
 
-app.post("/api/auth/email-code", async (req, res, next) => {
+app.get(["/api/auth/captcha", "/api/user/auth/captcha"], (req, res) => {
+	const issued = emailCaptcha.issue(resolveClientIp(req) || "unknown");
+	res.setHeader("cache-control", "no-store");
+	if (!issued.ok) {
+		res.setHeader("Retry-After", String(issued.retryAfterSeconds));
+		res.status(429).json({ error: issued.error, retryAfterSeconds: issued.retryAfterSeconds });
+		return;
+	}
+	res.json({ id: issued.id, image: issued.image, expiresInSeconds: issued.expiresInSeconds });
+});
+
+const sendRegistrationEmailCode: RequestHandler = async (req, res, next) => {
 	try {
 		const features = await getFeatureSettings();
 		if (!features.registrationEnabled) { res.status(403).json({ error: "用户注册功能未开启" }); return; }
 		const settings = await getCommentSettings();
 		if (!settings.emailRegistrationEnabled) { res.status(400).json({ error: "邮箱注册功能未开启" }); return; }
 		const email = z.string().email().max(190).parse(req.body?.email);
+		if (!acceptEmailCaptcha(req, res)) return;
 		res.json(await requestCommentEmailCode(email));
 	} catch (error) { next(error); }
-});
-app.post("/api/user/auth/verification-code", async (req, res, next) => {
-	try {
-		const features = await getFeatureSettings();
-		if (!features.registrationEnabled) { res.status(403).json({ error: "用户注册功能未开启" }); return; }
-		const settings = await getCommentSettings();
-		if (!settings.emailRegistrationEnabled) { res.status(400).json({ error: "邮箱注册功能未开启" }); return; }
-		const email = z.string().email().max(190).parse(req.body?.email);
-		res.json(await requestCommentEmailCode(email));
-	} catch (error) { next(error); }
-});
-app.post("/api/auth/send-code", async (req, res, next) => {
-	try {
-		const features = await getFeatureSettings();
-		if (!features.registrationEnabled) { res.status(403).json({ error: "用户注册功能未开启" }); return; }
-		const settings = await getCommentSettings();
-		if (!settings.emailRegistrationEnabled) { res.status(400).json({ error: "邮箱注册功能未开启" }); return; }
-		const email = z.string().email().max(190).parse(req.body?.email);
-		res.json(await requestCommentEmailCode(email));
-	} catch (error) { next(error); }
-});
-app.post("/api/user/auth/send-code", async (req, res, next) => {
-	try {
-		const features = await getFeatureSettings();
-		if (!features.registrationEnabled) { res.status(403).json({ error: "用户注册功能未开启" }); return; }
-		const settings = await getCommentSettings();
-		if (!settings.emailRegistrationEnabled) { res.status(400).json({ error: "邮箱注册功能未开启" }); return; }
-		const email = z.string().email().max(190).parse(req.body?.email);
-		res.json(await requestCommentEmailCode(email));
-	} catch (error) { next(error); }
-});
+};
+app.post("/api/auth/email-code", sendRegistrationEmailCode);
+app.post("/api/user/auth/verification-code", sendRegistrationEmailCode);
+app.post("/api/auth/send-code", sendRegistrationEmailCode);
+app.post("/api/user/auth/send-code", sendRegistrationEmailCode);
 
 const registerCommentAccount: RequestHandler = async (req: RequestWithCommentUser, res, next) => {
 	try {
@@ -820,6 +818,7 @@ const sendPasswordResetCode: RequestHandler = async (req, res, next) => {
 		const input = passwordResetIdentityInput.parse(req.body ?? {});
 		const account = passwordResetLogin(input);
 		if (!account) { res.status(400).json({ error: "请输入账号或邮箱" }); return; }
+		if (!acceptEmailCaptcha(req, res)) return;
 		const attempt = beginScopedAttempt(req, res, "reset-send", account);
 		if (!attempt) return;
 		loginGate.fail("reset-send", attempt.ip, attempt.account);
@@ -1645,7 +1644,9 @@ app.post("/api/user/profile/email-code", requireFeature("userCenterEnabled", "�
 		const requested = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
 		const email = user?.email || requested;
 		if (!email) { res.status(400).json({ error: "请先填写邮箱" }); return; }
-		res.json(await requestCommentEmailCode(z.string().email().max(190).parse(email), "修改资料验证码"));
+		const parsedEmail = z.string().email().max(190).parse(email);
+		if (!acceptEmailCaptcha(req, res)) return;
+		res.json(await requestCommentEmailCode(parsedEmail, "修改资料验证码"));
 	} catch (error) { next(error); }
 });
 app.patch("/api/user/profile", requireFeature("userCenterEnabled", "用户中心功能当前已关闭"), requireCommentUser, async (req: RequestWithCommentUser, res, next) => {

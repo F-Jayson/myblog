@@ -2,6 +2,7 @@ import { BookOpen, Camera, Check, ImagePlus, KeyRound, LogIn, LogOut, Mail, User
 import { Link } from "react-router-dom";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "./api";
+import { CaptchaField } from "./CaptchaField";
 import { resolveMediaUrl } from "./media";
 import type { CommentSettings, FeatureSettings, PublicUser } from "./types";
 import { StorageLocationModal } from "./StorageLocationModal";
@@ -140,6 +141,9 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 	const [avatarChoice, setAvatarChoice] = useState("");
 	const [error, setError] = useState("");
 	const [notice, setNotice] = useState("");
+	const [captchaId, setCaptchaId] = useState("");
+	const [captchaCode, setCaptchaCode] = useState("");
+	const [captchaEpoch, setCaptchaEpoch] = useState(0);
 	const [busy, setBusy] = useState(false);
 	const [codeBusy, setCodeBusy] = useState(false);
 	const [codeCooldown, setCodeCooldown] = useState(0);
@@ -152,6 +156,7 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 		setPassword("");
 		setConfirmPassword("");
 		setEmailCode("");
+		setCaptchaCode("");
 		setAvatarFile(null);
 		setAvatarChoice("");
 	}, [open, mode]);
@@ -203,29 +208,35 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 		setAvatarChoice("");
 		setAvatarUrl("");
 	};
+	const refreshCaptcha = () => {
+		setCaptchaCode("");
+		setCaptchaEpoch((value) => value + 1);
+	};
 	const sendCode = async () => {
 		if (!/^\S+@\S+\.\S+$/u.test(email.trim())) { setError("请先输入有效的邮箱地址"); return; }
+		if (captchaCode.trim().length !== 6) { setError("请输入 6 位图形验证码"); return; }
 		setCodeBusy(true); setError(""); setNotice("");
 		try {
-			const result = await api.authEmailCode(email.trim());
+			const result = await api.authEmailCode(email.trim(), { captchaId, captchaCode: captchaCode.trim() });
 			if (result.debugCode) setEmailCode(result.debugCode);
 			if (result.sent) setCodeCooldown(60);
 			else setError(result.error || "验证码发送失败，请检查邮箱服务配置");
 		} catch (reason) { setError(reason instanceof Error ? reason.message : "验证码发送失败"); }
-		finally { setCodeBusy(false); }
+		finally { setCodeBusy(false); refreshCaptcha(); }
 	};
 	const sendResetCode = async () => {
 		if (username.trim().length < 3) { setError("请先输入账号或绑定邮箱"); return; }
+		if (captchaCode.trim().length !== 6) { setError("请输入 6 位图形验证码"); return; }
 		setCodeBusy(true); setError(""); setNotice("");
 		try {
-			const result = await api.authPasswordResetCode(username.trim());
+			const result = await api.authPasswordResetCode(username.trim(), { captchaId, captchaCode: captchaCode.trim() });
 			if (result.debugCode) setEmailCode(result.debugCode);
 			if (result.sent) {
 				setCodeCooldown(60);
 				setNotice(result.message || "如果该账号已绑定邮箱，验证码已发送，请查收。");
 			} else setError(result.error || "验证码发送失败，请检查邮箱服务配置");
 		} catch (reason) { setError(reason instanceof Error ? reason.message : "验证码发送失败"); }
-		finally { setCodeBusy(false); }
+		finally { setCodeBusy(false); refreshCaptcha(); }
 	};
 	const title = mode === "login" ? "登录账号" : mode === "reset" ? "找回密码" : "创建账号";
 	const passwordLabel = mode === "reset" ? "新密码" : "密码";
@@ -237,13 +248,14 @@ function AuthDialog({ open, mode, onModeChange, onClose }: { open: boolean; mode
 			<form className="auth-form" onSubmit={submit}>
 				<label><span>{mode === "reset" ? "账号或邮箱" : "账号"}</span><input autoFocus value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder={mode === "reset" ? "请输入账号或绑定邮箱" : "请输入账号"} /></label>
 				{mode === "register" ? <label><span>昵称</span><input value={nickname} onChange={(event) => setNickname(event.target.value)} autoComplete="nickname" placeholder="评论区展示的昵称" /></label> : null}
+				{mode === "reset" ? <CaptchaField code={captchaCode} onCodeChange={setCaptchaCode} onCaptchaIdChange={setCaptchaId} refreshKey={captchaEpoch} /> : null}
 				{mode === "reset" ? <label><span>邮箱验证码</span><div className="auth-input-with-action"><input value={emailCode} onChange={(event) => setEmailCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="请输入验证码" /><button type="button" disabled={codeBusy || codeCooldown > 0} onClick={() => void sendResetCode()}>{codeBusy ? "发送中" : codeCooldown ? `${codeCooldown}s` : "发送验证码"}</button></div></label> : null}
 				<label><span>{passwordLabel}</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} placeholder="至少 8 个字符" /></label>
 				{mode === "login" ? <div className="auth-assist"><button type="button" onClick={() => onModeChange("reset")}>忘记密码？</button></div> : null}
 				{mode === "reset" ? <label><span>确认新密码</span><input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder="再次输入新密码" /></label> : null}
 				{mode === "register" ? <>
 					<label><span>邮箱 {settings.emailRegistrationEnabled ? <em>必填</em> : <small>可选</small>}</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="接收验证码和通知" /></label>
-					{settings.emailRegistrationEnabled ? <label><span>邮箱验证码</span><div className="auth-input-with-action"><input value={emailCode} onChange={(event) => setEmailCode(event.target.value)} inputMode="numeric" placeholder="请输入验证码" /><button type="button" disabled={codeBusy || codeCooldown > 0} onClick={() => void sendCode()}>{codeBusy ? "发送中" : codeCooldown ? `${codeCooldown}s` : "发送验证码"}</button></div></label> : null}
+					{settings.emailRegistrationEnabled ? <><CaptchaField code={captchaCode} onCodeChange={setCaptchaCode} onCaptchaIdChange={setCaptchaId} refreshKey={captchaEpoch} /><label><span>邮箱验证码</span><div className="auth-input-with-action"><input value={emailCode} onChange={(event) => setEmailCode(event.target.value)} inputMode="numeric" placeholder="请输入验证码" /><button type="button" disabled={codeBusy || codeCooldown > 0} onClick={() => void sendCode()}>{codeBusy ? "发送中" : codeCooldown ? `${codeCooldown}s` : "发送验证码"}</button></div></label></> : null}
 					<div className="auth-avatar-field"><div className="auth-field-label"><span>头像</span><small>可选，不超过 3MB</small></div><div className="auth-avatar-options">
 						{settings.avatarPresets.slice(0, 18).map((preset) => <button type="button" key={preset} className={avatarChoice === preset ? "selected" : ""} title="选择预设头像" onClick={() => { setAvatarChoice(preset); setAvatarFile(null); setAvatarUrl(""); }}><img src={resolveMediaUrl(preset)} alt="" /></button>)}
 						{features.userCenterEnabled && features.imageHostingEnabled ? <><button type="button" className="auth-avatar-upload" title="上传头像" onClick={() => fileInput.current?.click()}><ImagePlus size={17} /><span>{avatarUploading ? "上传中" : avatarFile ? avatarFile.name : "上传"}</span></button><input ref={fileInput} hidden type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(event) => chooseFile(event.target.files?.[0])} /></> : <small>头像文件上传已关闭</small>}
