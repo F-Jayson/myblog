@@ -188,7 +188,13 @@ SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('markdown', 'example') 
 INSERT IGNORE INTO post_tags (post_id, tag_id)
 SELECT p.id, t.id FROM posts p JOIN tags t ON t.slug IN ('example', 'video', 'journal') WHERE p.slug = 'video';
 
-DELETE FROM dynamics;
+-- [191] 只清理本 seed 写入的演示动态，不能无条件 DELETE 掉管理员发布的全部内容
+DELETE FROM dynamics WHERE body IN (
+  '又是美好的一天！',
+  '记录技术与生活。',
+  '这是一条测试动态！',
+  '今天天气真不错。'
+);
 INSERT INTO dynamics (body, images, published_at) VALUES
   ('又是美好的一天！', JSON_ARRAY(), '2026-07-15 02:11:27'),
   ('记录技术与生活。', JSON_ARRAY(), '2026-07-15 16:15:29'),

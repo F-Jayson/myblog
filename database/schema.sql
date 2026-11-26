@@ -669,14 +669,15 @@ DEALLOCATE PREPARE blog_post_access_hint_statement;
 
 SET @blog_post_client_limit_views_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'posts' AND COLUMN_NAME = 'limit_views_per_client') = 0,
-  'ALTER TABLE posts ADD COLUMN limit_views_per_client BOOLEAN NOT NULL DEFAULT FALSE AFTER access_password_hint, ADD COLUMN max_views_per_client INT UNSIGNED NULL AFTER limit_views_per_client',
+  'ALTER TABLE posts ADD COLUMN limit_views_per_client BOOLEAN NOT NULL DEFAULT FALSE AFTER access_password_hint',
   'SELECT 1'
 );
 PREPARE blog_post_client_limit_views_stmt FROM @blog_post_client_limit_views_sql;
 EXECUTE blog_post_client_limit_views_stmt;
 DEALLOCATE PREPARE blog_post_client_limit_views_stmt;
 
--- 同样补一次 max_views_per_client，防止两列合并 ALTER 只成功了一半
+-- [672] 两列拆成各自独立的守卫：合并 ALTER 若只成功一半，后续重跑时
+-- limit_views_per_client 的守卫会跳过整条语句，max_views_per_client 永远补不上。
 SET @blog_post_client_max_views_sql = IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'posts' AND COLUMN_NAME = 'max_views_per_client') = 0,
   'ALTER TABLE posts ADD COLUMN max_views_per_client INT UNSIGNED NULL AFTER limit_views_per_client',
@@ -1052,7 +1053,8 @@ CREATE TABLE IF NOT EXISTS kb_revisions (
   CONSTRAINT fk_kb_revisions_doc FOREIGN KEY (document_id) REFERENCES kb_documents(id) ON DELETE CASCADE,
   UNIQUE KEY uniq_doc_version (document_id, version),
   INDEX idx_revisions_created (document_id, created_at),
-  FULLTEXT KEY ft_revision_search (title, markdown)
+  -- [1039] 知识库正文是中文 Markdown，默认分词器按空格切词无法检索 CJK
+  FULLTEXT KEY ft_revision_search (title, markdown) WITH PARSER ngram
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 8. 附件元数据与版本关联表
