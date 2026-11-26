@@ -24,8 +24,13 @@ data/ip2region/*.xdb
 
 # 代码审查产物与浏览器自动化临时目录
 review.html
+scan.json
+.tmp-deploy/
+.tmp-review/
 .edge-check/
 .edge-cdp*/
+# 误把环境变量路径当相对路径拷进仓库时产生的系统缓存副本
+%SystemDrive%/
 
 # 本地参考项目（不属于本仓库，仅作设计对照）
 Firefly-master/
