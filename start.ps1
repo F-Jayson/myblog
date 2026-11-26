@@ -272,6 +272,25 @@ function Get-HttpStatusCode([string]$Uri) {
 	}
 }
 
+function Start-PnpmBackgroundProcess {
+	param(
+		[string[]]$Arguments,
+		[string]$StandardOutput,
+		[string]$StandardError
+	)
+	# [414] pnpm.cmd / corepack.cmd 是批处理脚本，CreateProcess 无法直接执行；
+	# 统一经 cmd.exe /d /s /c 启动，保留原参数与输出重定向。
+	$parts = @($script:PnpmPath) + @($script:PnpmPrefix) + @($Arguments)
+	$quoted = $parts | ForEach-Object {
+		if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+	}
+	$commandLine = $quoted -join ' '
+	return Start-Process -FilePath $env:ComSpec `
+		-ArgumentList "/d /s /c `"`"$commandLine`"`"" `
+		-WorkingDirectory $Root -WindowStyle Hidden `
+		-RedirectStandardOutput $StandardOutput -RedirectStandardError $StandardError -PassThru
+}
+
 function Wait-ForServices($ApiProcess, $WebProcess, [bool]$RequireHealthyApi) {
 	$deadline = (Get-Date).AddSeconds(45)
 	$apiStatus = $null
@@ -411,20 +430,18 @@ $state = [ordered]@{
 	WebCreationDate = ""
 }
 try {
-	$apiProcess = Start-Process -FilePath $script:PnpmPath `
-		-ArgumentList @($script:PnpmPrefix + @("--filter", "@jayson-blog/api", "dev")) `
-		-WorkingDirectory $Root -WindowStyle Hidden `
-		-RedirectStandardOutput $apiLog -RedirectStandardError $apiErrorLog -PassThru
+	$apiProcess = Start-PnpmBackgroundProcess `
+		-Arguments @("--filter", "@jayson-blog/api", "dev") `
+		-StandardOutput $apiLog -StandardError $apiErrorLog
 	$state.ApiPid = $apiProcess.Id
 	$apiInfo = Get-ProcessInfo $apiProcess.Id
 	$state.ApiCommandLine = if ($apiInfo) { [string]$apiInfo.CommandLine } else { "" }
 	$state.ApiCreationDate = if ($apiInfo) { [string]$apiInfo.CreationDate } else { "" }
 	$state | ConvertTo-Json | Set-Content -Path $StatePath -Encoding UTF8
 
-	$webProcess = Start-Process -FilePath $script:PnpmPath `
-		-ArgumentList @($script:PnpmPrefix + @("--filter", "@jayson-blog/web", "dev")) `
-		-WorkingDirectory $Root -WindowStyle Hidden `
-		-RedirectStandardOutput $webLog -RedirectStandardError $webErrorLog -PassThru
+	$webProcess = Start-PnpmBackgroundProcess `
+		-Arguments @("--filter", "@jayson-blog/web", "dev") `
+		-StandardOutput $webLog -StandardError $webErrorLog
 	$state.WebPid = $webProcess.Id
 	$webInfo = Get-ProcessInfo $webProcess.Id
 	$state.WebCommandLine = if ($webInfo) { [string]$webInfo.CommandLine } else { "" }
