@@ -82,6 +82,16 @@ elif note_exists:
     if not password:
         password = secrets.token_urlsafe(18)
     write_private(auth_file, f"{username}:{apr1_hash(password)}\n")
+    # [132] note 存在但缺少 password 行时会生成新口令，必须同步写回 note，
+    # 否则运维拿到的记录文件里没有可用密码。
+    write_private(
+        note_file,
+        "Nezha nginx basic auth\n"
+        f"username: {username}\n"
+        f"password: {password}\n"
+        "real: Nezha Admin\n"
+        "protects: /dashboard and /api/v1/login\n",
+    )
     note_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
     print("recreated nezha basic auth from the existing note")
 else:

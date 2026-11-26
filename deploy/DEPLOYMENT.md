@@ -39,6 +39,27 @@ GitHub 下载加速的字节流量**不经过本服务器**。本服务器只运
 
 在线编译器使用 Docker 作为执行边界。首次部署、更新和重新配置会启动 Docker daemon，将编译器服务用户加入 `docker` 组，并预拉取 JavaScript/TypeScript、Python、Java、C/C++、C#、Go、Rust、PHP、Ruby、Kotlin、Swift 和 Bash 镜像。每次任务仍由 API 以 `--network=none`、非 root 用户、只读根文件系统、临时 `/tmp`、CPU/内存/PID 和超时限制启动一次性容器；代码和标准输入不会写入数据库。请确保服务器允许安装 Docker 并有足够磁盘空间保存这些镜像。
 
+### 在线编译器镜像拉取失败
+
+`apps/api/src/compiler.ts` 运行时固定使用 `docker run --pull=never`，镜像必须在部署阶段就以原始名称存在本机。服务器直连 Docker Hub 或 `mcr.microsoft.com` 时可能被重置连接（典型报错 `read: connection reset by peer`），部署脚本按以下顺序处理：
+
+1. 直连拉取（默认 2 次）；
+2. 失败后改用 `docker.m.daocloud.io` 镜像站拉取，再 `docker tag` 回原始名称；
+3. 仍有镜像缺失时部署直接失败，避免把问题留到用户运行时。
+
+已经部署好的服务器可以单独修复，不必重新构建：
+
+```bash
+sudo bash deploy/pull-compiler-images.sh
+```
+
+脚本默认读取 `/var/www/jayson-blog`，可用 `APP_DIR` 指定其他目录；`COMPILER_IMAGE_MIRROR_PREFIX` 可换镜像站，`COMPILER_IMAGE_PULL_ATTEMPTS` 可调重试次数。执行完确认镜像齐全：
+
+```bash
+docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -E 'python|node|temurin|gcc|dotnet|golang|rust|php|ruby|kotlin|swift|bash'
+```
+
+
 首次部署必须以隐藏输入方式两次输入 `admin` 的初始密码。密码须为 12 至 128 位且不能含换行；脚本会先完成迁移和可选 seed，再通过 CLI 写入该密码并验证。seed 不会创建或修改管理员凭据。
 
 向导默认**不**初始化演示数据。若选择初始化，脚本才执行 `pnpm db:seed`；seed 只写入演示内容，不包含任何管理员默认凭据。

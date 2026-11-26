@@ -7,6 +7,9 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# 编译器镜像的拉取与镜像站回退逻辑，见 deploy/compiler-images.sh。
+# shellcheck source=deploy/compiler-images.sh
+source "${SCRIPT_DIR}/compiler-images.sh"
 CONFIG_DIR="/etc/jayson-blog"
 CONFIG_FILE="${CONFIG_DIR}/deploy.env"
 LOCK_DIR="/var/lock/jayson-blog"
@@ -14,20 +17,6 @@ LOCK_FILE="${LOCK_DIR}/deploy.lock"
 SYSTEMD_UNIT="jayson-blog.service"
 PNPM_VERSION="11.22.0"
 BOOTSTRAP_ADMIN_HASH_PREFIX='scrypt$firefly-default$'
-COMPILER_IMAGES=(
-  "python:3.12-alpine"
-  "node:22-alpine"
-  "eclipse-temurin:21-jdk-alpine"
-  "gcc:14-bookworm"
-  "mcr.microsoft.com/dotnet/sdk:8.0-alpine"
-  "golang:1.23-alpine"
-  "rust:1.82-alpine"
-  "php:8.3-cli-alpine"
-  "ruby:3.3-alpine"
-  "zenika/kotlin:1.4.10-jdk12"
-  "swift:5.10-jammy"
-  "bash:5.2"
-)
 
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*"; }
 info() { log "INFO: $*"; }
@@ -82,7 +71,9 @@ ensure_root() {
     return
   fi
   command -v sudo >/dev/null 2>&1 || die "请使用 root 或安装 sudo 后运行。"
-  exec sudo -E bash "$0" "$@"
+  # [137] 不用 sudo -E：保留 BASH_ENV/PATH/NODE_OPTIONS 等调用方环境等于把
+  # root 代码执行入口交给普通用户。配置一律来自 /etc/jayson-blog/deploy.env。
+  exec sudo bash "$0" "$@"
 }
 
 acquire_lock() {
@@ -305,7 +296,9 @@ collect_database_settings() {
     prompt_validated MYSQL_USER "云数据库用户" "${MYSQL_USER:-jayson}" valid_mysql_user
     load_existing_password
     prompt_secret DB_PASSWORD "云数据库密码" "${DB_PASSWORD:-}"
-    valid_secret "${DB_PASSWORD}" || die "云数据库密码须为 8-256 位，且不能包含控制字符。"
+    # [140] 云库密码会拼进 SQL：在输入时就按写入 .env 的同一规则校验，
+    # 避免装完依赖、验完数据库后才失败。
+    valid_database_secret "${DB_PASSWORD}" || die "云数据库密码须为 8-256 位，且不能包含控制字符、单引号、双引号或反斜杠。"
   else
     DB_MODE=local
     MYSQL_HOST=127.0.0.1
@@ -436,28 +429,8 @@ ensure_compiler_runtime() {
   getent group docker >/dev/null 2>&1 || groupadd --system docker
   usermod -aG docker "${APP_USER}"
   info "准备在线编译器 Docker 沙箱镜像。"
-  local image compiler_source="${APP_DIR}/apps/api/src/compiler.ts"
-  local -a images=()
-
-  # On updates, the repository may add or replace a compiler image. Read the
-  # synchronized source so this invocation prepares the same images that the
-  # API will request; the static list remains the bootstrap fallback before a
-  # repository has been cloned.
-  if [[ -f "${compiler_source}" ]]; then
-    while IFS= read -r image; do
-      [[ -n "${image}" ]] && images+=("${image}")
-    done < <(sed -nE 's/.*image:[[:space:]]*"([^"]+)".*/\1/p' "${compiler_source}" | sort -u)
-  fi
-  (( ${#images[@]} > 0 )) || images=("${COMPILER_IMAGES[@]}")
-
-  for image in "${images[@]}"; do
-    [[ "${image}" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@-]*$ ]] || die "编译器镜像引用无效：${image}"
-    if docker image inspect "${image}" >/dev/null 2>&1; then
-      continue
-    fi
-    info "拉取编译器镜像 ${image}。"
-    docker pull -- "${image}"
-  done
+  # 镜像清单直接从同步后的 compiler.ts 读取；直连失败时自动走镜像站并 retag。
+  ensure_compiler_images "${APP_DIR}"
 }
 
 ensure_repository() {
@@ -639,9 +612,19 @@ write_application_env() {
 }
 
 prepare_persistent_directories() {
+  local path
+  # [642] 仓库里若出现指向任意路径的 uploads / .compiler-work 符号链接，
+  # 后面的 mkdir/chown/chmod 会以 root 跟随链接修改目标。先拒绝符号链接。
+  for path in "${APP_DIR}/uploads" "${APP_DIR}/.compiler-work"; do
+    [[ ! -L "${path}" ]] || die "${path} 是符号链接，拒绝以 root 修改其目标。"
+    [[ ! -e "${path}" || -d "${path}" ]] || die "${path} 已存在且不是目录。"
+  done
   mkdir -p "${APP_DIR}/uploads/user-space"
   mkdir -p "${APP_DIR}/uploads/admin-drive"
   mkdir -p "${APP_DIR}/.compiler-work"
+  for path in "${APP_DIR}/uploads" "${APP_DIR}/uploads/user-space" "${APP_DIR}/uploads/admin-drive" "${APP_DIR}/.compiler-work"; do
+    [[ ! -L "${path}" && -d "${path}" ]] || die "${path} 不是普通目录，拒绝修改权限。"
+  done
   chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}/uploads"
   chmod 750 "${APP_DIR}/uploads" "${APP_DIR}/uploads/user-space" "${APP_DIR}/uploads/admin-drive"
   chown "${APP_USER}:${APP_USER}" "${APP_DIR}/.compiler-work"
@@ -1105,10 +1088,9 @@ files_certificate_pair_exists() {
 files_public_origin() {
   local scheme="http"
   normalize_files_domain
-  # The download hostname is often reached through the same HTTPS front as the
-  # blog. Keep published links on HTTPS once the blog itself is HTTPS, even
-  # while this origin is still waiting for its own certificate.
-  if files_certificate_pair_exists || [[ "${PUBLIC_SCHEME}" == https ]]; then
+  # [1111] 文件站的实际协议由 write_files_nginx_config 决定：只有证书对存在时
+  # 才监听 443。博客本身是 HTTPS 并不代表 files 域名也有证书，否则会发布打不开的链接。
+  if files_certificate_pair_exists; then
     scheme="https"
   fi
   printf '%s://%s' "${scheme}" "${FILES_DOMAIN}"
